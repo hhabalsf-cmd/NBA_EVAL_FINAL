@@ -240,6 +240,11 @@ class NBADataScraper:
                             visitor_team_id = game['VISITOR_TEAM_ID']
 
                             if team_id in [home_team_id, visitor_team_id]:
+                                # Skip games that have already finished (GAME_STATUS_ID: 1=scheduled, 2=in progress, 3=final)
+                                game_status = game.get('GAME_STATUS_ID', 1)
+                                if game_status == 3:
+                                    continue  # Game is final, skip to find next game
+
                                 is_home = 1 if team_id == home_team_id else 0
                                 opp_team_id = visitor_team_id if is_home else home_team_id
 
@@ -913,8 +918,12 @@ class FeatureEngineer:
     
     @staticmethod
     def get_prediction_features(df, is_home, opponent, injuries_team=0, injuries_opp=0,
-                                 opp_def_rating=110, opp_pace=100, days_rest=2):
-        """Get feature vector for prediction"""
+                                 opp_def_rating=110, opp_pace=100, days_rest=2, vs_stats=None):
+        """Get feature vector for prediction
+
+        Args:
+            vs_stats: Dict with head-to-head stats (avg_pts, avg_reb, avg_ast, games)
+        """
         latest = df.iloc[-1]
 
         features = {
@@ -988,7 +997,36 @@ class FeatureEngineer:
 
             # Assist/Turnover trends
             'AST_TOV_RATIO': latest.get('AST_TOV_RATIO', 2.0),
+
+            # =====================
+            # HEAD-TO-HEAD MATCHUP STATS
+            # =====================
+            # How this player performs vs this specific opponent
+            'VS_OPP_AVG_PTS': 0,
+            'VS_OPP_AVG_REB': 0,
+            'VS_OPP_AVG_AST': 0,
+            'VS_OPP_GAMES': 0,
+            # Difference from overall average (positive = performs better vs this opponent)
+            'VS_OPP_PTS_DIFF': 0,
+            'VS_OPP_REB_DIFF': 0,
+            'VS_OPP_AST_DIFF': 0,
         }
+
+        # Add head-to-head stats if available
+        if vs_stats and vs_stats.get('games', 0) >= 1:
+            features['VS_OPP_AVG_PTS'] = vs_stats.get('avg_pts', 0)
+            features['VS_OPP_AVG_REB'] = vs_stats.get('avg_reb', 0)
+            features['VS_OPP_AVG_AST'] = vs_stats.get('avg_ast', 0)
+            features['VS_OPP_GAMES'] = min(vs_stats.get('games', 0), 10)  # Cap at 10 for normalization
+
+            # Calculate difference from player's overall rolling average
+            overall_pts = latest.get('ROLL_10_PTS', latest.get('ROLL_5_PTS', 0))
+            overall_reb = latest.get('ROLL_10_REB', latest.get('ROLL_5_REB', 0))
+            overall_ast = latest.get('ROLL_10_AST', latest.get('ROLL_5_AST', 0))
+
+            features['VS_OPP_PTS_DIFF'] = vs_stats.get('avg_pts', overall_pts) - overall_pts
+            features['VS_OPP_REB_DIFF'] = vs_stats.get('avg_reb', overall_reb) - overall_reb
+            features['VS_OPP_AST_DIFF'] = vs_stats.get('avg_ast', overall_ast) - overall_ast
 
         return pd.DataFrame([features])
 
@@ -1918,10 +1956,13 @@ def find_best_bets(min_edge=5.0, max_results=20, select_games=False):
             injuries_team = injuries.get(team_abbrev, {}).get('out', 0)
             injuries_opp = injuries.get(opponent, {}).get('out', 0)
 
+            # Get head-to-head stats
+            vs_stats = scraper.get_vs_team_stats(player_id, opponent) if opponent else None
+
             # Generate features for prediction
             features_df = FeatureEngineer.get_prediction_features(
                 df, is_home, opponent, injuries_team, injuries_opp,
-                opp_def_rating, opp_pace, days_rest
+                opp_def_rating, opp_pace, days_rest, vs_stats
             )
 
             # Load or train model
@@ -2321,7 +2362,8 @@ def interactive_mode():
             injuries_team=injuries_team,
             injuries_opp=injuries_opp,
             opp_def_rating=opp_def_rating,
-            opp_pace=opp_pace
+            opp_pace=opp_pace,
+            vs_stats=vs_stats
         )
         predictions = predictor.predict(features_df)
 
@@ -2614,7 +2656,8 @@ Examples:
         injuries_team=injuries_team,
         injuries_opp=injuries_opp,
         opp_def_rating=opp_def_rating,
-        opp_pace=opp_pace
+        opp_pace=opp_pace,
+        vs_stats=vs_stats
     )
     predictions = predictor.predict(features_df)
 

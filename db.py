@@ -418,18 +418,36 @@ def auto_grade_picks(scraper=None) -> Dict:
             game_log['GAME_DATE'] = game_log['GAME_DATE'].astype(str)
 
             # Match by game date if available
-            if game_date:
-                game_match = game_log[game_log['GAME_DATE'].str.contains(game_date[:10])]
-            else:
-                # Try to match by opponent
-                opponent = pick.get('opponent', '')
-                if opponent:
-                    game_match = game_log[game_log['MATCHUP'].str.contains(opponent)]
-                else:
-                    continue
+            # NBA API returns dates as "Feb 03, 2026" but we store "2026-02-03"
+            game_match = None
+            opponent = pick.get('opponent', '')
 
-            if game_match.empty:
-                # Game hasn't happened yet or no match found
+            if game_date:
+                try:
+                    # Convert ISO date to NBA API format (e.g., "2026-02-03" -> "Feb 03, 2026")
+                    dt = datetime.strptime(game_date[:10], '%Y-%m-%d')
+                    nba_date_format = dt.strftime('%b %d, %Y')
+                    game_match = game_log[game_log['GAME_DATE'] == nba_date_format]
+
+                    # If no match, try +/- 1 day (games sometimes shift dates)
+                    if game_match.empty:
+                        dt_minus1 = (dt - timedelta(days=1)).strftime('%b %d, %Y')
+                        dt_plus1 = (dt + timedelta(days=1)).strftime('%b %d, %Y')
+                        game_match = game_log[game_log['GAME_DATE'].isin([dt_minus1, dt_plus1])]
+
+                        # If multiple matches from +/- 1 day, filter by opponent
+                        if len(game_match) > 1 and opponent:
+                            opponent_match = game_match[game_match['MATCHUP'].str.contains(opponent)]
+                            if not opponent_match.empty:
+                                game_match = opponent_match
+                except ValueError:
+                    game_match = game_log[game_log['GAME_DATE'].str.contains(game_date[:10])]
+
+            # Fallback: try to match by opponent only
+            if (game_match is None or game_match.empty) and opponent:
+                game_match = game_log[game_log['MATCHUP'].str.contains(opponent)]
+
+            if game_match is None or game_match.empty:
                 continue
 
             # Get the actual stat value
