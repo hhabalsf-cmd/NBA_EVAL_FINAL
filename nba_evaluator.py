@@ -1270,7 +1270,7 @@ class MLPredictor:
 
         # Apply recency weighting - more recent games matter more
         n_games = len(df_clean)
-        recency_weights = np.linspace(0.5, 1.0, n_games)  # Older games get 0.5x, recent get 1.0x
+        recency_weights = np.linspace(0.4, 1.0, n_games)  # Older games get 0.4x, recent get 1.0x
 
         X = df_clean[available_features].values
 
@@ -2133,26 +2133,82 @@ def show_history(days=30):
 
     print(f"\n📊 Summary: {len(wins)}W - {len(losses)}L ({len(pending)} pending)")
 
-    # Show pending picks
+    # Show pending picks (ALL of them with edge info)
     if pending:
-        print(f"\n⏳ PENDING ({len(pending)}):")
-        for p in pending[:10]:  # Show max 10
-            model = (p.get('model_type') or 'unknown').replace('_', ' ').title()
-            print(f"   {p['player']} {p['stat']} {p['direction']} {p['line']} vs {p['opponent']} [{model}]")
-        if len(pending) > 10:
-            print(f"   ... and {len(pending) - 10} more")
+        print(f"\n⏳ PENDING PICKS ({len(pending)}):")
+        print("-" * 65)
+        # Sort by absolute edge descending
+        pending_sorted = sorted(pending, key=lambda x: abs(x.get('edge', 0)), reverse=True)
+        for p in pending_sorted:
+            model = (p.get('model_type') or 'unknown').replace('_', ' ').title()[:12]
+            direction_icon = "🟢" if "OVER" in p['direction'].upper() else "🔴"
+            edge = p.get('edge', 0)
+            edge_str = f"{edge:+.1f}%" if edge else "N/A"
+            game_date = p.get('game_date', '')[:10] if p.get('game_date') else ''
+            print(f"   {direction_icon} {p['player']:<20} {p['stat']:<4} {p['direction']:<5} {p['line']:<6} | Edge: {edge_str:<8} | Pred: {p['prediction']:.1f} | vs {p.get('opponent', 'N/A'):<4} | {game_date}")
+        print("-" * 65)
 
     # Show recent results
     graded = [p for p in picks if p['won'] is not None]
     if graded:
-        print(f"\n📋 RECENT RESULTS:")
-        for p in graded[:15]:  # Show max 15
+        print(f"\n📋 GRADED RESULTS ({len(graded)}):")
+        print("-" * 65)
+        for p in graded[:20]:  # Show max 20
             emoji = "✅" if p['won'] == 1 else "❌"
             actual = p.get('actual_result', '?')
-            model = (p.get('model_type') or 'unknown').replace('_', ' ').title()
-            print(f"   {emoji} {p['player']} {p['stat']} {p['direction']} {p['line']} → {actual} [{model}]")
+            if actual != '?':
+                actual = f"{actual:.0f}"
+            model = (p.get('model_type') or 'unknown').replace('_', ' ').title()[:12]
+            edge = p.get('edge', 0)
+            edge_str = f"{edge:+.1f}%" if edge else "N/A"
+            print(f"   {emoji} {p['player']:<20} {p['stat']:<4} {p['direction']:<5} {p['line']:<6} | Edge: {edge_str:<8} | Pred: {p['prediction']:.1f} | Actual: {actual}")
+        if len(graded) > 20:
+            print(f"   ... and {len(graded) - 20} more")
+        print("-" * 65)
+
+    # Export to Excel
+    print("\n📊 Updating Excel tracker...")
+    excel_path = db.export_to_excel()
+    if excel_path:
+        print(f"   ✅ Saved to: {excel_path}")
 
     print("=" * 65)
+
+
+def check_games_in_progress():
+    """Check if any NBA games are currently in progress."""
+    try:
+        from nba_api.stats.endpoints import scoreboardv2
+        import time
+
+        scoreboard = scoreboardv2.ScoreboardV2()
+        time.sleep(0.5)
+        games = scoreboard.get_data_frames()[0]
+
+        if games.empty:
+            return {'in_progress': False, 'games': []}
+
+        # GAME_STATUS_ID: 1=scheduled, 2=in progress, 3=final
+        in_progress = games[games['GAME_STATUS_ID'] == 2]
+        scheduled = games[games['GAME_STATUS_ID'] == 1]
+
+        in_progress_list = []
+        for _, game in in_progress.iterrows():
+            in_progress_list.append({
+                'home': game.get('HOME_TEAM_ID'),
+                'away': game.get('VISITOR_TEAM_ID'),
+                'status': 'In Progress'
+            })
+
+        return {
+            'in_progress': len(in_progress) > 0,
+            'in_progress_count': len(in_progress),
+            'scheduled_count': len(scheduled),
+            'final_count': len(games) - len(in_progress) - len(scheduled),
+            'games': in_progress_list
+        }
+    except Exception as e:
+        return {'in_progress': False, 'error': str(e), 'games': []}
 
 
 def auto_grade_cli():
@@ -2168,23 +2224,223 @@ def auto_grade_cli():
         print("\n✅ No pending picks to grade!")
         return
 
+    # Check if games are still in progress
+    print("\n🏀 Checking game status...")
+    game_status = check_games_in_progress()
+
+    if game_status.get('in_progress'):
+        print(f"\n⚠️  WARNING: {game_status['in_progress_count']} game(s) still IN PROGRESS!")
+        print(f"   📊 Today's games: {game_status.get('final_count', 0)} final, {game_status['in_progress_count']} in progress, {game_status.get('scheduled_count', 0)} scheduled")
+        print("\n   Grading now may result in incorrect stats from incomplete games.")
+        print("   It's recommended to wait until all games are final.\n")
+
+        try:
+            choice = input("   Continue anyway? (y/N): ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled.")
+            return
+
+        if choice != 'y':
+            print("\n   Cancelled. Run again after games finish.")
+            print("=" * 65)
+            return
+        print()
+    else:
+        final_count = game_status.get('final_count', 0)
+        scheduled_count = game_status.get('scheduled_count', 0)
+        if final_count > 0 or scheduled_count > 0:
+            print(f"   ✅ No games in progress. ({final_count} final, {scheduled_count} scheduled)")
+        else:
+            print("   ✅ No games found for today.")
+
     print(f"\n📋 Found {len(pending)} pending pick(s). Fetching results...")
 
     result = db.auto_grade_picks()
 
+    # Show voided DNP picks
+    voided_count = result.get('voided_count', 0)
+    if voided_count > 0:
+        print(f"\n🚫 Voided {voided_count} DNP pick(s):\n")
+        for r in result['results']:
+            if r.get('voided'):
+                model = (r.get('model_type') or 'unknown').replace('_', ' ').title()
+                print(f"   ⛔ {r['player']} {r['stat']} {r['direction']} {r['line']} - DNP [{model}]")
+
     if result['graded_count'] > 0:
         print(f"\n✅ Graded {result['graded_count']} pick(s):\n")
         for r in result['results']:
-            emoji = "✅" if r['won'] else "❌"
-            model = (r.get('model_type') or 'unknown').replace('_', ' ').title()
-            print(f"   {emoji} {r['player']} {r['stat']}: {r['actual']} (Line: {r['line']}) [{model}]")
-    else:
+            if not r.get('voided'):
+                emoji = "✅" if r['won'] else "❌"
+                model = (r.get('model_type') or 'unknown').replace('_', ' ').title()
+                print(f"   {emoji} {r['player']} {r['stat']}: {r['actual']} (Line: {r['line']}) [{model}]")
+    elif voided_count == 0:
         print("\n⚠️ No picks could be graded. Games may not have finished yet.")
 
     if result['errors']:
         print(f"\n⚠️ Errors ({len(result['errors'])}):")
         for err in result['errors'][:5]:
             print(f"   - {err}")
+
+    print("=" * 65)
+
+
+def handle_reset_grades():
+    """Interactive mode to reset graded picks back to pending for re-grading."""
+    import db
+
+    print("\n" + "=" * 65)
+    print("🔄 RESET GRADED PICKS")
+    print("=" * 65)
+
+    # Get recently graded picks
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM picks
+        WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0)
+        ORDER BY graded_at DESC, timestamp DESC
+        LIMIT 30
+    """)
+    graded = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+
+    if not graded:
+        print("\n✅ No graded picks to reset!")
+        return
+
+    print(f"\n📋 Recently Graded Picks ({len(graded)}):")
+    print("-" * 65)
+
+    for i, p in enumerate(graded, 1):
+        result_icon = "✅" if p['won'] == 1 else "❌"
+        actual = f"{p['actual_result']:.0f}" if p.get('actual_result') is not None else "?"
+        game_date = p.get('game_date', '')[:10] if p.get('game_date') else ''
+        print(f"  {i:2}. [ID:{p['id']:3}] {result_icon} {p['player']:<18} {p['stat']:<4} {p['direction']:<5} {p['line']:<6} | Actual: {actual:<4} | {game_date}")
+
+    print("-" * 65)
+    print("\nOptions:")
+    print("  - Enter pick numbers to reset (e.g., 1,3,5)")
+    print("  - Enter 'date YYYY-MM-DD' to reset all picks for a date")
+    print("  - Enter 'all' to reset all shown picks")
+    print("  - Press Enter to cancel")
+
+    try:
+        choice = input("\n>>> ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled.")
+        return
+
+    if not choice:
+        print("Cancelled.")
+        return
+
+    if choice.startswith('date '):
+        date_str = choice[5:].strip()
+        count = db.reset_all_graded_for_date(date_str)
+        print(f"\n✅ Reset {count} pick(s) for {date_str} back to pending")
+    elif choice == 'all':
+        for p in graded:
+            db.reset_pick_to_pending(p['id'])
+        print(f"\n✅ Reset {len(graded)} pick(s) back to pending")
+    else:
+        try:
+            indices = [int(x.strip()) - 1 for x in choice.split(',')]
+            indices = [i for i in indices if 0 <= i < len(graded)]
+        except ValueError:
+            print("❌ Invalid input.")
+            return
+
+        if not indices:
+            print("No valid picks selected.")
+            return
+
+        for i in indices:
+            pick = graded[i]
+            db.reset_pick_to_pending(pick['id'])
+            print(f"  ✅ Reset: {pick['player']} {pick['stat']} {pick['direction']} {pick['line']}")
+
+        print(f"\n✅ Reset {len(indices)} pick(s) back to pending")
+
+    print("\nRun --grade again after games are final to re-grade.")
+    print("=" * 65)
+
+
+def handle_dnp_picks():
+    """Interactive mode to void DNP (Did Not Play) picks."""
+    import db
+
+    print("\n" + "=" * 65)
+    print("🚫 VOID DNP PICKS")
+    print("=" * 65)
+
+    pending = db.get_pending_picks()
+
+    if not pending:
+        print("\n✅ No pending picks to void!")
+        return
+
+    print(f"\n📋 Pending Picks ({len(pending)}):")
+    print("-" * 65)
+
+    for i, p in enumerate(pending, 1):
+        direction_icon = "🟢" if "OVER" in p['direction'].upper() else "🔴"
+        edge = p.get('edge', 0)
+        edge_str = f"{edge:+.1f}%" if edge else "N/A"
+        game_date = p.get('game_date', '')[:10] if p.get('game_date') else ''
+        print(f"  {i:2}. [ID:{p['id']:3}] {p['player']:<20} {p['stat']:<4} {direction_icon} {p['direction']:<5} {p['line']:<6} | {game_date} vs {p.get('opponent', 'N/A')}")
+
+    print("-" * 65)
+    print("\nEnter pick numbers to void (e.g., 1,3,5), 'all' for all, or press Enter to cancel:")
+
+    try:
+        choice = input(">>> ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled.")
+        return
+
+    if not choice:
+        print("Cancelled.")
+        return
+
+    if choice == 'all':
+        indices = list(range(len(pending)))
+    else:
+        try:
+            indices = [int(x.strip()) - 1 for x in choice.split(',')]
+            indices = [i for i in indices if 0 <= i < len(pending)]
+        except ValueError:
+            print("❌ Invalid input.")
+            return
+
+    if not indices:
+        print("No valid picks selected.")
+        return
+
+    # Ask for reason
+    print("\nVoid reason? (1=DNP, 2=Injury, 3=Postponed, 4=Other, Enter=DNP)")
+    try:
+        reason_choice = input(">>> ").strip()
+    except (EOFError, KeyboardInterrupt):
+        reason_choice = ""
+
+    reasons = {'1': 'DNP', '2': 'Injury', '3': 'Postponed', '4': 'Other', '': 'DNP'}
+    reason = reasons.get(reason_choice, 'DNP')
+
+    # Void the picks
+    voided_count = 0
+    for i in indices:
+        pick = pending[i]
+        db.void_pick(pick['id'], reason=reason)
+        print(f"  ✅ Voided: {pick['player']} {pick['stat']} {pick['direction']} {pick['line']} ({reason})")
+        voided_count += 1
+
+    print(f"\n🚫 Voided {voided_count} pick(s) - removed from performance calculations")
+
+    # Update Excel
+    print("\n📊 Updating Excel tracker...")
+    excel_path = db.export_to_excel()
+    if excel_path:
+        print(f"   ✅ Saved to: {excel_path}")
 
     print("=" * 65)
 
@@ -2251,6 +2507,14 @@ def show_performance():
             print(f"\n   {model_name}:")
             for stat, data in stat_data.items():
                 print(f"      {stat}: {data['wins']}/{data['total']} ({data['win_rate']:.1f}%)")
+
+    # Export to Excel
+    print("\n📊 Exporting to Excel...")
+    excel_path = db.export_to_excel()
+    if excel_path:
+        print(f"   ✅ Saved to: {excel_path}")
+    else:
+        print("   ⚠️ Could not export to Excel (install openpyxl)")
 
     print("\n" + "=" * 65)
 
@@ -2501,6 +2765,14 @@ Examples:
                        help='Auto-grade pending picks using NBA API')
     parser.add_argument('--performance', action='store_true',
                        help='Show performance analytics by model')
+    parser.add_argument('--dnp', action='store_true',
+                       help='Mark picks as DNP (Did Not Play) - removes from performance')
+    parser.add_argument('--void', type=int, metavar='PICK_ID',
+                       help='Void a specific pick by ID (DNP, postponed, etc.)')
+    parser.add_argument('--reset-grades', action='store_true',
+                       help='Reset graded picks back to pending (for re-grading)')
+    parser.add_argument('--reset-date', type=str, metavar='YYYY-MM-DD',
+                       help='Reset all graded picks for a specific date')
 
     parser.add_argument('--player', '-p', type=str, help='Player name')
     parser.add_argument('--stat', '-s', type=str, choices=['PTS', 'REB', 'AST', 'PRA'],
@@ -2551,6 +2823,31 @@ Examples:
     # Performance mode
     if args.performance:
         show_performance()
+        return
+
+    # Void specific pick
+    if args.void:
+        import db
+        db.void_pick(args.void, reason="DNP")
+        print(f"✅ Pick #{args.void} voided (DNP) - removed from performance calculations")
+        return
+
+    # DNP mode - interactive selection to void picks
+    if args.dnp:
+        handle_dnp_picks()
+        return
+
+    # Reset grades for a specific date
+    if args.reset_date:
+        import db
+        count = db.reset_all_graded_for_date(args.reset_date)
+        print(f"✅ Reset {count} pick(s) for {args.reset_date} back to pending")
+        print("   Run --grade again after games are final to re-grade.")
+        return
+
+    # Reset grades interactively
+    if args.reset_grades:
+        handle_reset_grades()
         return
 
     # Best bets mode
