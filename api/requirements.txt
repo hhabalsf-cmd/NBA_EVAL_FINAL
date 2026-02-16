@@ -1,0 +1,13 @@
+# FastAPI Backend Dependencies
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+sse-starlette>=1.8.0
+
+# Required by existing nba_evaluator.py (should already be installed)
+# nba_api
+# pandas
+# numpy
+# scikit-learn
+# requests
+# beautifulsoup4

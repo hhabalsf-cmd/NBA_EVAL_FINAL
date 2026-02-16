@@ -19,9 +19,10 @@ import sys
 import time
 import warnings
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from functools import lru_cache
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -47,7 +48,19 @@ from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import cross_val_score, TimeSeriesSplit
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.linear_model import BayesianRidge
+from sklearn.isotonic import IsotonicRegression
+from sklearn.base import clone as sklearn_clone
+from scipy import stats as scipy_stats
 import joblib
+
+# Optional: Optuna for hyperparameter optimization
+try:
+    import optuna
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    OPTUNA_AVAILABLE = True
+except ImportError:
+    OPTUNA_AVAILABLE = False
 
 # Neural Network (TensorFlow/Keras)
 try:
@@ -58,7 +71,10 @@ try:
 except ImportError:
     TF_AVAILABLE = False
 
-warnings.filterwarnings("ignore")
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
+warnings.filterwarnings("ignore", module="sklearn")
 
 # === CONFIGURATION ===
 DATA_DIR = Path("./data")
@@ -215,7 +231,7 @@ class NBADataScraper:
         print(f"📆 Finding next game for {player_info['player_name']}...")
         try:
             team_id = player_info.get('team_id')
-            team_abbrev = player_info.get('team_abbreviation', '')
+            team_abbrev = player_info.get('team_abbrev', '')
             if not team_id:
                 return None
 
@@ -508,6 +524,7 @@ class NBADataScraper:
                     if team_data[team_abbrev].get('pace', 100) == 100:
                         team_data[team_abbrev]['pace'] = row.get('PACE', 100)
                     team_data[team_abbrev]['pts_rank'] = row.get('PTS_RANK', 15)
+                    team_data[team_abbrev]['opp_ast'] = row.get('OPP_AST', 25)
 
             CacheManager.set('team_stats', team_data, season)
             return team_data
@@ -515,7 +532,7 @@ class NBADataScraper:
         except Exception as e:
             print(f"⚠️ Error fetching team defensive stats: {e}")
             # Return default values
-            return {abbrev: {'def_rating': 110, 'pace': 100, 'opp_pts': 110, 'pts_rank': 15}
+            return {abbrev: {'def_rating': 110, 'pace': 100, 'opp_pts': 110, 'pts_rank': 15, 'opp_ast': 25}
                     for abbrev in TEAM_ABBREV_TO_NAME}
 
     def get_league_averages(self, season='2025-26'):
@@ -600,15 +617,14 @@ class OddsAPI:
             response.raise_for_status()
 
             events = response.json()
-            now = datetime.now()
+            now = datetime.now(tz=ZoneInfo('US/Eastern'))
 
-            # Filter to games starting within the next 24 hours (handles timezone issues)
+            # Filter to games starting within the next 24 hours
             todays_events = []
             for event in events:
-                # Parse UTC time and convert to local
+                # Parse UTC time and convert to Eastern
                 event_time_utc = datetime.fromisoformat(event['commence_time'].replace('Z', '+00:00'))
-                # Remove timezone info for comparison (treat as local time approximation)
-                event_time_local = event_time_utc.replace(tzinfo=None) - timedelta(hours=5)  # EST offset
+                event_time_local = event_time_utc.astimezone(ZoneInfo('US/Eastern'))
 
                 hours_until = (event_time_local - now).total_seconds() / 3600
 
@@ -822,6 +838,32 @@ class FeatureEngineer:
                 df[f'EMA_5_{stat}'] = df[stat].ewm(span=5, min_periods=1).mean().shift(1)
                 df[f'EMA_10_{stat}'] = df[stat].ewm(span=10, min_periods=1).mean().shift(1)
 
+        # =====================
+        # PER-36-MINUTE NORMALIZATION
+        # =====================
+        # Normalize stats to per-36-minute basis to account for minutes variation
+        for stat in ['PTS', 'REB', 'AST']:
+            df[f'{stat}_PER36'] = df.apply(
+                lambda x: (x[stat] / x['MIN_NUMERIC'] * 36) if x['MIN_NUMERIC'] > 10 else 0, axis=1
+            )
+            df[f'ROLL_5_{stat}_PER36'] = df[f'{stat}_PER36'].rolling(5, min_periods=1).mean().shift(1)
+            df[f'ROLL_10_{stat}_PER36'] = df[f'{stat}_PER36'].rolling(10, min_periods=1).mean().shift(1)
+
+        # =====================
+        # BLOWOUT GAME INDICATOR
+        # =====================
+        # Flag games with large point differentials where starters may have rested
+        if 'PLUS_MINUS' in df.columns:
+            df['BLOWOUT'] = (df['PLUS_MINUS'].abs() > 20).astype(int)
+            # Blowout-adjusted rolling averages (downweight blowout games)
+            for stat in ['PTS', 'REB', 'AST']:
+                # Weight: 1.0 for normal games, 0.5 for blowouts
+                blowout_weight = df['BLOWOUT'].apply(lambda x: 0.5 if x == 1 else 1.0)
+                weighted_vals = df[stat] * blowout_weight
+                weighted_sum = weighted_vals.rolling(10, min_periods=1).sum().shift(1)
+                weight_sum = blowout_weight.rolling(10, min_periods=1).sum().shift(1)
+                df[f'ROLL_10_{stat}_BLOWOUT_ADJ'] = weighted_sum / weight_sum.replace(0, 1)
+
         # Combined stats
         df['PRA'] = df['PTS'] + df['REB'] + df['AST']
         df['ROLL_5_PRA'] = df['PRA'].rolling(5, min_periods=1).mean().shift(1)
@@ -883,6 +925,19 @@ class FeatureEngineer:
             df['OPP_DEF_RATING_NORM'] = (df['OPP_DEF_RATING'] - 110) / 5  # Centered around 0
             df['OPP_PACE_NORM'] = (df['OPP_PACE'] - 100) / 5
 
+            # Opponent assists allowed (higher = weaker at defending assists)
+            df['OPP_AST_ALLOWED'] = df['OPPONENT'].map(
+                lambda x: team_stats.get(x, {}).get('opp_ast', 25)
+            )
+            df['OPP_AST_ALLOWED_NORM'] = (df['OPP_AST_ALLOWED'] - 25) / 3
+
+            # =====================
+            # ROLLING OPPONENT DEFENSIVE CONTEXT
+            # =====================
+            # Use rolling 10-game average of opponent def rating to capture recent defense form
+            df['OPP_DEF_RATING_ROLL10'] = df['OPP_DEF_RATING'].rolling(10, min_periods=3).mean().shift(1)
+            df['OPP_PACE_ROLL10'] = df['OPP_PACE'].rolling(10, min_periods=3).mean().shift(1)
+
             # =====================
             # PACE-ADJUSTED STATS
             # =====================
@@ -914,11 +969,35 @@ class FeatureEngineer:
             df['ROLL_5_USG'] = df['USG_PROXY'].rolling(5, min_periods=1).mean().shift(1)
             df['ROLL_10_USG'] = df['USG_PROXY'].rolling(10, min_periods=1).mean().shift(1)
 
+        # =====================
+        # ROLLING AST/TOV RATIO
+        # =====================
+        if 'AST_TOV_RATIO' in df.columns:
+            df['ROLL_5_AST_TOV'] = df['AST_TOV_RATIO'].rolling(5, min_periods=1).mean().shift(1)
+
+        # =====================
+        # INTERACTION FEATURES
+        # =====================
+        # Back-to-back vs elite defense (< 108 DEF RTG)
+        if 'B2B' in df.columns and 'OPP_DEF_RATING_NORM' in df.columns:
+            df['B2B_VS_ELITE'] = df['B2B'] * (df['OPP_DEF_RATING_NORM'] < -0.4).astype(int)
+
+        # Hot streak vs weak defense (> 116 DEF RTG)
+        if 'IS_HOT' in df.columns and 'OPP_DEF_RATING_NORM' in df.columns:
+            df['HOT_VS_WEAK'] = df['IS_HOT'] * (df['OPP_DEF_RATING_NORM'] > 1.2).astype(int)
+
+        # Rested and at home
+        if 'EXTENDED_REST' in df.columns and 'IS_HOME' in df.columns:
+            df['RESTED_HOME'] = df['EXTENDED_REST'] * df['IS_HOME']
+
+        # Defragment the DataFrame after all column additions
+        df = df.copy()
+
         return df
     
     @staticmethod
     def get_prediction_features(df, is_home, opponent, injuries_team=0, injuries_opp=0,
-                                 opp_def_rating=110, opp_pace=100, days_rest=2, vs_stats=None):
+                                 opp_def_rating=110, opp_pace=100, opp_ast_allowed=25, days_rest=2, vs_stats=None):
         """Get feature vector for prediction
 
         Args:
@@ -964,6 +1043,7 @@ class FeatureEngineer:
             # Opponent context (normalized)
             'OPP_DEF_RATING_NORM': (opp_def_rating - 110) / 5,
             'OPP_PACE_NORM': (opp_pace - 100) / 5,
+            'OPP_AST_ALLOWED_NORM': (opp_ast_allowed - 25) / 3,
             # Role stability
             'MIN_CONSISTENCY': latest.get('MIN_CONSISTENCY', 5),
             'USAGE_PROXY': latest.get('USAGE_PROXY', 15),
@@ -997,6 +1077,29 @@ class FeatureEngineer:
 
             # Assist/Turnover trends
             'AST_TOV_RATIO': latest.get('AST_TOV_RATIO', 2.0),
+            'ROLL_5_AST_TOV': latest.get('ROLL_5_AST_TOV', 2.0),
+
+            # Per-36-minute normalized stats
+            'ROLL_5_PTS_PER36': latest.get('ROLL_5_PTS_PER36', 0),
+            'ROLL_10_PTS_PER36': latest.get('ROLL_10_PTS_PER36', 0),
+            'ROLL_5_REB_PER36': latest.get('ROLL_5_REB_PER36', 0),
+            'ROLL_10_REB_PER36': latest.get('ROLL_10_REB_PER36', 0),
+            'ROLL_5_AST_PER36': latest.get('ROLL_5_AST_PER36', 0),
+            'ROLL_10_AST_PER36': latest.get('ROLL_10_AST_PER36', 0),
+
+            # Blowout-adjusted rolling averages
+            'ROLL_10_PTS_BLOWOUT_ADJ': latest.get('ROLL_10_PTS_BLOWOUT_ADJ', latest.get('ROLL_10_PTS', 0)),
+            'ROLL_10_REB_BLOWOUT_ADJ': latest.get('ROLL_10_REB_BLOWOUT_ADJ', latest.get('ROLL_10_REB', 0)),
+            'ROLL_10_AST_BLOWOUT_ADJ': latest.get('ROLL_10_AST_BLOWOUT_ADJ', latest.get('ROLL_10_AST', 0)),
+
+            # Rolling opponent defensive context (recent form, not just season-long)
+            'OPP_DEF_RATING_ROLL10': latest.get('OPP_DEF_RATING_ROLL10', (opp_def_rating - 110) / 5),
+            'OPP_PACE_ROLL10': latest.get('OPP_PACE_ROLL10', (opp_pace - 100) / 5),
+
+            # Interaction features
+            'B2B_VS_ELITE': (1 if days_rest == 1 else 0) * (1 if (opp_def_rating - 110) / 5 < -0.4 else 0),
+            'HOT_VS_WEAK': latest.get('IS_HOT', 0) * (1 if (opp_def_rating - 110) / 5 > 1.2 else 0),
+            'RESTED_HOME': (1 if days_rest >= 3 else 0) * is_home,
 
             # =====================
             # HEAD-TO-HEAD MATCHUP STATS
@@ -1077,6 +1180,55 @@ class MLPredictor:
         self.recent_averages = {}  # Store recent averages for bias correction
         self.last_game_date = None  # Track when model was last updated
         self.games_trained_on = 0   # Track how many games model has seen
+        self.selected_features = None  # Feature selection mask after importance pruning
+        self.quantile_models = {}  # Quantile regression models (q10, q90)
+        self.residual_models = {}  # Learned bias correction models
+        self.probability_calibrator = {}  # Isotonic regression for probability calibration
+        self.optimized_params = {}  # Per-player optimized hyperparameters
+        self.performance_history = []  # Rolling performance tracking
+
+    # Canonical feature list — used for training and feature mismatch detection
+    FEATURE_COLS = [
+        # Core features
+        'IS_HOME',
+        # Rolling averages
+        'ROLL_5_PTS', 'ROLL_10_PTS', 'ROLL_5_REB', 'ROLL_10_REB',
+        'ROLL_5_AST', 'ROLL_10_AST', 'ROLL_5_MIN_NUMERIC', 'ROLL_10_MIN_NUMERIC',
+        # Exponential moving averages
+        'EMA_5_PTS', 'EMA_5_REB', 'EMA_5_AST', 'EMA_5_MIN_NUMERIC',
+        # Variance
+        'STD_10_PTS', 'STD_10_REB', 'STD_10_AST',
+        # Trends
+        'PTS_TREND', 'REB_TREND', 'AST_TREND', 'MIN_TREND',
+        # Schedule context
+        'DAYS_REST', 'B2B', 'EXTENDED_REST',
+        # Team momentum
+        'WIN_STREAK', 'LOSS_STREAK',
+        # Role indicators
+        'MIN_CONSISTENCY', 'USAGE_PROXY',
+        # Hot/cold
+        'IS_HOT', 'IS_COLD',
+        # Season phase
+        'SEASON_PHASE',
+        # Opponent context
+        'OPP_DEF_RATING_NORM', 'OPP_PACE_NORM', 'OPP_AST_ALLOWED_NORM',
+        # Efficiency metrics
+        'ROLL_5_TS_PCT', 'ROLL_10_TS_PCT',
+        'ROLL_5_EFG_PCT',
+        'ROLL_5_PTS_PER_FGA',
+        # Usage rate
+        'ROLL_5_USG', 'ROLL_10_USG',
+        # Pace-adjusted stats
+        'ROLL_5_PTS_PACE_ADJ', 'ROLL_5_REB_PACE_ADJ', 'ROLL_5_AST_PACE_ADJ',
+        # Defensive contribution
+        'ROLL_5_STOCKS',
+        # Fantasy (composite metric)
+        'ROLL_5_FANTASY_PTS',
+        # Assist efficiency
+        'ROLL_5_AST_TOV',
+        # Interaction features
+        'B2B_VS_ELITE', 'HOT_VS_WEAK', 'RESTED_HOME',
+    ]
 
     # Per-stat optimized hyperparameters for Gradient Boosting
     GB_STAT_PARAMS = {
@@ -1105,15 +1257,15 @@ class MLPredictor:
             'tol': 1e-4,
         },
         'AST': {
-            'n_estimators': 250,
-            'max_depth': 4,
-            'learning_rate': 0.04,
+            'n_estimators': 300,
+            'max_depth': 5,
+            'learning_rate': 0.03,
             'min_samples_leaf': 5,
-            'min_samples_split': 10,
-            'subsample': 0.75,
-            'max_features': 0.6,
+            'min_samples_split': 8,
+            'subsample': 0.8,
+            'max_features': 0.7,
             'validation_fraction': 0.15,
-            'n_iter_no_change': 15,
+            'n_iter_no_change': 20,
             'tol': 1e-4,
         },
         'PRA': {
@@ -1207,49 +1359,158 @@ class MLPredictor:
             ),
         }
 
-    def train(self, df, stats=['PTS', 'REB', 'AST']):
-        """Train models for specified stats"""
-        feature_cols = [
-            # Core features
-            'IS_HOME',
-            # Rolling averages
-            'ROLL_5_PTS', 'ROLL_10_PTS', 'ROLL_5_REB', 'ROLL_10_REB',
-            'ROLL_5_AST', 'ROLL_10_AST', 'ROLL_5_MIN_NUMERIC', 'ROLL_10_MIN_NUMERIC',
-            # Exponential moving averages
-            'EMA_5_PTS', 'EMA_5_REB', 'EMA_5_AST', 'EMA_5_MIN_NUMERIC',
-            # Variance
-            'STD_10_PTS', 'STD_10_REB', 'STD_10_AST',
-            # Trends
-            'PTS_TREND', 'REB_TREND', 'AST_TREND', 'MIN_TREND',
-            # Schedule context
-            'DAYS_REST', 'B2B', 'EXTENDED_REST',
-            # Team momentum
-            'WIN_STREAK', 'LOSS_STREAK',
-            # Role indicators
-            'MIN_CONSISTENCY', 'USAGE_PROXY',
-            # Hot/cold
-            'IS_HOT', 'IS_COLD',
-            # Season phase
-            'SEASON_PHASE',
-            # Opponent context
-            'OPP_DEF_RATING_NORM', 'OPP_PACE_NORM',
+    @staticmethod
+    def _weighted_cv_mae(model_or_factory, X, y, weights, tscv):
+        """Manual cross-validation with sample_weight support (works on all sklearn versions)."""
+        scores = []
+        for train_idx, val_idx in tscv.split(X):
+            m = sklearn_clone(model_or_factory) if hasattr(model_or_factory, 'get_params') else model_or_factory
+            m.fit(X[train_idx], y[train_idx], sample_weight=weights[train_idx])
+            pred = m.predict(X[val_idx])
+            mae = np.mean(np.abs(y[val_idx] - pred))
+            scores.append(mae)
+        return np.array(scores)
 
-            # =====================
-            # ADVANCED STATS (NEW)
-            # =====================
-            # Efficiency metrics
-            'ROLL_5_TS_PCT', 'ROLL_10_TS_PCT',  # True Shooting %
-            'ROLL_5_EFG_PCT',                    # Effective FG %
-            'ROLL_5_PTS_PER_FGA',                # Points per shot
-            # Usage rate
-            'ROLL_5_USG', 'ROLL_10_USG',
-            # Pace-adjusted stats
-            'ROLL_5_PTS_PACE_ADJ', 'ROLL_5_REB_PACE_ADJ', 'ROLL_5_AST_PACE_ADJ',
-            # Defensive contribution
-            'ROLL_5_STOCKS',
-            # Fantasy (composite metric)
-            'ROLL_5_FANTASY_PTS',
-        ]
+    def _optimize_hyperparameters(self, X, y, weights, stat):
+        """Use Optuna to find optimal hyperparameters for a stat (Improvement #10)."""
+        if not OPTUNA_AVAILABLE:
+            return self.GB_STAT_PARAMS.get(stat, self.GB_STAT_PARAMS['PTS'])
+
+        # Return cached params if available
+        if stat in self.optimized_params:
+            return self.optimized_params[stat]
+
+        def objective(trial):
+            params = {
+                'n_estimators': trial.suggest_int('n_estimators', 100, 500),
+                'max_depth': trial.suggest_int('max_depth', 3, 8),
+                'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.15, log=True),
+                'subsample': trial.suggest_float('subsample', 0.6, 0.95),
+                'min_samples_leaf': trial.suggest_int('min_samples_leaf', 2, 10),
+                'min_samples_split': trial.suggest_int('min_samples_split', 4, 15),
+                'max_features': trial.suggest_float('max_features', 0.4, 0.9),
+            }
+            model = GradientBoostingRegressor(
+                **params, loss='huber', alpha=0.9, random_state=42,
+                validation_fraction=0.15, n_iter_no_change=15, tol=1e-4,
+            )
+            tscv = TimeSeriesSplit(n_splits=5)
+            scores = self._weighted_cv_mae(model, X, y, weights, tscv)
+            # Prioritize last fold (most recent data)
+            return scores[-1]
+
+        study = optuna.create_study(direction='minimize')
+        study.optimize(objective, n_trials=40, timeout=60, show_progress_bar=False)
+
+        best = study.best_params
+        best['validation_fraction'] = 0.15
+        best['n_iter_no_change'] = 20
+        best['tol'] = 1e-4
+        self.optimized_params[stat] = best
+        print(f"    Optuna best MAE: {study.best_value:.2f} (params: depth={best['max_depth']}, lr={best['learning_rate']:.3f}, n={best['n_estimators']})")
+        return best
+
+    def _select_features(self, model, X, feature_names, cumulative_threshold=0.95):
+        """Select features by cumulative importance (Improvement #1)."""
+        if not hasattr(model, 'feature_importances_'):
+            return np.arange(X.shape[1]), feature_names
+
+        importances = model.feature_importances_
+        sorted_idx = np.argsort(importances)[::-1]
+        cumsum = np.cumsum(importances[sorted_idx])
+        # Keep features explaining cumulative_threshold of importance
+        n_keep = np.searchsorted(cumsum, cumulative_threshold) + 1
+        # Keep at least 15 features to avoid over-pruning
+        n_keep = max(n_keep, min(15, len(feature_names)))
+        selected_idx = sorted_idx[:n_keep]
+        selected_idx = np.sort(selected_idx)  # Restore original order
+        selected_names = [feature_names[i] for i in selected_idx]
+        return selected_idx, selected_names
+
+    def _train_quantile_models(self, X, y, weights, stat, params):
+        """Train quantile regression models for uncertainty bounds (Improvement #4)."""
+        q_params = {k: v for k, v in params.items()
+                    if k not in ('validation_fraction', 'n_iter_no_change', 'tol')}
+        q_params['n_estimators'] = max(100, q_params.get('n_estimators', 200) // 2)
+        q_params['learning_rate'] = q_params.get('learning_rate', 0.05) * 1.5
+        q_params['random_state'] = 42
+
+        for alpha, label in [(0.1, 'q10'), (0.9, 'q90')]:
+            qmodel = GradientBoostingRegressor(loss='quantile', alpha=alpha, **q_params)
+            qmodel.fit(X, y, sample_weight=weights)
+            self.quantile_models[f'{stat}_{label}'] = qmodel
+
+    def _train_residual_model(self, X, y, weights, stat, tscv):
+        """Train a residual correction model from OOF predictions (Improvement #6)."""
+        oof_preds = np.full(len(y), np.nan)
+        for train_idx, val_idx in tscv.split(X):
+            fold_model = sklearn_clone(self.models[stat])
+            fold_model.fit(X[train_idx], y[train_idx], sample_weight=weights[train_idx])
+            oof_preds[val_idx] = fold_model.predict(X[val_idx])
+
+        valid_mask = ~np.isnan(oof_preds)
+        if valid_mask.sum() < 15:
+            return
+
+        residuals = y[valid_mask] - oof_preds[valid_mask]
+        # Build residual features: [raw_pred, recent_5g_rolling_mean_approx, std_proxy]
+        residual_X = np.column_stack([
+            oof_preds[valid_mask],
+            np.convolve(y, np.ones(5)/5, mode='same')[valid_mask],
+            np.convolve(y, np.ones(10)/10, mode='same')[valid_mask],
+            pd.Series(y).rolling(10, min_periods=3).std().fillna(3).values[valid_mask],
+        ])
+        residual_model = BayesianRidge()
+        residual_model.fit(residual_X, residuals)
+        self.residual_models[stat] = residual_model
+
+    def _train_probability_calibrator(self, X, y, weights, stat, tscv):
+        """Train isotonic regression for probability calibration (Improvement #5)."""
+        oof_preds = np.full(len(y), np.nan)
+        for train_idx, val_idx in tscv.split(X):
+            fold_model = sklearn_clone(self.models[stat])
+            fold_model.fit(X[train_idx], y[train_idx], sample_weight=weights[train_idx])
+            oof_preds[val_idx] = fold_model.predict(X[val_idx])
+
+        valid_mask = ~np.isnan(oof_preds)
+        if valid_mask.sum() < 30:
+            return
+
+        preds = oof_preds[valid_mask]
+        actuals = y[valid_mask]
+        std_estimate = np.std(actuals - preds) or 1.0
+
+        # Generate calibration data across hypothetical lines
+        z_scores = []
+        outcomes = []
+        for i in range(len(preds)):
+            # Test multiple line offsets around the prediction
+            for offset in np.linspace(-2 * std_estimate, 2 * std_estimate, 9):
+                hypothetical_line = preds[i] + offset
+                z = (hypothetical_line - preds[i]) / (std_estimate + 0.1)
+                went_over = 1 if actuals[i] > hypothetical_line else 0
+                z_scores.append(z)
+                outcomes.append(went_over)
+
+        z_scores = np.array(z_scores)
+        outcomes = np.array(outcomes)
+
+        # Bin z-scores and compute actual over rates
+        calibrator = IsotonicRegression(y_min=0.02, y_max=0.98, out_of_bounds='clip')
+        # Map z-score to raw CDF-based probability, then calibrate
+        raw_prob_over = 1 - scipy_stats.norm.cdf(z_scores)
+        calibrator.fit(raw_prob_over, outcomes)
+        self.probability_calibrator[stat] = {
+            'calibrator': calibrator,
+            'std_estimate': std_estimate,
+        }
+
+    def train(self, df, stats=None):
+        """Train models for specified stats with feature selection, quantile regression,
+        residual correction, probability calibration, and optional Optuna HPO."""
+        if stats is None:
+            stats = ['PTS', 'REB', 'AST']
+        feature_cols = self.FEATURE_COLS
 
         # Filter to available features
         available_features = [f for f in feature_cols if f in df.columns]
@@ -1268,9 +1529,10 @@ class MLPredictor:
             print("⚠️ Insufficient data for training (need at least 20 games)")
             return False
 
-        # Apply recency weighting - more recent games matter more
+        # Apply exponential recency weighting (stronger than linear)
         n_games = len(df_clean)
-        recency_weights = np.linspace(0.4, 1.0, n_games)  # Older games get 0.4x, recent get 1.0x
+        recency_weights = np.exp(np.linspace(-1.0, 0, n_games))
+        recency_weights = recency_weights / recency_weights.sum() * n_games
 
         X = df_clean[available_features].values
 
@@ -1280,7 +1542,7 @@ class MLPredictor:
 
         print(f"\n🤖 Training {self.model_type} models on {len(df_clean)} games with {len(available_features)} features...")
 
-        # Store recent averages for bias correction
+        # Store recent averages for bias correction fallback
         self.recent_averages = {}
         for stat in stats + ['PRA']:
             if stat == 'PRA':
@@ -1291,10 +1553,20 @@ class MLPredictor:
                 continue
             self.recent_averages[stat] = recent_vals.mean()
 
+        tscv = TimeSeriesSplit(n_splits=5)
+
         for stat in stats:
             y = df_clean[stat].values
 
-            model = self._create_model(stat)
+            # --- Optuna HPO (Improvement #10) ---
+            if self.model_type == 'gradient_boost' and OPTUNA_AVAILABLE and n_games >= 40:
+                print(f"  {stat}: Running hyperparameter optimization...")
+                best_params = self._optimize_hyperparameters(X_scaled, y, recency_weights, stat)
+                model = GradientBoostingRegressor(
+                    **best_params, loss='huber', alpha=0.9, random_state=42,
+                )
+            else:
+                model = self._create_model(stat)
 
             if self.model_type == 'neural' and TF_AVAILABLE:
                 # Neural network training with early stopping
@@ -1305,20 +1577,63 @@ class MLPredictor:
                          validation_split=0.2, callbacks=[early_stop],
                          sample_weight=recency_weights)
             else:
-                # Sklearn model training with sample weights for recency
-                tscv = TimeSeriesSplit(n_splits=5)
-                scores = cross_val_score(model, X_scaled, y, cv=tscv,
-                                        scoring='neg_mean_absolute_error')
-                print(f"  {stat}: CV MAE = {-scores.mean():.2f} (±{scores.std():.2f})")
+                # Sklearn model training with weighted CV
+                scores = self._weighted_cv_mae(model, X_scaled, y, recency_weights, tscv)
+                print(f"  {stat}: CV MAE = {scores.mean():.2f} (±{scores.std():.2f})")
                 model.fit(X_scaled, y, sample_weight=recency_weights)
+
+                # --- Feature Selection (Improvement #1) ---
+                if hasattr(model, 'feature_importances_') and len(available_features) > 20:
+                    sel_idx, sel_names = self._select_features(model, X_scaled, available_features)
+                    if len(sel_names) < len(available_features):
+                        X_sel = X_scaled[:, sel_idx]
+                        # Retrain on selected features
+                        model_sel = sklearn_clone(model)
+                        model_sel.fit(X_sel, y, sample_weight=recency_weights)
+                        scores_sel = self._weighted_cv_mae(model_sel, X_sel, y, recency_weights, tscv)
+                        new_mae = scores_sel.mean()
+                        old_mae = scores.mean()
+                        if new_mae <= old_mae * 1.02:  # Accept if not worse by >2%
+                            model = model_sel
+                            print(f"    Feature selection: {len(available_features)} → {len(sel_names)} features (MAE {old_mae:.2f} → {new_mae:.2f})")
+                            if self.selected_features is None:
+                                self.selected_features = {}
+                            self.selected_features[stat] = sel_idx
+                        else:
+                            print(f"    Feature selection skipped (would increase MAE: {old_mae:.2f} → {new_mae:.2f})")
 
                 # Store feature importance for tree-based models
                 if hasattr(model, 'feature_importances_'):
+                    feat_names = available_features
+                    if self.selected_features and stat in self.selected_features:
+                        feat_names = [available_features[i] for i in self.selected_features[stat]]
                     self.feature_importance[stat] = dict(
-                        zip(available_features, model.feature_importances_)
+                        zip(feat_names, model.feature_importances_)
                     )
 
             self.models[stat] = model
+
+            # --- Quantile Regression (Improvement #4) ---
+            if self.model_type in ('gradient_boost',) and self.model_type != 'neural':
+                params = self.optimized_params.get(stat, self.GB_STAT_PARAMS.get(stat, self.GB_STAT_PARAMS['PTS']))
+                X_for_quantile = X_scaled
+                if self.selected_features and stat in self.selected_features:
+                    X_for_quantile = X_scaled[:, self.selected_features[stat]]
+                self._train_quantile_models(X_for_quantile, y, recency_weights, stat, params)
+
+            # --- Residual Correction Model (Improvement #6) ---
+            if self.model_type != 'neural':
+                X_for_residual = X_scaled
+                if self.selected_features and stat in self.selected_features:
+                    X_for_residual = X_scaled[:, self.selected_features[stat]]
+                self._train_residual_model(X_for_residual, y, recency_weights, stat, tscv)
+
+            # --- Probability Calibration (Improvement #5) ---
+            if self.model_type != 'neural':
+                X_for_calib = X_scaled
+                if self.selected_features and stat in self.selected_features:
+                    X_for_calib = X_scaled[:, self.selected_features[stat]]
+                self._train_probability_calibrator(X_for_calib, y, recency_weights, stat, tscv)
 
             # Train ensemble if enabled
             if self.use_ensemble and self.model_type != 'neural':
@@ -1329,23 +1644,38 @@ class MLPredictor:
 
         # Train PRA model
         if all(s in df_clean.columns for s in ['PTS', 'REB', 'AST']):
-            y_pra = df_clean['PTS'] + df_clean['REB'] + df_clean['AST']
-            model_pra = self._create_model('PRA')
+            y_pra = (df_clean['PTS'] + df_clean['REB'] + df_clean['AST']).values
+            stat = 'PRA'
+
+            if self.model_type == 'gradient_boost' and OPTUNA_AVAILABLE and n_games >= 40:
+                print(f"  PRA: Running hyperparameter optimization...")
+                best_params = self._optimize_hyperparameters(X_scaled, y_pra, recency_weights, 'PRA')
+                model_pra = GradientBoostingRegressor(
+                    **best_params, loss='huber', alpha=0.9, random_state=42,
+                )
+            else:
+                model_pra = self._create_model('PRA')
+
             if self.model_type == 'neural' and TF_AVAILABLE:
-                model_pra.fit(X_scaled, y_pra.values, epochs=100, batch_size=16, verbose=0,
+                model_pra.fit(X_scaled, y_pra, epochs=100, batch_size=16, verbose=0,
                              sample_weight=recency_weights)
             else:
-                tscv = TimeSeriesSplit(n_splits=5)
-                scores = cross_val_score(model_pra, X_scaled, y_pra.values, cv=tscv,
-                                        scoring='neg_mean_absolute_error')
-                print(f"  PRA: CV MAE = {-scores.mean():.2f} (±{scores.std():.2f})")
-                model_pra.fit(X_scaled, y_pra.values, sample_weight=recency_weights)
+                scores = self._weighted_cv_mae(model_pra, X_scaled, y_pra, recency_weights, tscv)
+                print(f"  PRA: CV MAE = {scores.mean():.2f} (±{scores.std():.2f})")
+                model_pra.fit(X_scaled, y_pra, sample_weight=recency_weights)
             self.models['PRA'] = model_pra
+
+            # Quantile + residual + calibration for PRA
+            if self.model_type in ('gradient_boost',) and self.model_type != 'neural':
+                pra_params = self.optimized_params.get('PRA', self.GB_STAT_PARAMS.get('PRA', self.GB_STAT_PARAMS['PTS']))
+                self._train_quantile_models(X_scaled, y_pra, recency_weights, 'PRA', pra_params)
+                self._train_residual_model(X_scaled, y_pra, recency_weights, 'PRA', tscv)
+                self._train_probability_calibrator(X_scaled, y_pra, recency_weights, 'PRA', tscv)
 
             if self.use_ensemble and self.model_type != 'neural':
                 self.ensemble_models['PRA'] = self._create_ensemble_models('PRA')
                 for name, ens_model in self.ensemble_models['PRA'].items():
-                    ens_model.fit(X_scaled, y_pra.values, sample_weight=recency_weights)
+                    ens_model.fit(X_scaled, y_pra, sample_weight=recency_weights)
 
         # Track training metadata
         self.last_game_date = df_clean['GAME_DATE'].max().strftime('%Y-%m-%d')
@@ -1353,10 +1683,51 @@ class MLPredictor:
 
         return True
 
-    def update(self, df, stats=['PTS', 'REB', 'AST']):
-        """Incrementally update model with new games (warm start)"""
+    # Maximum estimator growth before forcing a full retrain
+    MAX_ESTIMATOR_GROWTH = 80  # After 4 warm-start updates, retrain from scratch
+    # Maximum model age (in days) before forcing a full retrain
+    MAX_MODEL_AGE_DAYS = 7
+
+    def _needs_full_retrain(self):
+        """Check if the model has grown too large or is too old and needs a full retrain."""
+        # Check estimator bloat
+        for stat, model in self.models.items():
+            if hasattr(model, 'n_estimators'):
+                original = self.GB_STAT_PARAMS.get(stat, self.GB_STAT_PARAMS['PTS'])['n_estimators']
+                if model.n_estimators >= original + self.MAX_ESTIMATOR_GROWTH:
+                    print(f"  ⚠️ {stat} model has {model.n_estimators} estimators (started at {original}) — triggering full retrain")
+                    return True
+
+        # Check model age
+        if self.last_game_date:
+            last_date = datetime.strptime(self.last_game_date, '%Y-%m-%d')
+            if (datetime.now() - last_date).days >= self.MAX_MODEL_AGE_DAYS:
+                print(f"  ⚠️ Model last trained on {self.last_game_date} ({(datetime.now() - last_date).days} days ago) — triggering full retrain")
+                return True
+
+        # Check feature set mismatch (new features added or removed)
+        if self.feature_names and set(self.feature_names) != set(self.FEATURE_COLS):
+            print(f"  ⚠️ Feature set changed ({len(self.feature_names)} → {len(self.FEATURE_COLS)} features) — triggering full retrain")
+            return True
+
+        return False
+
+    def update(self, df, stats=None):
+        """Incrementally update model with new games (warm start).
+
+        Automatically triggers a full retrain when:
+        - Estimator count has grown too high (80+ above original)
+        - Model is older than 7 days
+        """
+        if stats is None:
+            stats = ['PTS', 'REB', 'AST']
         if not self.models or not self.last_game_date:
             print("  ⚠️ No existing model to update, training from scratch...")
+            return self.train(df, stats)
+
+        # Check if model needs a full retrain instead of warm-start
+        if self._needs_full_retrain():
+            print("\n♻️ Auto-retraining from scratch for better accuracy...")
             return self.train(df, stats)
 
         # Filter to only new games since last training
@@ -1388,7 +1759,8 @@ class MLPredictor:
 
         # Apply stronger recency weighting for updates
         n_games = len(df_clean)
-        recency_weights = np.linspace(0.3, 1.0, n_games)
+        recency_weights = np.exp(np.linspace(-1.2, 0, n_games))
+        recency_weights = recency_weights / recency_weights.sum() * n_games
 
         X = df_clean[feature_cols].values
         X_scaled = self.scalers['features'].transform(X)
@@ -1400,14 +1772,44 @@ class MLPredictor:
             y = df_clean[stat].values
             model = self.models[stat]
 
-            # For Random Forest/Gradient Boosting, retrain with warm_start
-            if hasattr(model, 'warm_start'):
-                model.set_params(warm_start=True, n_estimators=model.n_estimators + 20)
-                model.fit(X_scaled, y, sample_weight=recency_weights)
-                print(f"  {stat}: Updated (+20 estimators, now {model.n_estimators} total)")
+            # --- Smart Warm-Start with Shift Detection (Improvement #8) ---
+            n_add = 20  # Default
+            if hasattr(model, 'warm_start') and len(new_games) > 0:
+                old_mean = df_clean[stat].iloc[:-len(new_games)].tail(20).mean() if len(df_clean) > len(new_games) else df_clean[stat].mean()
+                old_std = df_clean[stat].iloc[:-len(new_games)].tail(20).std() if len(df_clean) > len(new_games) else df_clean[stat].std()
+                new_mean = new_games[stat].mean() if stat in new_games.columns else old_mean
+                shift_z = abs(new_mean - old_mean) / (old_std + 0.1)
+
+                if shift_z > 1.5:
+                    print(f"  {stat}: Major distribution shift detected (z={shift_z:.1f}) — full retrain")
+                    return self.train(df, stats)
+                elif shift_z > 0.7:
+                    n_add = 30
+                    print(f"  {stat}: Moderate shift (z={shift_z:.1f}) — aggressive update (+{n_add})")
+                elif len(new_games) < 2:
+                    n_add = 10
+                else:
+                    n_add = 20
+
+            # Match feature count to what the model expects
+            X_update = X_scaled
+            use_warm_start = hasattr(model, 'warm_start')
+
+            if self.selected_features and stat in self.selected_features:
+                expected = getattr(model, 'n_features_in_', X_scaled.shape[1])
+                if len(self.selected_features[stat]) == expected:
+                    X_update = X_scaled[:, self.selected_features[stat]]
+                else:
+                    # Model and selection are out of sync — cold retrain
+                    del self.selected_features[stat]
+                    use_warm_start = False
+
+            if use_warm_start:
+                model.set_params(warm_start=True, n_estimators=model.n_estimators + n_add)
+                model.fit(X_update, y, sample_weight=recency_weights)
+                print(f"  {stat}: Updated (+{n_add} estimators, now {model.n_estimators} total)")
             else:
-                # For other models, just retrain
-                model.fit(X_scaled, y, sample_weight=recency_weights)
+                model.fit(X_update, y, sample_weight=recency_weights)
                 print(f"  {stat}: Retrained with {len(df_clean)} games")
 
             # Update feature importance
@@ -1420,11 +1822,22 @@ class MLPredictor:
         if 'PRA' in self.models:
             y_pra = df_clean['PTS'] + df_clean['REB'] + df_clean['AST']
             model_pra = self.models['PRA']
-            if hasattr(model_pra, 'warm_start'):
+            X_update_pra = X_scaled
+            use_warm_pra = hasattr(model_pra, 'warm_start')
+
+            if self.selected_features and 'PRA' in self.selected_features:
+                expected = getattr(model_pra, 'n_features_in_', X_scaled.shape[1])
+                if len(self.selected_features['PRA']) == expected:
+                    X_update_pra = X_scaled[:, self.selected_features['PRA']]
+                else:
+                    del self.selected_features['PRA']
+                    use_warm_pra = False
+
+            if use_warm_pra:
                 model_pra.set_params(warm_start=True, n_estimators=model_pra.n_estimators + 20)
-                model_pra.fit(X_scaled, y_pra.values, sample_weight=recency_weights)
+                model_pra.fit(X_update_pra, y_pra.values, sample_weight=recency_weights)
             else:
-                model_pra.fit(X_scaled, y_pra.values, sample_weight=recency_weights)
+                model_pra.fit(X_update_pra, y_pra.values, sample_weight=recency_weights)
 
         # Update recent averages
         self._update_recent_averages(df_clean, stats)
@@ -1435,8 +1848,10 @@ class MLPredictor:
 
         return True
 
-    def _update_recent_averages(self, df, stats):
+    def _update_recent_averages(self, df, stats=None):
         """Update recent averages from latest data"""
+        if stats is None:
+            stats = ['PTS', 'REB', 'AST']
         for stat in stats + ['PRA']:
             if stat == 'PRA':
                 if all(s in df.columns for s in ['PTS', 'REB', 'AST']):
@@ -1449,14 +1864,32 @@ class MLPredictor:
                 continue
             self.recent_averages[stat] = recent_vals.mean()
     
-    def predict(self, features_df, bias_correction=0.3):
-        """Make predictions for all trained stats
+    # Per-stat bias correction weights — lower = trust the ML model more
+    BIAS_CORRECTION_BY_STAT = {
+        'PTS': 0.15,
+        'REB': 0.15,
+        'AST': 0.20,
+        'PRA': 0.12,
+    }
+
+    # Asymmetric over-prediction dampening factors.
+    # Backtest shows OVER predictions hit only 44% vs UNDER at 54%.
+    # Apply a stronger downward pull when model predicts above recent avg.
+    OVER_DAMPENING_BY_STAT = {
+        'PTS': 0.08,  # Pull OVER predictions down by 8% of the excess
+        'REB': 0.10,
+        'AST': 0.10,
+        'PRA': 0.08,
+    }
+
+    def predict(self, features_df, bias_correction=None, estimated_minutes=None):
+        """Make predictions for all trained stats with learned residual correction.
 
         Args:
             features_df: DataFrame with features for prediction
-            bias_correction: How much to blend with recent average (0-1).
-                           Higher = more weight on recent performance.
-                           Default 0.3 means 70% ML + 30% recent average.
+            bias_correction: Legacy param — ignored, uses learned residual model or per-stat weights.
+            estimated_minutes: Expected minutes for this game (from estimate_minutes).
+                               If provided, scales predictions based on minutes ratio.
         """
         if not self.models:
             return {}
@@ -1472,12 +1905,32 @@ class MLPredictor:
         X = np.array([feature_values])
         X_scaled = self.scalers['features'].transform(X)
 
+        # Get baseline minutes for minutes-based scaling
+        baseline_minutes = None
+        if estimated_minutes is not None:
+            # Use the rolling average minutes as baseline
+            for fname in ['EMA_5_MIN_NUMERIC', 'ROLL_5_MIN_NUMERIC', 'ROLL_10_MIN_NUMERIC']:
+                if fname in features_df.columns:
+                    val = features_df[fname].values[0]
+                    if val > 0:
+                        baseline_minutes = val
+                        break
+
         predictions = {}
         for stat, model in self.models.items():
+            # Apply feature selection if active and consistent with model
+            X_pred = X_scaled
+            if self.selected_features and stat in self.selected_features:
+                expected = getattr(model, 'n_features_in_', X_scaled.shape[1])
+                if len(self.selected_features[stat]) == expected:
+                    X_pred = X_scaled[:, self.selected_features[stat]]
+                else:
+                    del self.selected_features[stat]
+
             if self.model_type == 'neural' and TF_AVAILABLE:
-                pred = model.predict(X_scaled, verbose=0)[0][0]
+                pred = model.predict(X_pred, verbose=0)[0][0]
             else:
-                pred = model.predict(X_scaled)[0]
+                pred = model.predict(X_pred)[0]
 
             # Ensemble predictions if enabled
             if self.use_ensemble and stat in self.ensemble_models:
@@ -1488,20 +1941,59 @@ class MLPredictor:
                 # Weighted average (main model gets more weight)
                 pred = 0.5 * pred + 0.5 * np.mean(ensemble_preds[1:])
 
-            # Apply bias correction to prevent over-regression to the mean
-            # Blend ML prediction with recent average
+            # --- Minutes-Based Scaling ---
+            # Scale prediction proportionally if expected minutes differ from baseline
+            if estimated_minutes is not None and baseline_minutes and baseline_minutes > 15 and stat != 'PRA':
+                minutes_ratio = estimated_minutes / baseline_minutes
+                # Dampen the ratio to avoid extreme swings (e.g., 0.85 - 1.15 range)
+                minutes_ratio = 0.5 + 0.5 * minutes_ratio  # Blend toward 1.0
+                minutes_ratio = max(0.85, min(1.15, minutes_ratio))
+                pred = pred * minutes_ratio
+
+            # --- Learned Residual Correction (Improvement #6) ---
+            if stat in self.residual_models and hasattr(self, 'recent_averages') and stat in self.recent_averages:
+                recent_avg = self.recent_averages[stat]
+                residual_X = np.array([[
+                    pred,
+                    recent_avg,
+                    recent_avg,  # 10g proxy (same as recent avg if we only have it)
+                    3.0,  # std proxy fallback
+                ]])
+                predicted_residual = self.residual_models[stat].predict(residual_X)[0]
+                # Clip residual correction to avoid wild swings
+                max_correction = abs(pred) * 0.15
+                predicted_residual = np.clip(predicted_residual, -max_correction, max_correction)
+                pred = pred + predicted_residual
+            elif hasattr(self, 'recent_averages') and stat in self.recent_averages:
+                # Fallback: symmetric bias correction
+                recent_avg = self.recent_averages[stat]
+                bc = self.BIAS_CORRECTION_BY_STAT.get(stat, 0.15)
+                pred = (1 - bc) * pred + bc * recent_avg
+
+            # --- Asymmetric Over-Prediction Dampening ---
+            # Backtest shows model systematically over-predicts.
+            # When prediction exceeds recent average, pull it back proportionally.
             if hasattr(self, 'recent_averages') and stat in self.recent_averages:
                 recent_avg = self.recent_averages[stat]
-                # If ML predicts below recent average, pull it up somewhat
-                # If ML predicts above, trust it more (star players can exceed)
-                if pred < recent_avg:
-                    # More aggressive correction when predicting low
-                    pred = (1 - bias_correction) * pred + bias_correction * recent_avg
-                else:
-                    # Less correction when predicting high
-                    pred = (1 - bias_correction * 0.5) * pred + (bias_correction * 0.5) * recent_avg
+                if pred > recent_avg:
+                    excess = pred - recent_avg
+                    dampening = self.OVER_DAMPENING_BY_STAT.get(stat, 0.08)
+                    pred = pred - (excess * dampening)
+
+            # --- Rolling Performance Feedback (Improvement #9) ---
+            rolling_bias = self.get_rolling_bias(stat)
+            if abs(rolling_bias) > 0.3:  # Only correct if meaningful bias detected
+                correction = rolling_bias * 0.5  # Apply 50% of detected bias
+                pred = pred - correction
 
             predictions[stat] = pred
+
+        # Reconcile PRA with component predictions to avoid inconsistency.
+        # The independent PRA model can drift from PTS+REB+AST after bias/residual
+        # corrections are applied separately. Blend: 60% component sum, 40% PRA model.
+        if 'PRA' in predictions and all(s in predictions for s in ['PTS', 'REB', 'AST']):
+            component_sum = predictions['PTS'] + predictions['REB'] + predictions['AST']
+            predictions['PRA'] = 0.6 * component_sum + 0.4 * predictions['PRA']
 
         return predictions
 
@@ -1545,20 +2037,116 @@ class MLPredictor:
         sorted_features = sorted(importance.items(), key=lambda x: x[1], reverse=True)
         return sorted_features[:top_n]
     
-    def get_confidence(self, df, stat, prediction):
-        """Calculate confidence interval based on historical variance"""
+    # Per-stat confidence caps — prevents overconfidence on harder-to-predict stats
+    CONFIDENCE_CAPS = {
+        'PTS': 88,
+        'REB': 82,
+        'AST': 78,  # Hardest to predict — was showing 93% but hitting 38%
+        'PRA': 80,
+    }
+
+    # Scale factor per stat — normalizes std impact across different stat magnitudes
+    CONFIDENCE_STD_SCALE = {
+        'PTS': 3.0,
+        'REB': 5.0,   # REB std is smaller in absolute terms, scale up
+        'AST': 6.0,   # AST std is smallest, scale up most
+        'PRA': 2.5,
+    }
+
+    def get_confidence(self, df, stat, prediction, features_df=None):
+        """Calculate confidence interval using quantile regression when available,
+        falling back to historical variance with per-stat calibration."""
+
+        # --- Quantile Regression bounds (Improvement #4) ---
+        q10_key, q90_key = f'{stat}_q10', f'{stat}_q90'
+        if q10_key in self.quantile_models and q90_key in self.quantile_models and features_df is not None:
+            try:
+                feature_values = []
+                for f in self.feature_names:
+                    if f in features_df.columns:
+                        feature_values.append(features_df[f].values[0])
+                    else:
+                        feature_values.append(0)
+                X = np.array([feature_values])
+                X_scaled = self.scalers['features'].transform(X)
+                X_pred = X_scaled
+
+                # Apply feature selection to match what the quantile models were trained on
+                if self.selected_features and stat in self.selected_features:
+                    q_expected = getattr(self.quantile_models[q10_key], 'n_features_in_', None)
+                    sel_count = len(self.selected_features[stat])
+                    if q_expected is not None and sel_count == q_expected:
+                        X_pred = X_scaled[:, self.selected_features[stat]]
+                    elif q_expected is not None and q_expected != X_scaled.shape[1]:
+                        # Quantile model feature count doesn't match either option — skip to fallback
+                        raise ValueError(f"Quantile model expects {q_expected} features, have {X_scaled.shape[1]} (selected {sel_count})")
+
+                q10 = self.quantile_models[q10_key].predict(X_pred)[0]
+                q90 = self.quantile_models[q90_key].predict(X_pred)[0]
+                quantile_std = (q90 - q10) / 2.56  # Convert 80% interval to approx std
+
+                scale = self.CONFIDENCE_STD_SCALE.get(stat, 3.0)
+                cap = self.CONFIDENCE_CAPS.get(stat, 85)
+                raw_confidence = 100 - quantile_std * scale
+                confidence = min(cap, max(55, raw_confidence))
+
+                return {
+                    'low': round(q10, 1),
+                    'high': round(q90, 1),
+                    'confidence': round(confidence, 0),
+                    'std': round(quantile_std, 2),
+                }
+            except Exception:
+                pass  # Fall through to historical variance fallback
+
+        # Fallback: historical variance
         if stat in df.columns:
             std = df[stat].std()
             recent_std = df[stat].tail(10).std()
-            # Use weighted average of overall and recent variance
             combined_std = 0.4 * std + 0.6 * recent_std
+
+            scale = self.CONFIDENCE_STD_SCALE.get(stat, 3.0)
+            cap = self.CONFIDENCE_CAPS.get(stat, 85)
+            raw_confidence = 100 - combined_std * scale
+            confidence = min(cap, max(55, raw_confidence))
+
             return {
-                'low': prediction - 1.5 * combined_std,
-                'high': prediction + 1.5 * combined_std,
-                'confidence': min(95, max(60, 100 - combined_std * 3))
+                'low': round(prediction - 1.5 * combined_std, 1),
+                'high': round(prediction + 1.5 * combined_std, 1),
+                'confidence': round(confidence, 0),
+                'std': round(combined_std, 2),
             }
-        return {'low': prediction * 0.8, 'high': prediction * 1.2, 'confidence': 70}
-    
+        return {'low': prediction * 0.8, 'high': prediction * 1.2, 'confidence': 65, 'std': 5.0}
+
+    def update_performance_feedback(self, predicted, actual, stat, date=None):
+        """Record a prediction result for rolling performance tracking (Improvement #9)."""
+        self.performance_history.append({
+            'predicted': predicted,
+            'actual': actual,
+            'stat': stat,
+            'date': date or datetime.now().isoformat(),
+        })
+        # Keep last 100 entries
+        if len(self.performance_history) > 100:
+            self.performance_history = self.performance_history[-100:]
+
+    def get_rolling_bias(self, stat, window=20):
+        """Get rolling prediction bias for a stat (positive = over-predicting)."""
+        relevant = [h for h in self.performance_history if h['stat'] == stat]
+        if len(relevant) < 5:
+            return 0.0
+        recent = relevant[-window:]
+        bias = np.mean([h['predicted'] - h['actual'] for h in recent])
+        return bias
+
+    def get_rolling_mae(self, stat, window=20):
+        """Get rolling MAE for a stat."""
+        relevant = [h for h in self.performance_history if h['stat'] == stat]
+        if len(relevant) < 5:
+            return None
+        recent = relevant[-window:]
+        return np.mean([abs(h['predicted'] - h['actual']) for h in recent])
+
     def save(self, player_name):
         """Save model to disk"""
         filename = MODEL_DIR / f"{player_name.replace(' ', '_')}_model.pkl"
@@ -1574,7 +2162,14 @@ class MLPredictor:
             'recent_averages': getattr(self, 'recent_averages', {}),
             'last_game_date': getattr(self, 'last_game_date', None),
             'games_trained_on': getattr(self, 'games_trained_on', 0),
-            'version': '2.1',  # Version tracking for compatibility
+            'version': '3.0',  # Version tracking for compatibility
+            # New v3.0 artifacts
+            'selected_features': getattr(self, 'selected_features', None),
+            'quantile_models': getattr(self, 'quantile_models', {}),
+            'residual_models': getattr(self, 'residual_models', {}),
+            'probability_calibrator': getattr(self, 'probability_calibrator', {}),
+            'optimized_params': getattr(self, 'optimized_params', {}),
+            'performance_history': getattr(self, 'performance_history', []),
         }
 
         if self.model_type == 'neural' and TF_AVAILABLE:
@@ -1606,6 +2201,14 @@ class MLPredictor:
             self.last_game_date = data.get('last_game_date', None)
             self.games_trained_on = data.get('games_trained_on', 0)
 
+            # Load v3.0 artifacts (backward compatible)
+            self.selected_features = data.get('selected_features', None)
+            self.quantile_models = data.get('quantile_models', {})
+            self.residual_models = data.get('residual_models', {})
+            self.probability_calibrator = data.get('probability_calibrator', {})
+            self.optimized_params = data.get('optimized_params', {})
+            self.performance_history = data.get('performance_history', [])
+
             if data['models']:
                 self.models = data['models']
             elif self.model_type == 'neural' and TF_AVAILABLE:
@@ -1619,7 +2222,7 @@ class MLPredictor:
 
             # Check version compatibility
             version = data.get('version', '1.0')
-            if version not in ['2.0', '2.1']:
+            if version not in ['2.0', '2.1', '3.0']:
                 print(f"  ⚠️ Model version {version} - consider retraining with --retrain for improved accuracy")
 
             print(f"📂 Loaded model from {filename}")
@@ -1629,17 +2232,45 @@ class MLPredictor:
             return False
 
 
+class ProbabilityCalculator:
+    """Unified probability calculation used by both LineEvaluator and EnhancedMLPredictor (Improvement #3)."""
+
+    @staticmethod
+    def calculate(prediction, line, std, calibrator_data=None):
+        """Calculate calibrated probability of going OVER the line.
+
+        Args:
+            prediction: Model's point prediction
+            line: The betting line
+            std: Standard deviation / uncertainty estimate
+            calibrator_data: Optional dict with 'calibrator' (IsotonicRegression) and 'std_estimate'
+        Returns:
+            Probability of going over (0-100)
+        """
+        z = (line - prediction) / (std + 0.1)
+        raw_prob_over = 1 - scipy_stats.norm.cdf(z)
+
+        if calibrator_data and 'calibrator' in calibrator_data:
+            try:
+                calibrated = calibrator_data['calibrator'].predict([raw_prob_over])[0]
+                return round(calibrated * 100, 1)
+            except Exception:
+                pass
+
+        return round(raw_prob_over * 100, 1)
+
+
 class LineEvaluator:
     """Evaluates betting lines against predictions"""
-    
+
     def __init__(self):
         self.history = []
-    
-    def evaluate(self, prediction, line, stat, confidence_info=None):
-        """Evaluate a betting line against prediction"""
+
+    def evaluate(self, prediction, line, stat, confidence_info=None, predictor=None):
+        """Evaluate a betting line against prediction with unified probability calculation."""
         diff = prediction - line
         diff_pct = (diff / line) * 100
-        
+
         # Determine recommendation
         if abs(diff_pct) < 3:
             recommendation = "LEAN OVER" if diff > 0 else "LEAN UNDER"
@@ -1650,7 +2281,7 @@ class LineEvaluator:
         else:
             recommendation = "STRONG OVER" if diff > 0 else "STRONG UNDER"
             strength = "HIGH"
-        
+
         result = {
             'stat': stat,
             'line': line,
@@ -1660,19 +2291,28 @@ class LineEvaluator:
             'recommendation': recommendation,
             'strength': strength,
         }
-        
+
         if confidence_info:
             result['confidence'] = confidence_info['confidence']
             result['range_low'] = confidence_info['low']
             result['range_high'] = confidence_info['high']
-            
-            # Calculate probability of hitting over
-            if confidence_info['high'] != confidence_info['low']:
+
+            # --- Unified Probability (Improvement #3) ---
+            std = confidence_info.get('std', None)
+            if std is not None:
+                calibrator_data = None
+                if predictor and hasattr(predictor, 'probability_calibrator') and stat in predictor.probability_calibrator:
+                    calibrator_data = predictor.probability_calibrator[stat]
+                result['prob_over'] = ProbabilityCalculator.calculate(
+                    prediction, line, std, calibrator_data
+                )
+            elif confidence_info['high'] != confidence_info['low']:
+                # Fallback: position-based for legacy models without std
                 range_size = confidence_info['high'] - confidence_info['low']
                 position = (line - confidence_info['low']) / range_size
                 prob_over = max(0, min(100, (1 - position) * 100))
                 result['prob_over'] = prob_over
-        
+
         return result
     
     def log_prediction(self, player_name, evaluation, actual=None):
@@ -1802,12 +2442,13 @@ def print_results(player_name, game_info, predictions, evaluations, vs_stats=Non
     print("\n" + "=" * 65)
 
 
-def find_best_bets(min_edge=5.0, max_results=20, select_games=False):
+def find_best_bets(min_edge=5.0, max_edge=50.0, max_results=20, select_games=False):
     """
     Analyze all today's player props and find the best betting opportunities.
 
     Args:
         min_edge: Minimum edge percentage to include (default 5%)
+        max_edge: Maximum edge percentage to include (default 50%) - filters out unreliable extreme predictions
         max_results: Maximum number of results to show (default 20)
         select_games: If True, prompt user to select specific games to analyze
 
@@ -1842,8 +2483,8 @@ def find_best_bets(min_edge=5.0, max_results=20, select_games=False):
             home_team = event['home_team']
             away_team = event['away_team']
             game_time = datetime.fromisoformat(event['commence_time'].replace('Z', '+00:00'))
-            game_time_local = game_time.replace(tzinfo=None) - timedelta(hours=5)  # EST
-            time_str = game_time_local.strftime('%I:%M %p')
+            game_time_local = game_time.astimezone(ZoneInfo('US/Eastern'))
+            time_str = game_time_local.strftime('%I:%M %p ET')
             print(f"  {i}. {away_team} @ {home_team} ({time_str})")
 
         print("-" * 50)
@@ -1904,7 +2545,8 @@ def find_best_bets(min_edge=5.0, max_results=20, select_games=False):
     errors = 0
 
     # Group by player to reduce API calls
-    players_processed = set()
+    player_info_cache = {}
+    game_log_cache = {}
 
     for prop in all_props:
         player_name = prop['player']
@@ -1918,21 +2560,24 @@ def find_best_bets(min_edge=5.0, max_results=20, select_games=False):
 
         try:
             # Get player info (cached after first call)
-            if player_name not in players_processed:
+            if player_name not in player_info_cache:
                 player_info = scraper.get_player_info(player_name)
                 if not player_info:
+                    player_info_cache[player_name] = None
                     continue
-                players_processed.add(player_name)
+                player_info_cache[player_name] = player_info
             else:
-                player_info = scraper.get_player_info(player_name)
+                player_info = player_info_cache[player_name]
                 if not player_info:
                     continue
 
             player_id = player_info['player_id']
-            team_abbrev = player_info.get('team_abbreviation', '')
+            team_abbrev = player_info.get('team_abbrev', '')
 
-            # Get game log
-            game_log = scraper.get_player_game_log(player_id)
+            # Get game log (cached per player)
+            if player_id not in game_log_cache:
+                game_log_cache[player_id] = scraper.get_player_game_log(player_id)
+            game_log = game_log_cache[player_id]
             if game_log is None or len(game_log) < 10:
                 continue
 
@@ -1947,6 +2592,7 @@ def find_best_bets(min_edge=5.0, max_results=20, select_games=False):
             # Get opponent stats
             opp_def_rating = team_stats.get(opponent, {}).get('def_rating', 110)
             opp_pace = team_stats.get(opponent, {}).get('pace', 100)
+            opp_ast_allowed = team_stats.get(opponent, {}).get('opp_ast', 25)
 
             # Calculate days rest
             last_game = pd.to_datetime(df['GAME_DATE'].iloc[-1])
@@ -1962,26 +2608,30 @@ def find_best_bets(min_edge=5.0, max_results=20, select_games=False):
             # Generate features for prediction
             features_df = FeatureEngineer.get_prediction_features(
                 df, is_home, opponent, injuries_team, injuries_opp,
-                opp_def_rating, opp_pace, days_rest, vs_stats
+                opp_def_rating, opp_pace, opp_ast_allowed, days_rest, vs_stats
             )
 
             # Load or train model
-            predictor = MLPredictor(player_name)
+            predictor = MLPredictor(model_type='gradient_boost')
             model_path = Path('models') / f"{player_name.replace(' ', '_').lower()}_model.pkl"
 
-            if model_path.exists():
-                predictor.load(str(model_path))
+            if predictor.load(player_name):
+                predictor.update(df, stats=[stat])
             else:
                 # Quick train if no model exists
                 predictor.train(df, stats=[stat])
 
-            # Make prediction
+            # Make prediction with minutes estimation
             if stat not in predictor.models:
                 continue
 
-            prediction = predictor.predict(features_df, stat)
-            if prediction is None:
+            estimated_minutes = FeatureEngineer.estimate_minutes(
+                df, is_home, days_rest, injuries_team
+            )
+            all_predictions = predictor.predict(features_df, estimated_minutes=estimated_minutes)
+            if not all_predictions or stat not in all_predictions:
                 continue
+            prediction = all_predictions[stat]
 
             # Calculate edge
             edge_pct = ((prediction - line) / line) * 100
@@ -1989,10 +2639,10 @@ def find_best_bets(min_edge=5.0, max_results=20, select_games=False):
             abs_edge = abs(edge_pct)
 
             # Get confidence info
-            confidence_info = predictor.get_confidence(df, stat, prediction)
+            confidence_info = predictor.get_confidence(df, stat, prediction, features_df=features_df)
 
-            # Only include if edge meets minimum threshold
-            if abs_edge >= min_edge:
+            # Only include if edge is within threshold range
+            if abs_edge >= min_edge and abs_edge <= max_edge:
                 results.append({
                     'player': player_name,
                     'stat': stat,
@@ -2017,12 +2667,12 @@ def find_best_bets(min_edge=5.0, max_results=20, select_games=False):
 
     # Display results
     print("\n" + "=" * 65)
-    print(f"🏆 TOP {len(results)} BEST BETS (Min Edge: {min_edge}%)")
+    print(f"🏆 TOP {len(results)} BEST BETS (Edge: {min_edge}%-{max_edge}%)")
     print("=" * 65)
 
     if not results:
-        print("\n❌ No bets found meeting the minimum edge threshold.")
-        print(f"   Try lowering --min-edge below {min_edge}%")
+        print("\n❌ No bets found meeting the edge threshold.")
+        print(f"   Try lowering --min-edge below {min_edge}% or raising --max-edge above {max_edge}%")
         return []
 
     for i, bet in enumerate(results, 1):
@@ -2035,7 +2685,7 @@ def find_best_bets(min_edge=5.0, max_results=20, select_games=False):
         print(f"   📊 Recent Avg: {bet['recent_avg']} | Confidence: {bet['confidence']:.0f}%")
 
     print("\n" + "=" * 65)
-    print(f"✅ Found {len(results)} opportunities with {min_edge}%+ edge")
+    print(f"✅ Found {len(results)} opportunities with {min_edge}%-{max_edge}% edge")
     if errors > 0:
         print(f"⚠️  Skipped {errors} props due to data issues")
 
@@ -2126,12 +2776,25 @@ def show_history(days=30):
         print("\n❌ No picks found. Track some picks first!")
         return
 
-    # Group by result
-    pending = [p for p in picks if p['won'] is None]
+    # Group by result (exclude voided picks from pending)
+    pending = [p for p in picks if p['won'] is None and not p.get('voided')]
     wins = [p for p in picks if p['won'] == 1]
     losses = [p for p in picks if p['won'] == 0]
+    voided = [p for p in picks if p.get('voided')]
 
-    print(f"\n📊 Summary: {len(wins)}W - {len(losses)}L ({len(pending)} pending)")
+    print(f"\n📊 Summary: {len(wins)}W - {len(losses)}L ({len(pending)} pending, {len(voided)} voided)")
+
+    # Auto-void stale picks before display
+    stale_voided = db.auto_void_stale_picks(days_threshold=3)
+    if stale_voided > 0:
+        print(f"\n🧹 Auto-voided {stale_voided} stale pick(s) (3+ days old, likely DNP)")
+        # Re-fetch after voiding
+        picks = db.get_picks_history(days)
+        pending = [p for p in picks if p['won'] is None and not p.get('voided')]
+        wins = [p for p in picks if p['won'] == 1]
+        losses = [p for p in picks if p['won'] == 0]
+        voided = [p for p in picks if p.get('voided')]
+        print(f"📊 Updated: {len(wins)}W - {len(losses)}L ({len(pending)} pending, {len(voided)} voided)")
 
     # Show pending picks (ALL of them with edge info)
     if pending:
@@ -2139,6 +2802,7 @@ def show_history(days=30):
         print("-" * 65)
         # Sort by absolute edge descending
         pending_sorted = sorted(pending, key=lambda x: abs(x.get('edge', 0)), reverse=True)
+        stale_count = 0
         for p in pending_sorted:
             model = (p.get('model_type') or 'unknown').replace('_', ' ').title()[:12]
             direction_icon = "🟢" if "OVER" in p['direction'].upper() else "🔴"
@@ -2146,7 +2810,17 @@ def show_history(days=30):
             edge_str = f"{edge:+.1f}%" if edge else "N/A"
             game_date = p.get('game_date', '')[:10] if p.get('game_date') else ''
             print(f"   {direction_icon} {p['player']:<20} {p['stat']:<4} {p['direction']:<5} {p['line']:<6} | Edge: {edge_str:<8} | Pred: {p['prediction']:.1f} | vs {p.get('opponent', 'N/A'):<4} | {game_date}")
+            # Check if stale
+            if game_date:
+                try:
+                    pd_date = datetime.strptime(game_date, '%Y-%m-%d').date()
+                    if (datetime.now().date() - pd_date).days >= 2:
+                        stale_count += 1
+                except ValueError:
+                    pass
         print("-" * 65)
+        if stale_count > 0:
+            print(f"   ⚠️ {stale_count} pick(s) are 2+ days old and likely DNP - run --grade to resolve")
 
     # Show recent results
     graded = [p for p in picks if p['won'] is not None]
@@ -2257,6 +2931,11 @@ def auto_grade_cli():
 
     result = db.auto_grade_picks()
 
+    # Show stale auto-voided picks
+    stale_voided = result.get('stale_voided', 0)
+    if stale_voided > 0:
+        print(f"\n🧹 Auto-voided {stale_voided} stale pick(s) (3+ days old, likely DNP)")
+
     # Show voided DNP picks
     voided_count = result.get('voided_count', 0)
     if voided_count > 0:
@@ -2273,13 +2952,35 @@ def auto_grade_cli():
                 emoji = "✅" if r['won'] else "❌"
                 model = (r.get('model_type') or 'unknown').replace('_', ' ').title()
                 print(f"   {emoji} {r['player']} {r['stat']}: {r['actual']} (Line: {r['line']}) [{model}]")
-    elif voided_count == 0:
+    elif voided_count == 0 and stale_voided == 0:
         print("\n⚠️ No picks could be graded. Games may not have finished yet.")
 
     if result['errors']:
         print(f"\n⚠️ Errors ({len(result['errors'])}):")
         for err in result['errors'][:5]:
             print(f"   - {err}")
+
+    # Show remaining pending picks that are >1 day old
+    remaining_pending = db.get_pending_picks()
+    old_pending = []
+    for p in remaining_pending:
+        gd = p.get('game_date', '')
+        if gd:
+            try:
+                pick_date = datetime.strptime(gd[:10], '%Y-%m-%d').date()
+                days_old = (datetime.now().date() - pick_date).days
+                if days_old >= 1:
+                    old_pending.append((p, days_old))
+            except ValueError:
+                pass
+
+    if old_pending:
+        print(f"\n⏳ {len(old_pending)} pick(s) still pending (game was 1+ days ago, will retry next grade):")
+        for p, days in old_pending[:5]:
+            gd_str = p.get('game_date', '')[:10]
+            print(f"   {p['player']} {p['stat']} {p['direction']} {p['line']} ({gd_str}, {days}d ago)")
+        if len(old_pending) > 5:
+            print(f"   ... and {len(old_pending) - 5} more")
 
     print("=" * 65)
 
@@ -2614,6 +3315,7 @@ def interactive_mode():
         opponent = game_info.get('opponent', '') if game_info else ''
         opp_def_rating = team_stats.get(opponent, {}).get('def_rating', 110)
         opp_pace = team_stats.get(opponent, {}).get('pace', 100)
+        opp_ast_allowed = team_stats.get(opponent, {}).get('opp_ast', 25)
 
         # Get injury counts for teams
         team_abbrev = player_info.get('team_abbrev', '')
@@ -2627,9 +3329,19 @@ def interactive_mode():
             injuries_opp=injuries_opp,
             opp_def_rating=opp_def_rating,
             opp_pace=opp_pace,
+            opp_ast_allowed=opp_ast_allowed,
             vs_stats=vs_stats
         )
-        predictions = predictor.predict(features_df)
+
+        # Estimate minutes for this game context
+        days_rest_val = 2  # default
+        if 'GAME_DATE' in df.columns and len(df) > 1:
+            last_game = pd.to_datetime(df['GAME_DATE'].iloc[-1])
+            days_rest_val = min((datetime.now() - last_game).days, 7)
+        estimated_minutes = FeatureEngineer.estimate_minutes(
+            df, is_home, days_rest_val, injuries_team
+        )
+        predictions = predictor.predict(features_df, estimated_minutes=estimated_minutes)
 
         # Get uncertainty estimates
         uncertainty = {}
@@ -2656,8 +3368,12 @@ def interactive_mode():
                 if line_input:
                     try:
                         line = float(line_input)
-                        confidence_info = predictor.get_confidence(df, stat, predictions[stat])
-                        eval_result = evaluator.evaluate(predictions[stat], line, stat, confidence_info)
+                    except ValueError:
+                        print(f"  ⚠️ Invalid number, skipping {stat}")
+                        continue
+                    try:
+                        confidence_info = predictor.get_confidence(df, stat, predictions[stat], features_df=features_df)
+                        eval_result = evaluator.evaluate(predictions[stat], line, stat, confidence_info, predictor=predictor)
                         evaluations.append(eval_result)
                         evaluator.log_prediction(player_name, eval_result)
 
@@ -2678,8 +3394,8 @@ def interactive_mode():
                                 'player_id': player_info['player_id'],
                                 'team_abbrev': team_abbrev
                             })
-                    except ValueError:
-                        print(f"  ⚠️ Invalid number, skipping {stat}")
+                    except Exception as e:
+                        print(f"  ⚠️ Error evaluating {stat}: {e}")
 
         # Print results
         print_results(
@@ -2697,9 +3413,11 @@ def interactive_mode():
             print("\n" + "-" * 50)
             print("📝 TRACK PICKS")
             print("-" * 50)
+            MAX_EDGE_THRESHOLD = 50.0
             for i, pick in enumerate(trackable_picks, 1):
                 direction_emoji = "🟢" if pick['direction'] == "OVER" else "🔴"
-                print(f"  {i}. {pick['stat']} {direction_emoji} {pick['direction']} {pick['line']} (Edge: {pick['edge']:+.1f}%)")
+                warning = " ⚠️  HIGH EDGE" if abs(pick['edge']) > MAX_EDGE_THRESHOLD else ""
+                print(f"  {i}. {pick['stat']} {direction_emoji} {pick['direction']} {pick['line']} (Edge: {pick['edge']:+.1f}%){warning}")
 
             print("\nTrack these picks? Enter numbers (e.g., 1,2), 'all', or press Enter to skip:")
             track_input = input(">>> ").strip().lower()
@@ -2751,6 +3469,8 @@ Examples:
                        help='Select specific games to analyze (use with --best-bets)')
     parser.add_argument('--min-edge', type=float, default=5.0,
                        help='Minimum edge %% to show in best bets (default: 5)')
+    parser.add_argument('--max-edge', type=float, default=50.0,
+                       help='Maximum edge %% to show in best bets (default: 50) - filters out unreliable extreme predictions')
     parser.add_argument('--max-results', type=int, default=20,
                        help='Maximum results to show in best bets (default: 20)')
     parser.add_argument('--track', '-t', action='store_true',
@@ -2852,7 +3572,7 @@ Examples:
 
     # Best bets mode
     if args.best_bets:
-        results = find_best_bets(min_edge=args.min_edge, max_results=args.max_results, select_games=args.select_games)
+        results = find_best_bets(min_edge=args.min_edge, max_edge=args.max_edge, max_results=args.max_results, select_games=args.select_games)
         # If tracking is enabled, prompt to track picks
         if args.track and results:
             track_picks_interactive(results, model_type=args.model)
@@ -2941,6 +3661,7 @@ Examples:
     opponent = game_info.get('opponent', '') if game_info else ''
     opp_def_rating = team_stats.get(opponent, {}).get('def_rating', 110)
     opp_pace = team_stats.get(opponent, {}).get('pace', 100)
+    opp_ast_allowed = team_stats.get(opponent, {}).get('opp_ast', 25)
 
     # Get injury counts
     team_abbrev = player_info.get('team_abbrev', '')
@@ -2954,9 +3675,19 @@ Examples:
         injuries_opp=injuries_opp,
         opp_def_rating=opp_def_rating,
         opp_pace=opp_pace,
+        opp_ast_allowed=opp_ast_allowed,
         vs_stats=vs_stats
     )
-    predictions = predictor.predict(features_df)
+
+    # Estimate minutes for this game
+    days_rest_cli = 2
+    if 'GAME_DATE' in df.columns and len(df) > 1:
+        last_game = pd.to_datetime(df['GAME_DATE'].iloc[-1])
+        days_rest_cli = min((datetime.now() - last_game).days, 7)
+    estimated_minutes = FeatureEngineer.estimate_minutes(
+        df, is_home, days_rest_cli, injuries_team
+    )
+    predictions = predictor.predict(features_df, estimated_minutes=estimated_minutes)
 
     # Get uncertainty estimates
     uncertainty = {}
@@ -2985,8 +3716,8 @@ Examples:
 
     for stat, line in lines.items():
         if line and stat in predictions:
-            confidence_info = predictor.get_confidence(df, stat, predictions[stat])
-            eval_result = evaluator.evaluate(predictions[stat], line, stat, confidence_info)
+            confidence_info = predictor.get_confidence(df, stat, predictions[stat], features_df=features_df)
+            eval_result = evaluator.evaluate(predictions[stat], line, stat, confidence_info, predictor=predictor)
             evaluations.append(eval_result)
             evaluator.log_prediction(player_name, eval_result)
 

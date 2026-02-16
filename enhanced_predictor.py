@@ -16,6 +16,8 @@ from sklearn.preprocessing import StandardScaler, RobustScaler
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, StackingRegressor
 from sklearn.linear_model import Ridge, BayesianRidge
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.isotonic import IsotonicRegression
+from sklearn.base import clone as sklearn_clone
 from scipy import stats
 from pathlib import Path
 import joblib
@@ -257,6 +259,30 @@ class EnhancedFeatureEngineer:
             df['VS_OPP_AVG_AST'] = vs_stats.get('avg_ast', df['ROLL_10_AST'].iloc[-1] if 'ROLL_10_AST' in df.columns else 4)
             df['VS_OPP_GAMES'] = vs_stats.get('games', 0)
 
+        # ===== TARGET-ENCODED OPPONENT EFFECTS (Improvement #7) =====
+        if 'MATCHUP' in df.columns:
+            # Extract opponent abbreviation from matchup string
+            df['_OPP_TEAM'] = df['MATCHUP'].apply(
+                lambda x: str(x).split()[-1] if pd.notna(x) else ''
+            )
+            smoothing = 5  # Minimum games for full weight
+            for stat_col in ['PTS', 'REB', 'AST']:
+                if stat_col in df.columns:
+                    global_mean = df[stat_col].shift(1).expanding(min_periods=5).mean()
+                    # Group by opponent for leave-one-out encoding
+                    opp_stats = df.groupby('_OPP_TEAM')[stat_col].transform(
+                        lambda x: x.shift(1).expanding(min_periods=1).mean()
+                    )
+                    n_vs = df.groupby('_OPP_TEAM')[stat_col].transform(
+                        lambda x: x.shift(1).expanding().count()
+                    )
+                    # Smoothed encoding: blend opponent mean with global mean
+                    df[f'OPP_ENC_{stat_col}'] = (
+                        (n_vs * opp_stats + smoothing * global_mean) /
+                        (n_vs + smoothing)
+                    ).fillna(global_mean)
+            df.drop(columns=['_OPP_TEAM'], errors='ignore', inplace=True)
+
         # ===== INTERACTION FEATURES =====
         # B2B + Elite defense = harder game
         if 'B2B' in df.columns and 'OPP_ELITE_DEF' in df.columns:
@@ -493,6 +519,8 @@ class EnhancedMLPredictor:
         self.feature_importance = {}
         self.last_game_date = None
         self.games_trained_on = 0
+        self.probability_calibrator = {}  # Isotonic calibration data
+        self.base_model_specs = None  # For custom stacking
 
     def _create_base_models(self):
         """Create base models for stacking ensemble."""
@@ -591,17 +619,70 @@ class EnhancedMLPredictor:
 
         return stacking
 
+    def _fit_stacking_with_weights(self, base_models, meta_learner, X, y, weights):
+        """Custom stacking that properly passes sample_weight through CV (Improvement #2)."""
+        tscv = TimeSeriesSplit(n_splits=5)
+        meta_features = np.full((len(y), len(base_models)), np.nan)
+
+        for train_idx, val_idx in tscv.split(X):
+            X_train, X_val = X[train_idx], X[val_idx]
+            y_train, w_train = y[train_idx], weights[train_idx]
+
+            for i, (name, model) in enumerate(base_models):
+                cloned = sklearn_clone(model)
+                try:
+                    cloned.fit(X_train, y_train, sample_weight=w_train)
+                except TypeError:
+                    cloned.fit(X_train, y_train)
+                meta_features[val_idx, i] = cloned.predict(X_val)
+
+        # Only use rows that have all predictions (from CV folds)
+        valid = ~np.isnan(meta_features).any(axis=1)
+        if valid.sum() < 15:
+            # Fallback: just use the first base model
+            base_models[0][1].fit(X, y, sample_weight=weights)
+            return base_models[0][1]
+
+        # Fit meta-learner on OOF predictions + original features (passthrough)
+        meta_X = np.column_stack([meta_features[valid], X[valid]])
+        meta_learner.fit(meta_X, y[valid], sample_weight=weights[valid])
+
+        # Refit all base models on full data with weights
+        fitted_base = []
+        for name, model in base_models:
+            cloned = sklearn_clone(model)
+            try:
+                cloned.fit(X, y, sample_weight=weights)
+            except TypeError:
+                cloned.fit(X, y)
+            fitted_base.append((name, cloned))
+
+        # Return a wrapper that chains base predictions → meta prediction
+        class WeightedStackingModel:
+            def __init__(self, base, meta, n_features):
+                self.base_models_ = base
+                self.meta_learner_ = meta
+                self.n_features_ = n_features
+                self.estimators_ = base  # For compatibility with feature importance extraction
+
+            def predict(self, X):
+                base_preds = np.column_stack([m.predict(X) for _, m in self.base_models_])
+                meta_X = np.column_stack([base_preds, X])
+                return self.meta_learner_.predict(meta_X)
+
+            def fit(self, X, y, **kwargs):
+                pass  # Already fitted
+
+        return WeightedStackingModel(fitted_base, meta_learner, X.shape[1])
+
     def train(self, df, stats=['PTS', 'REB', 'AST', 'PRA']):
         """
-        Train models on player data.
-
-        Args:
-            df: DataFrame with player game logs (must have features created)
-            stats: List of stats to train models for
+        Train models on player data with weighted stacking and probability calibration.
         """
-        # Prepare features
-        feature_cols = [f for f in self.feature_names if f in df.columns]
-        missing_features = [f for f in self.feature_names if f not in df.columns]
+        # Prepare features — also include new target-encoded features
+        extra_features = ['OPP_ENC_PTS', 'OPP_ENC_REB', 'OPP_ENC_AST']
+        all_feature_names = self.FEATURE_NAMES + [f for f in extra_features if f not in self.FEATURE_NAMES]
+        feature_cols = [f for f in all_feature_names if f in df.columns]
 
         if len(feature_cols) < 20:
             print(f"Warning: Only {len(feature_cols)} features available")
@@ -624,80 +705,74 @@ class EnhancedMLPredictor:
 
         # Extract features
         X = df_clean[feature_cols].values
-
-        # Handle any remaining NaN/inf
         X = np.nan_to_num(X, nan=0, posinf=0, neginf=0)
 
         # Use RobustScaler (handles outliers better)
         self.scalers['features'] = RobustScaler()
         X_scaled = self.scalers['features'].fit_transform(X)
 
-        # Recency weights (more aggressive weighting for recent games)
+        # Recency weights (exponential decay)
         n_games = len(df_clean)
-        recency_weights = np.exp(np.linspace(-1, 0, n_games))  # Exponential decay
-        recency_weights = recency_weights / recency_weights.sum() * n_games  # Normalize
+        recency_weights = np.exp(np.linspace(-1, 0, n_games))
+        recency_weights = recency_weights / recency_weights.sum() * n_games
 
-        # Time series cross-validation
         tscv = TimeSeriesSplit(n_splits=5)
 
-        # Train model for each stat
         for stat in stats:
             if stat not in df_clean.columns:
                 continue
 
             y = df_clean[stat].values
 
-            # Create and train model
+            # --- Weighted Stacking (Improvement #2) ---
             if self.use_stacking:
-                model = self._create_stacking_model()
-            else:
-                model = self._create_base_models()[0][1]  # Just RF
-
-            # Cross-validation score
-            try:
-                cv_scores = cross_val_score(
-                    model, X_scaled, y,
-                    cv=tscv,
-                    scoring='neg_mean_absolute_error',
-                    fit_params={'sample_weight': recency_weights} if not self.use_stacking else {}
+                base_models = self._create_base_models()
+                meta_learner = Ridge(alpha=1.0)
+                model = self._fit_stacking_with_weights(
+                    base_models, meta_learner, X_scaled, y, recency_weights
                 )
-                mae = -cv_scores.mean()
-                mae_std = cv_scores.std()
-                print(f"  {stat}: CV MAE = {mae:.2f} (±{mae_std:.2f})")
+            else:
+                model = self._create_base_models()[0][1]
+                model.fit(X_scaled, y, sample_weight=recency_weights)
 
-                self.training_stats[stat] = {
-                    'cv_mae': mae,
-                    'cv_std': mae_std,
-                    'n_games': len(df_clean)
-                }
+            # Cross-validation score (with weights)
+            try:
+                cv_scores = []
+                for train_idx, val_idx in tscv.split(X_scaled):
+                    fold_model = sklearn_clone(self._create_base_models()[0][1])
+                    fold_model.fit(X_scaled[train_idx], y[train_idx],
+                                   sample_weight=recency_weights[train_idx])
+                    fold_pred = fold_model.predict(X_scaled[val_idx])
+                    fold_mae = mean_absolute_error(y[val_idx], fold_pred)
+                    cv_scores.append(-fold_mae)
+
+                mae = -np.mean(cv_scores)
+                mae_std = np.std(cv_scores)
+                print(f"  {stat}: CV MAE = {mae:.2f} (±{mae_std:.2f})")
+                self.training_stats[stat] = {'cv_mae': mae, 'cv_std': mae_std, 'n_games': len(df_clean)}
             except Exception as e:
                 print(f"  {stat}: CV failed - {e}")
 
-            # Final fit on all data
-            if self.use_stacking:
-                model.fit(X_scaled, y)
-            else:
-                model.fit(X_scaled, y, sample_weight=recency_weights)
-
             self.models[stat] = model
 
-            # Feature importance (from RF component if stacking)
+            # --- Probability Calibration (Improvement #5) ---
+            self._train_probability_calibrator(X_scaled, y, recency_weights, stat, tscv)
+
+            # Feature importance
             try:
-                if self.use_stacking and hasattr(model, 'estimators_'):
-                    # Get RF from stacking
+                if hasattr(model, 'estimators_'):
                     rf_model = [est for name, est in model.estimators_ if name == 'rf'][0]
                     importance = rf_model.feature_importances_
                 elif hasattr(model, 'feature_importances_'):
                     importance = model.feature_importances_
                 else:
                     importance = None
-
                 if importance is not None:
                     self.feature_importance[stat] = dict(zip(feature_cols, importance))
             except:
                 pass
 
-        # Store recent averages for bias correction
+        # Store recent averages
         self._update_recent_averages(df_clean, stats)
 
         # Update metadata
@@ -706,6 +781,38 @@ class EnhancedMLPredictor:
         self.games_trained_on = len(df_clean)
 
         return True
+
+    def _train_probability_calibrator(self, X, y, weights, stat, tscv):
+        """Train isotonic regression for calibrated probabilities."""
+        oof_preds = np.full(len(y), np.nan)
+        for train_idx, val_idx in tscv.split(X):
+            fold_model = sklearn_clone(self._create_base_models()[0][1])
+            try:
+                fold_model.fit(X[train_idx], y[train_idx], sample_weight=weights[train_idx])
+            except TypeError:
+                fold_model.fit(X[train_idx], y[train_idx])
+            oof_preds[val_idx] = fold_model.predict(X[val_idx])
+
+        valid_mask = ~np.isnan(oof_preds)
+        if valid_mask.sum() < 30:
+            return
+
+        preds = oof_preds[valid_mask]
+        actuals = y[valid_mask]
+        std_estimate = np.std(actuals - preds) or 1.0
+
+        z_scores_all, outcomes_all = [], []
+        for i in range(len(preds)):
+            for offset in np.linspace(-2 * std_estimate, 2 * std_estimate, 9):
+                line = preds[i] + offset
+                z = (line - preds[i]) / (std_estimate + 0.1)
+                z_scores_all.append(z)
+                outcomes_all.append(1 if actuals[i] > line else 0)
+
+        raw_prob = 1 - stats.norm.cdf(np.array(z_scores_all))
+        calibrator = IsotonicRegression(y_min=0.02, y_max=0.98, out_of_bounds='clip')
+        calibrator.fit(raw_prob, np.array(outcomes_all))
+        self.probability_calibrator[stat] = {'calibrator': calibrator, 'std_estimate': std_estimate}
 
     def _update_recent_averages(self, df, stats):
         """Update recent averages from latest data."""
@@ -774,7 +881,7 @@ class EnhancedMLPredictor:
 
                 # Asymmetric correction (be more conservative on highs)
                 if raw_pred > weighted_avg:
-                    correction *= 0.6  # Less correction for high predictions
+                    correction *= 1.4  # More correction for high predictions
 
                 pred = (1 - correction) * raw_pred + correction * weighted_avg
             else:
@@ -870,8 +977,7 @@ class EnhancedMLPredictor:
     def get_probability_over(self, prediction, line, stat, df=None):
         """
         Calculate calibrated probability of going OVER the line.
-
-        Uses combination of prediction uncertainty and historical hit rates.
+        Uses isotonic calibration when available, falls back to normal CDF.
         """
         # Get uncertainty
         if stat in self.training_stats:
@@ -883,16 +989,20 @@ class EnhancedMLPredictor:
             recent_std = df[stat].tail(10).std()
             std = 0.6 * recent_std + 0.4 * std
 
-        # Z-score of line vs prediction
+        # Z-score and raw probability
         z = (line - prediction) / (std + 0.1)
+        raw_prob_over = 1 - stats.norm.cdf(z)
 
-        # Use normal CDF for probability
-        prob_under = stats.norm.cdf(z)
-        prob_over = 1 - prob_under
+        # --- Isotonic Calibration (Improvement #5) ---
+        if stat in self.probability_calibrator and 'calibrator' in self.probability_calibrator[stat]:
+            try:
+                calibrated = self.probability_calibrator[stat]['calibrator'].predict([raw_prob_over])[0]
+                return round(calibrated * 100, 1)
+            except Exception:
+                pass
 
-        # Calibration adjustment (slight regression toward 50%)
-        prob_over = 0.85 * prob_over + 0.15 * 0.5
-
+        # Fallback: slight regression toward 50%
+        prob_over = 0.85 * raw_prob_over + 0.15 * 0.5
         return round(prob_over * 100, 1)
 
     def get_feature_importance(self, stat, top_n=15):
@@ -918,7 +1028,8 @@ class EnhancedMLPredictor:
             'feature_importance': self.feature_importance,
             'last_game_date': self.last_game_date,
             'games_trained_on': self.games_trained_on,
-            'use_stacking': self.use_stacking
+            'use_stacking': self.use_stacking,
+            'probability_calibrator': getattr(self, 'probability_calibrator', {}),
         }
 
         joblib.dump(save_data, filename)
@@ -937,6 +1048,7 @@ class EnhancedMLPredictor:
             self.last_game_date = data.get('last_game_date')
             self.games_trained_on = data.get('games_trained_on', 0)
             self.use_stacking = data.get('use_stacking', True)
+            self.probability_calibrator = data.get('probability_calibrator', {})
             print(f"📂 Loaded enhanced model from {filepath}")
             return True
         except Exception as e:

@@ -1,0 +1,460 @@
+/**
+ * API client for NBA Prop Evaluator backend
+ */
+
+const API_BASE = '/api'
+
+// Types
+export interface PlayerInfo {
+  player_id: number
+  player_name: string
+  team_id?: number
+  team_abbrev?: string
+  team_name?: string
+}
+
+export interface StatPrediction {
+  stat: string
+  prediction: number
+  confidence: number
+  range_low: number
+  range_high: number
+  uncertainty_std?: number
+  recent_avg?: number
+}
+
+export interface GameInfo {
+  matchup: string
+  game_date: string
+  is_home: boolean
+  opponent: string
+  opponent_name: string
+}
+
+export interface OpponentContext {
+  def_rating: number
+  pace: number
+  def_rank: string
+  pace_desc: string
+}
+
+export interface VsStats {
+  games: number
+  avg_pts: number
+  avg_reb: number
+  avg_ast: number
+}
+
+export interface PredictionResult {
+  player_name: string
+  player_id: number
+  team_abbrev?: string
+  predictions: Record<string, StatPrediction>
+  game_info?: GameInfo
+  opponent_context?: OpponentContext
+  vs_stats?: VsStats
+  model_type: string
+  games_trained_on: number
+}
+
+export interface LineEvaluation {
+  stat: string
+  line: number
+  prediction: number
+  difference: number
+  diff_pct: number
+  recommendation: string
+  strength: string
+  prob_over?: number
+  confidence?: number
+  range_low?: number
+  range_high?: number
+}
+
+export interface Pick {
+  id: number
+  timestamp: string
+  player: string
+  player_id?: number
+  team_abbrev?: string
+  stat: string
+  line: number
+  prediction: number
+  direction: string
+  edge: number
+  confidence?: number
+  opponent?: string
+  is_home?: boolean
+  actual_result?: number
+  won?: boolean
+  model_type?: string
+  game_date?: string
+  voided?: boolean
+  void_reason?: string
+}
+
+export interface PerformanceStats {
+  total_picks: number
+  graded_picks: number
+  wins: number
+  losses: number
+  pushes: number
+  win_rate: number
+  roi: number
+  avg_edge_winners: number
+  by_stat: Record<string, { total: number; wins: number; win_rate: number }>
+  by_edge_range: Record<string, { total: number; wins: number; win_rate: number }>
+}
+
+export interface CumulativeProfitPoint {
+  date: string
+  profit: number
+  cumulative_profit: number
+}
+
+export interface BestBet {
+  player: string
+  player_id?: number
+  team_abbrev?: string
+  stat: string
+  line: number
+  prediction: number
+  edge: number
+  edge_pct: number
+  direction: string
+  recommendation: string
+  prob_over?: number
+  game_info?: GameInfo
+  home_team?: string
+  away_team?: string
+  confidence?: number
+}
+
+export interface ProgressEvent {
+  stage: string
+  progress: number
+  message: string
+  data?: PredictionResult
+}
+
+// API Functions
+
+export async function searchPlayers(query: string): Promise<PlayerInfo[]> {
+  const response = await fetch(`${API_BASE}/players/search?q=${encodeURIComponent(query)}`)
+  if (!response.ok) throw new Error('Search failed')
+  const data = await response.json()
+  return data.players
+}
+
+export async function predictPlayer(
+  playerName: string,
+  onProgress: (event: ProgressEvent) => void,
+  options: {
+    modelType?: string
+    useEnsemble?: boolean
+    retrain?: boolean
+  } = {}
+): Promise<PredictionResult | null> {
+  const response = await fetch(`${API_BASE}/players/predict`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      player_name: playerName,
+      model_type: options.modelType || 'gradient_boost',
+      use_ensemble: options.useEnsemble || false,
+      retrain: options.retrain || false,
+    }),
+  })
+
+  if (!response.ok) throw new Error('Prediction failed')
+  if (!response.body) throw new Error('No response body')
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let result: PredictionResult | null = null
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    const chunk = decoder.decode(value)
+    const lines = chunk.split('\n')
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try {
+          const event: ProgressEvent = JSON.parse(line.slice(6))
+          onProgress(event)
+
+          if (event.stage === 'complete' && event.data) {
+            result = event.data
+          }
+        } catch {
+          // Ignore parse errors
+        }
+      }
+    }
+  }
+
+  return result
+}
+
+export async function predictPlayerSync(
+  playerName: string,
+  options: {
+    modelType?: string
+    useEnsemble?: boolean
+    retrain?: boolean
+  } = {}
+): Promise<PredictionResult> {
+  const response = await fetch(`${API_BASE}/players/predict/sync`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      player_name: playerName,
+      model_type: options.modelType || 'gradient_boost',
+      use_ensemble: options.useEnsemble || false,
+      retrain: options.retrain || false,
+    }),
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.detail || 'Prediction failed')
+  }
+
+  return response.json()
+}
+
+export async function evaluateLine(
+  playerName: string,
+  stat: string,
+  line: number,
+  prediction?: number
+): Promise<LineEvaluation> {
+  const response = await fetch(`${API_BASE}/players/evaluate-line`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      player_name: playerName,
+      stat,
+      line,
+      prediction,
+    }),
+  })
+
+  if (!response.ok) throw new Error('Evaluation failed')
+  return response.json()
+}
+
+export async function getTodaysBestBets(minEdge = 5, limit = 10): Promise<{ bets: BestBet[]; generated_at: string; games_count: number }> {
+  const response = await fetch(`${API_BASE}/bets/today?min_edge=${minEdge}&limit=${limit}`)
+  if (!response.ok) throw new Error('Failed to fetch best bets')
+  return response.json()
+}
+
+export async function getPicks(days = 30, pendingOnly = false): Promise<Pick[]> {
+  const params = new URLSearchParams({
+    days: days.toString(),
+    pending_only: pendingOnly.toString(),
+  })
+  const response = await fetch(`${API_BASE}/picks?${params}`)
+  if (!response.ok) throw new Error('Failed to fetch picks')
+  return response.json()
+}
+
+export async function createPick(pick: Omit<Pick, 'id' | 'timestamp' | 'actual_result' | 'won'>): Promise<Pick> {
+  const response = await fetch(`${API_BASE}/picks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(pick),
+  })
+
+  if (!response.ok) throw new Error('Failed to create pick')
+  return response.json()
+}
+
+export async function gradePick(pickId: number, actualResult: number): Promise<Pick> {
+  const response = await fetch(`${API_BASE}/picks/${pickId}/grade`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ actual_result: actualResult }),
+  })
+
+  if (!response.ok) throw new Error('Failed to grade pick')
+  return response.json()
+}
+
+export async function deletePick(pickId: number): Promise<void> {
+  const response = await fetch(`${API_BASE}/picks/${pickId}`, {
+    method: 'DELETE',
+  })
+
+  if (!response.ok) throw new Error('Failed to delete pick')
+}
+
+export async function autoGradePicks(): Promise<{ graded_count: number; errors: string[]; results: unknown[] }> {
+  const response = await fetch(`${API_BASE}/picks/auto-grade`, {
+    method: 'POST',
+  })
+
+  if (!response.ok) throw new Error('Failed to auto-grade picks')
+  return response.json()
+}
+
+export async function getPerformanceStats(): Promise<PerformanceStats> {
+  const response = await fetch(`${API_BASE}/picks/stats/performance`)
+  if (!response.ok) throw new Error('Failed to fetch performance stats')
+  return response.json()
+}
+
+export async function getCumulativeProfit(): Promise<CumulativeProfitPoint[]> {
+  const response = await fetch(`${API_BASE}/picks/stats/profit`)
+  if (!response.ok) throw new Error('Failed to fetch profit data')
+  return response.json()
+}
+
+// === Game Prediction Types ===
+
+export interface TeamInfoGame {
+  team_id: number
+  team_abbrev: string
+  team_name: string
+  record: string
+  off_rating: number
+  def_rating: number
+  net_rating: number
+  pace: number
+}
+
+export interface GameMatchup {
+  home_team: TeamInfoGame
+  away_team: TeamInfoGame
+  game_date: string
+  game_time?: string
+}
+
+export interface KeyFactor {
+  factor: string
+  impact: string
+  description: string
+  favors: string
+}
+
+export interface GamePrediction {
+  matchup: GameMatchup
+  predicted_winner: string
+  home_win_prob: number
+  away_win_prob: number
+  confidence: number
+  key_factors: KeyFactor[]
+  prediction_id?: number
+}
+
+export interface TodaysGamesResponse {
+  predictions: GamePrediction[]
+  generated_at: string
+  games_count: number
+}
+
+export interface GamePredictionHistoryItem {
+  id: number
+  timestamp: string
+  game_date: string
+  home_team: string
+  away_team: string
+  predicted_winner: string
+  home_win_prob: number
+  away_win_prob: number
+  confidence?: number
+  actual_winner?: string
+  correct?: boolean
+  key_factors: KeyFactor[]
+}
+
+export interface ConfidenceRangeItem {
+  total: number
+  correct: number
+  accuracy: number
+}
+
+export interface GameAccuracyStats {
+  total_predictions: number
+  graded_predictions: number
+  correct: number
+  incorrect: number
+  accuracy: number
+  by_confidence_range: Record<string, ConfidenceRangeItem>
+  recent_streak: string
+}
+
+// === Game Prediction API Functions ===
+
+export async function getTodaysGamePredictions(): Promise<TodaysGamesResponse> {
+  const response = await fetch(`${API_BASE}/games/today`)
+  if (!response.ok) throw new Error('Failed to fetch game predictions')
+  return response.json()
+}
+
+export async function predictTodaysGames(
+  onProgress: (event: ProgressEvent) => void
+): Promise<GamePrediction[] | null> {
+  const response = await fetch(`${API_BASE}/games/predict`, {
+    method: 'POST',
+  })
+
+  if (!response.ok) throw new Error('Prediction failed')
+  if (!response.body) throw new Error('No response body')
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let result: GamePrediction[] | null = null
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    const chunk = decoder.decode(value)
+    const lines = chunk.split('\n')
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try {
+          const event: ProgressEvent = JSON.parse(line.slice(6))
+          onProgress(event)
+
+          if (event.stage === 'complete' && event.data) {
+            const responseData = event.data as unknown as TodaysGamesResponse
+            result = responseData.predictions
+          }
+        } catch {
+          // Ignore parse errors
+        }
+      }
+    }
+  }
+
+  return result
+}
+
+export async function getGamePredictionHistory(days = 7): Promise<GamePredictionHistoryItem[]> {
+  const response = await fetch(`${API_BASE}/games/history?days=${days}`)
+  if (!response.ok) throw new Error('Failed to fetch game history')
+  return response.json()
+}
+
+export async function autoGradeGamePredictions(): Promise<{
+  graded_count: number
+  errors: string[]
+  results: unknown[]
+}> {
+  const response = await fetch(`${API_BASE}/games/auto-grade`, { method: 'POST' })
+  if (!response.ok) throw new Error('Failed to auto-grade game predictions')
+  return response.json()
+}
+
+export async function getGameAccuracyStats(): Promise<GameAccuracyStats> {
+  const response = await fetch(`${API_BASE}/games/stats/accuracy`)
+  if (!response.ok) throw new Error('Failed to fetch game accuracy stats')
+  return response.json()
+}

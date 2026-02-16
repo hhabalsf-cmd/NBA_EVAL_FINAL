@@ -1,13 +1,18 @@
 """
 SQLite database helper for tracking picks history and performance metrics.
 """
+import json
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict
 import time
+import pandas as pd
 
 DB_PATH = Path(__file__).parent / "picks_history.db"
+
+# Cache for team schedule lookups (date_str -> set of team abbreviations that played)
+_team_schedule_cache = {}
 EXCEL_PATH = Path(__file__).parent / "nba_picks_tracker.xlsx"
 
 
@@ -61,8 +66,303 @@ def init_db():
         if col_name not in existing_columns:
             cursor.execute(f"ALTER TABLE picks ADD COLUMN {col_name} {col_def}")
 
+    # Game predictions table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS game_predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            game_date TEXT NOT NULL,
+            home_team TEXT NOT NULL,
+            away_team TEXT NOT NULL,
+            home_team_id INTEGER,
+            away_team_id INTEGER,
+            predicted_winner TEXT NOT NULL,
+            home_win_prob REAL NOT NULL,
+            away_win_prob REAL NOT NULL,
+            confidence REAL,
+            actual_winner TEXT,
+            correct INTEGER,
+            key_factors TEXT,
+            model_version TEXT DEFAULT 'v1.0',
+            graded_at TEXT
+        )
+    """)
+
     conn.commit()
     conn.close()
+
+
+def save_game_prediction(prediction_data: dict) -> int:
+    """Save a game prediction to the database."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    key_factors = prediction_data.get('key_factors')
+    if isinstance(key_factors, list):
+        key_factors = json.dumps(key_factors)
+
+    cursor.execute("""
+        INSERT INTO game_predictions (
+            timestamp, game_date, home_team, away_team,
+            home_team_id, away_team_id, predicted_winner,
+            home_win_prob, away_win_prob, confidence,
+            key_factors, model_version
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        datetime.now().isoformat(),
+        prediction_data.get('game_date'),
+        prediction_data.get('home_team'),
+        prediction_data.get('away_team'),
+        prediction_data.get('home_team_id'),
+        prediction_data.get('away_team_id'),
+        prediction_data.get('predicted_winner'),
+        prediction_data.get('home_win_prob'),
+        prediction_data.get('away_win_prob'),
+        prediction_data.get('confidence'),
+        key_factors,
+        prediction_data.get('model_version', 'v1.0'),
+    ))
+
+    pred_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return pred_id
+
+
+def get_game_predictions(days: int = 7) -> list:
+    """Get game predictions for the last N days."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+
+    cursor.execute("""
+        SELECT * FROM game_predictions
+        WHERE timestamp >= ?
+        ORDER BY timestamp DESC
+    """, (cutoff,))
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    results = []
+    for row in rows:
+        d = dict(row)
+        if d.get('key_factors'):
+            try:
+                d['key_factors'] = json.loads(d['key_factors'])
+            except (json.JSONDecodeError, TypeError):
+                d['key_factors'] = []
+        else:
+            d['key_factors'] = []
+        results.append(d)
+
+    return results
+
+
+def get_pending_game_predictions() -> list:
+    """Get game predictions that haven't been graded yet."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT * FROM game_predictions
+        WHERE correct IS NULL
+        ORDER BY game_date DESC
+    """)
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    results = []
+    for row in rows:
+        d = dict(row)
+        if d.get('key_factors'):
+            try:
+                d['key_factors'] = json.loads(d['key_factors'])
+            except (json.JSONDecodeError, TypeError):
+                d['key_factors'] = []
+        else:
+            d['key_factors'] = []
+        results.append(d)
+
+    return results
+
+
+def grade_game_prediction(prediction_id: int, actual_winner: str):
+    """Grade a game prediction with the actual winner."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT predicted_winner FROM game_predictions WHERE id = ?", (prediction_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return
+
+    correct = 1 if row['predicted_winner'] == actual_winner else 0
+
+    cursor.execute("""
+        UPDATE game_predictions
+        SET actual_winner = ?, correct = ?, graded_at = ?
+        WHERE id = ?
+    """, (actual_winner, correct, datetime.now().isoformat(), prediction_id))
+
+    conn.commit()
+    conn.close()
+
+
+def auto_grade_game_predictions() -> dict:
+    """Auto-grade pending game predictions using scoreboard data."""
+    pending = get_pending_game_predictions()
+    if not pending:
+        return {'graded_count': 0, 'errors': [], 'results': []}
+
+    from nba_api.stats.endpoints import scoreboardv2 as sb
+    import time as _time
+
+    graded_count = 0
+    errors = []
+    results = []
+    today = datetime.now().date()
+
+    for pred in pending:
+        game_date = pred.get('game_date', '')
+        if not game_date:
+            continue
+
+        try:
+            pred_date = datetime.strptime(game_date[:10], '%Y-%m-%d').date()
+            if pred_date >= today:
+                continue  # Game hasn't happened yet
+
+            # Fetch scoreboard for that date
+            date_str = pred_date.strftime('%m/%d/%Y')
+            scoreboard = sb.ScoreboardV2(game_date=date_str)
+            _time.sleep(0.5)
+            games_header = scoreboard.get_data_frames()[0]
+            line_score = scoreboard.get_data_frames()[1]
+
+            if games_header.empty:
+                continue
+
+            # Find the matching game
+            home_team = pred['home_team']
+            away_team = pred['away_team']
+
+            for _, game in games_header.iterrows():
+                status = game.get('GAME_STATUS_ID', 1)
+                if status != 3:  # Not final
+                    continue
+
+                # Match by team abbreviations from line score
+                game_id = game['GAME_ID']
+                game_lines = line_score[line_score['GAME_ID'] == game_id]
+
+                if game_lines.empty:
+                    continue
+
+                teams_in_game = set(game_lines['TEAM_ABBREVIATION'].values)
+                if home_team in teams_in_game and away_team in teams_in_game:
+                    # Found the game — determine winner
+                    home_line = game_lines[game_lines['TEAM_ABBREVIATION'] == home_team]
+                    away_line = game_lines[game_lines['TEAM_ABBREVIATION'] == away_team]
+
+                    if home_line.empty or away_line.empty:
+                        continue
+
+                    home_pts = home_line.iloc[0].get('PTS', 0)
+                    away_pts = away_line.iloc[0].get('PTS', 0)
+
+                    if home_pts is None or away_pts is None:
+                        continue
+
+                    actual_winner = home_team if home_pts > away_pts else away_team
+
+                    grade_game_prediction(pred['id'], actual_winner)
+                    correct = pred['predicted_winner'] == actual_winner
+
+                    results.append({
+                        'home_team': home_team,
+                        'away_team': away_team,
+                        'predicted_winner': pred['predicted_winner'],
+                        'actual_winner': actual_winner,
+                        'correct': correct,
+                        'home_pts': int(home_pts),
+                        'away_pts': int(away_pts),
+                    })
+                    graded_count += 1
+                    break
+
+        except Exception as e:
+            errors.append(f"Error grading {pred.get('home_team')} vs {pred.get('away_team')}: {str(e)}")
+
+    return {
+        'graded_count': graded_count,
+        'errors': errors,
+        'results': results,
+    }
+
+
+def get_game_accuracy_stats() -> dict:
+    """Get accuracy statistics for game predictions."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM game_predictions WHERE correct IS NOT NULL")
+    graded = [dict(row) for row in cursor.fetchall()]
+
+    cursor.execute("SELECT COUNT(*) FROM game_predictions")
+    total = cursor.fetchone()[0]
+
+    conn.close()
+
+    if not graded:
+        return {
+            'total_predictions': total,
+            'graded_predictions': 0,
+            'correct': 0,
+            'incorrect': 0,
+            'accuracy': 0.0,
+            'by_confidence_range': {},
+            'recent_streak': '0-0',
+        }
+
+    correct = sum(1 for p in graded if p['correct'] == 1)
+    incorrect = len(graded) - correct
+    accuracy = (correct / len(graded) * 100) if graded else 0.0
+
+    # By confidence range
+    by_conf = {}
+    for low, high in [(50, 55), (55, 60), (60, 65), (65, 100)]:
+        label = f"{low}-{high}%" if high < 100 else f"{low}%+"
+        range_preds = [p for p in graded if low <= (p.get('confidence') or 50) < high]
+        if range_preds:
+            range_correct = sum(1 for p in range_preds if p['correct'] == 1)
+            by_conf[label] = {
+                'total': len(range_preds),
+                'correct': range_correct,
+                'accuracy': round(range_correct / len(range_preds) * 100, 1),
+            }
+
+    # Recent streak
+    sorted_graded = sorted(graded, key=lambda p: p.get('timestamp', ''), reverse=True)
+    recent_correct = 0
+    recent_total = min(10, len(sorted_graded))
+    for p in sorted_graded[:recent_total]:
+        if p['correct'] == 1:
+            recent_correct += 1
+
+    return {
+        'total_predictions': total,
+        'graded_predictions': len(graded),
+        'correct': correct,
+        'incorrect': incorrect,
+        'accuracy': round(accuracy, 1),
+        'by_confidence_range': by_conf,
+        'recent_streak': f"{recent_correct}-{recent_total - recent_correct} L{recent_total}",
+    }
 
 
 def save_pick(pick_data: dict) -> int:
@@ -464,6 +764,111 @@ def get_picks_for_date(game_date: str) -> List[Dict]:
     return [dict(row) for row in rows]
 
 
+def _check_team_played(team_abbrev: str, game_date, scraper=None) -> bool:
+    """
+    Check if a team played on a specific date using the NBA scoreboard API.
+
+    Args:
+        team_abbrev: Team abbreviation (e.g., 'LAL', 'BOS')
+        game_date: date object for the game
+        scraper: Optional NBADataScraper instance
+
+    Returns:
+        True if the team played on that date, False otherwise
+    """
+    if not team_abbrev:
+        return False
+
+    date_str = game_date.strftime('%m/%d/%Y')
+
+    # Check cache first
+    if date_str in _team_schedule_cache:
+        return team_abbrev.upper() in _team_schedule_cache[date_str]
+
+    try:
+        from nba_api.stats.endpoints import scoreboardv2
+        scoreboard = scoreboardv2.ScoreboardV2(game_date=date_str)
+        games = scoreboard.get_data_frames()[0]  # GameHeader
+
+        teams_that_played = set()
+        if not games.empty:
+            for _, game in games.iterrows():
+                home = str(game.get('HOME_TEAM_ID', ''))
+                away = str(game.get('VISITOR_TEAM_ID', ''))
+                # Also grab abbreviations from the line score table
+            # Use line score for abbreviations
+            line_score = scoreboard.get_data_frames()[1]
+            if not line_score.empty and 'TEAM_ABBREVIATION' in line_score.columns:
+                for abbrev in line_score['TEAM_ABBREVIATION'].unique():
+                    teams_that_played.add(str(abbrev).upper())
+
+        _team_schedule_cache[date_str] = teams_that_played
+        time.sleep(0.5)  # Rate limiting
+        return team_abbrev.upper() in teams_that_played
+
+    except Exception:
+        return False
+
+
+def auto_void_stale_picks(days_threshold: int = 3) -> int:
+    """
+    Auto-void picks that are stuck in pending for too long (safety net).
+
+    Args:
+        days_threshold: Number of days after which a pending pick is considered stale
+
+    Returns:
+        Number of picks voided
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cutoff_date = (datetime.now() - timedelta(days=days_threshold)).strftime('%Y-%m-%d')
+
+    cursor.execute("""
+        SELECT id, player, stat, game_date FROM picks
+        WHERE won IS NULL AND (voided IS NULL OR voided = 0)
+        AND game_date IS NOT NULL AND game_date < ?
+    """, (cutoff_date,))
+
+    stale_picks = cursor.fetchall()
+    conn.close()
+
+    voided = 0
+    for pick in stale_picks:
+        void_pick(pick['id'], "DNP")
+        voided += 1
+
+    return voided
+
+
+def get_stale_pending_picks(days_threshold: int = 2) -> List[Dict]:
+    """
+    Get pending picks that are older than the given threshold.
+
+    Args:
+        days_threshold: Number of days to consider a pick stale
+
+    Returns:
+        List of stale pending picks
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cutoff_date = (datetime.now() - timedelta(days=days_threshold)).strftime('%Y-%m-%d')
+
+    cursor.execute("""
+        SELECT * FROM picks
+        WHERE won IS NULL AND (voided IS NULL OR voided = 0)
+        AND game_date IS NOT NULL AND game_date < ?
+        ORDER BY game_date ASC
+    """, (cutoff_date,))
+
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
 def auto_grade_picks(scraper=None) -> Dict:
     """
     Automatically grade pending picks by fetching actual results from NBA API.
@@ -479,9 +884,12 @@ def auto_grade_picks(scraper=None) -> Dict:
         from nba_evaluator import NBADataScraper
         scraper = NBADataScraper()
 
+    # Safety net: auto-void picks that are 3+ days old
+    stale_voided = auto_void_stale_picks(days_threshold=3)
+
     pending = get_pending_picks()
     if not pending:
-        return {'graded_count': 0, 'errors': [], 'results': []}
+        return {'graded_count': 0, 'errors': [], 'results': [], 'stale_voided': stale_voided}
 
     graded_count = 0
     errors = []
@@ -545,10 +953,12 @@ def auto_grade_picks(scraper=None) -> Dict:
                         if dt.date() <= today:
                             player_dnp = True
                     else:
-                        game_log['GAME_DATE'] = game_log['GAME_DATE'].astype(str)
+                        # Normalize game log dates to YYYY-MM-DD for reliable comparison
+                        game_log['GAME_DATE_NORM'] = pd.to_datetime(game_log['GAME_DATE']).dt.strftime('%Y-%m-%d')
+                        pick_date_str = dt.strftime('%Y-%m-%d')
 
                         # First try exact date match
-                        game_match = game_log[game_log['GAME_DATE'] == nba_date_format]
+                        game_match = game_log[game_log['GAME_DATE_NORM'] == pick_date_str]
 
                         # Filter by opponent if we have one and multiple games
                         if not game_match.empty and opponent and len(game_match) > 1:
@@ -559,9 +969,9 @@ def auto_grade_picks(scraper=None) -> Dict:
                         # If no exact date match, try +/- 1 day (games sometimes shift dates due to timezone)
                         # But REQUIRE opponent match to avoid grading wrong games
                         if game_match.empty and opponent:
-                            dt_minus1 = (dt - timedelta(days=1)).strftime('%b %d, %Y')
-                            dt_plus1 = (dt + timedelta(days=1)).strftime('%b %d, %Y')
-                            nearby_games = game_log[game_log['GAME_DATE'].isin([dt_minus1, dt_plus1])]
+                            dt_minus1 = (dt - timedelta(days=1)).strftime('%Y-%m-%d')
+                            dt_plus1 = (dt + timedelta(days=1)).strftime('%Y-%m-%d')
+                            nearby_games = game_log[game_log['GAME_DATE_NORM'].isin([dt_minus1, dt_plus1])]
 
                             # Only use nearby date if opponent also matches
                             if not nearby_games.empty:
@@ -569,11 +979,21 @@ def auto_grade_picks(scraper=None) -> Dict:
                                 if not opponent_match.empty:
                                     game_match = opponent_match
 
-                        # If no game found but date is in the past, player likely DNP'd
+                        # If no game found but date is in the past, check if team played
                         if (game_match is None or game_match.empty) and dt.date() <= today:
-                            # Check if team played by looking at other players' games on this date
-                            # For now, mark as DNP if game date has passed
-                            player_dnp = True
+                            days_since_game = (today - dt.date()).days
+                            if days_since_game >= 1:
+                                # Check if the team actually played that day
+                                team_played = _check_team_played(
+                                    pick.get('team_abbrev'), dt.date(), scraper
+                                )
+                                if team_played:
+                                    # Team played but player has no stats → confirmed DNP
+                                    player_dnp = True
+                                elif days_since_game >= 2:
+                                    # Fallback: 2-day rule for cases where team check fails
+                                    player_dnp = True
+                            # else: game was today, leave as pending
 
                 except ValueError:
                     # Date parsing failed - skip this pick
@@ -654,6 +1074,7 @@ def auto_grade_picks(scraper=None) -> Dict:
     return {
         'graded_count': graded_count,
         'voided_count': voided_count,
+        'stale_voided': stale_voided,
         'errors': errors,
         'results': results
     }
