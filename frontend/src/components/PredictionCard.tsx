@@ -1,4 +1,4 @@
-import { TrendingUp, TrendingDown } from 'lucide-react'
+import { TrendingUp, TrendingDown, MousePointerClick } from 'lucide-react'
 import { StatPrediction } from '../api/client'
 
 interface PredictionCardProps {
@@ -27,7 +27,7 @@ export default function PredictionCard({ stat, prediction, onClick }: Prediction
   const trendUp = prediction.recent_avg !== null && prediction.recent_avg !== undefined && prediction.prediction > prediction.recent_avg
 
   return (
-    <div onClick={onClick} className={`card p-5 ${onClick ? 'cursor-pointer card-hover' : ''}`}>
+    <div onClick={onClick} className={`card p-5 ${onClick ? 'cursor-pointer card-hover group' : ''}`}>
       <div className="flex items-center justify-between mb-5">
         <span className="text-[11px] font-medium uppercase tracking-wider text-text-muted">{getStatLabel()}</span>
         <span className="font-mono font-semibold text-sm text-text-secondary">{stat}</span>
@@ -69,6 +69,13 @@ export default function PredictionCard({ stat, prediction, onClick }: Prediction
       {prediction.uncertainty_std !== null && prediction.uncertainty_std !== undefined && (
         <div className="mt-2.5 text-[11px] text-text-muted">
           Uncertainty: +/-{prediction.uncertainty_std.toFixed(1)}
+        </div>
+      )}
+
+      {onClick && (
+        <div className="mt-3 flex items-center gap-1 text-[10px] text-text-muted opacity-0 group-hover:opacity-100 transition-opacity">
+          <MousePointerClick className="w-3 h-3" />
+          Fill line
         </div>
       )}
     </div>

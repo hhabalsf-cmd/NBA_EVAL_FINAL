@@ -1178,7 +1178,8 @@ class MLPredictor:
         self.training_history = []
         self.feature_importance = {}
         self.recent_averages = {}  # Store recent averages for bias correction
-        self.last_game_date = None  # Track when model was last updated
+        self.last_game_date = None  # Track last game date in training data
+        self.trained_at = None      # Track when model was actually saved/trained
         self.games_trained_on = 0   # Track how many games model has seen
         self.selected_features = None  # Feature selection mask after importance pruning
         self.quantile_models = {}  # Quantile regression models (q10, q90)
@@ -1698,11 +1699,13 @@ class MLPredictor:
                     print(f"  ⚠️ {stat} model has {model.n_estimators} estimators (started at {original}) — triggering full retrain")
                     return True
 
-        # Check model age
-        if self.last_game_date:
-            last_date = datetime.strptime(self.last_game_date, '%Y-%m-%d')
-            if (datetime.now() - last_date).days >= self.MAX_MODEL_AGE_DAYS:
-                print(f"  ⚠️ Model last trained on {self.last_game_date} ({(datetime.now() - last_date).days} days ago) — triggering full retrain")
+        # Check model age (use trained_at wall-clock date, not last game date)
+        trained_at = getattr(self, 'trained_at', None)
+        if trained_at:
+            saved_date = datetime.strptime(trained_at, '%Y-%m-%d')
+            age_days = (datetime.now() - saved_date).days
+            if age_days >= self.MAX_MODEL_AGE_DAYS:
+                print(f"  ⚠️ Model was saved {age_days} days ago ({trained_at}) — triggering full retrain")
                 return True
 
         # Check feature set mismatch (new features added or removed)
@@ -2161,6 +2164,7 @@ class MLPredictor:
             'feature_importance': self.feature_importance,
             'recent_averages': getattr(self, 'recent_averages', {}),
             'last_game_date': getattr(self, 'last_game_date', None),
+            'trained_at': datetime.now().strftime('%Y-%m-%d'),
             'games_trained_on': getattr(self, 'games_trained_on', 0),
             'version': '3.0',  # Version tracking for compatibility
             # New v3.0 artifacts
@@ -2199,6 +2203,7 @@ class MLPredictor:
             self.feature_importance = data.get('feature_importance', {})
             self.recent_averages = data.get('recent_averages', {})
             self.last_game_date = data.get('last_game_date', None)
+            self.trained_at = data.get('trained_at', None)
             self.games_trained_on = data.get('games_trained_on', 0)
 
             # Load v3.0 artifacts (backward compatible)
@@ -3300,7 +3305,8 @@ def interactive_mode():
         # Try to load and update existing model
         if predictor.load(player_name):
             if predictor.last_game_date:
-                print(f"📂 Model last updated: {predictor.last_game_date} ({predictor.games_trained_on} games)")
+                trained_at_str = f", saved {predictor.trained_at}" if getattr(predictor, 'trained_at', None) else ""
+                print(f"📂 Model last game: {predictor.last_game_date}{trained_at_str} ({predictor.games_trained_on} games)")
             if predictor.update(df):
                 predictor.save(player_name)
         else:

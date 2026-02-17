@@ -1,20 +1,22 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Check, Loader2 } from 'lucide-react'
+import { ArrowLeft, Check, Loader2, Zap, PlaySquare } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import { usePrediction } from '../hooks/usePrediction'
 import PredictionCard from '../components/PredictionCard'
-import { evaluateLine, createPick, LineEvaluation } from '../api/client'
+import { evaluateLine, createPick, LineEvaluation, getPlayerOdds } from '../api/client'
 import { getNbaHeadshotUrl } from '../utils/nba'
+
+const STATS = ['PTS', 'REB', 'AST', 'PRA'] as const
 
 export default function PlayerPage() {
   const { playerName } = useParams<{ playerName: string }>()
   const navigate = useNavigate()
   const { isLoading, progress, message, result, error, predict } = usePrediction()
 
-  const [selectedStat, setSelectedStat] = useState<string | null>(null)
-  const [lineInput, setLineInput] = useState('')
-  const [evaluation, setEvaluation] = useState<LineEvaluation | null>(null)
-  const [isEvaluating, setIsEvaluating] = useState(false)
+  const [lineInputs, setLineInputs] = useState<Record<string, string>>({})
+  const [allEvaluations, setAllEvaluations] = useState<LineEvaluation[]>([])
+  const [isEvaluatingAll, setIsEvaluatingAll] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
 
@@ -22,46 +24,75 @@ export default function PlayerPage() {
     if (playerName) predict(decodeURIComponent(playerName))
   }, [playerName, predict])
 
-  const handleEvaluateLine = async () => {
-    if (!selectedStat || !lineInput || !result) return
-    const line = parseFloat(lineInput)
-    if (isNaN(line)) return
+  // Fetch live odds once we have the player name
+  const { data: odds, isLoading: oddsLoading } = useQuery({
+    queryKey: ['player-odds', playerName],
+    queryFn: () => getPlayerOdds(decodeURIComponent(playerName!)),
+    enabled: !!playerName && !!result,
+    staleTime: 1000 * 60 * 30,
+  })
 
-    setIsEvaluating(true)
-    setEvaluation(null)
+  // Auto-populate line inputs when odds load
+  useEffect(() => {
+    if (!odds || !odds.found) return
+    setLineInputs(prev => {
+      const updates: Record<string, string> = { ...prev }
+      for (const stat of STATS) {
+        const val = odds[stat as keyof typeof odds]
+        if (typeof val === 'number' && !prev[stat]) {
+          updates[stat] = String(val)
+        }
+      }
+      return updates
+    })
+  }, [odds])
+
+  const handleEvaluateAll = async () => {
+    if (!result) return
+    const statsToEval = STATS.filter(s => lineInputs[s] && result.predictions[s])
+    if (statsToEval.length === 0) return
+
+    setIsEvaluatingAll(true)
+    setAllEvaluations([])
     try {
-      const prediction = result.predictions[selectedStat]?.prediction
-      const evalResult = await evaluateLine(result.player_name, selectedStat, line, prediction)
-      setEvaluation(evalResult)
+      const results = await Promise.all(
+        statsToEval.map(stat => {
+          const line = parseFloat(lineInputs[stat])
+          const prediction = result.predictions[stat]?.prediction
+          return evaluateLine(result.player_name, stat, line, prediction)
+        })
+      )
+      setAllEvaluations(results)
     } catch {
       // Error handling
     } finally {
-      setIsEvaluating(false)
+      setIsEvaluatingAll(false)
     }
   }
 
-  const handleSavePick = async () => {
-    if (!evaluation || !result) return
+  const handleSavePick = async (evalData?: LineEvaluation) => {
+    const evalToSave = evalData
+    if (!evalToSave || !result) return
     setIsSaving(true)
     setSaveMessage(null)
     try {
-      const direction = evaluation.recommendation.includes('OVER') ? 'OVER' : 'UNDER'
+      const direction = evalToSave.recommendation.includes('OVER') ? 'OVER' : 'UNDER'
       await createPick({
         player: result.player_name,
         player_id: result.player_id,
         team_abbrev: result.team_abbrev || undefined,
-        stat: evaluation.stat,
-        line: evaluation.line,
-        prediction: evaluation.prediction,
+        stat: evalToSave.stat,
+        line: evalToSave.line,
+        prediction: evalToSave.prediction,
         direction,
-        edge: evaluation.difference,
-        confidence: evaluation.confidence || undefined,
+        edge: evalToSave.difference,
+        confidence: evalToSave.confidence || undefined,
         opponent: result.game_info?.opponent,
         is_home: result.game_info?.is_home,
         model_type: result.model_type,
         game_date: result.game_info?.game_date?.split('T')[0],
       })
-      setSaveMessage('Pick saved successfully!')
+      setSaveMessage('Pick saved!')
       setTimeout(() => setSaveMessage(null), 3000)
     } catch {
       setSaveMessage('Failed to save pick')
@@ -88,21 +119,22 @@ export default function PlayerPage() {
       <div className="flex flex-col items-center justify-center py-24">
         <h2 className="text-lg font-medium text-text-primary mb-2">Couldn't Load Predictions</h2>
         <p className="text-sm text-text-secondary mb-6">{error}</p>
-        <button onClick={() => navigate('/')} className="btn btn-primary">Back to Search</button>
+        <button onClick={() => navigate('/app')} className="btn btn-primary">Back to Search</button>
       </div>
     )
   }
 
   if (!result) return null
 
-  const isOver = evaluation?.recommendation.includes('OVER')
+  const hasOdds = odds?.found
+  const hasAnyLine = STATS.some(s => lineInputs[s])
 
   return (
     <div className="space-y-8">
       {/* Header */}
       <section>
         <button
-          onClick={() => navigate('/')}
+          onClick={() => navigate('/app')}
           className="text-sm text-text-muted hover:text-text-primary mb-4 flex items-center gap-1.5 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
@@ -123,7 +155,21 @@ export default function PlayerPage() {
                   <p className="text-sm text-text-secondary mt-1">{result.team_abbrev}</p>
                 )}
               </div>
-              <span className="text-xs text-text-muted font-mono">{result.games_trained_on} games trained</span>
+              <div className="flex items-center gap-3">
+                {oddsLoading && (
+                  <span className="flex items-center gap-1.5 text-xs text-text-muted">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Fetching odds…
+                  </span>
+                )}
+                {hasOdds && !oddsLoading && (
+                  <span className="flex items-center gap-1 px-2 py-1 rounded-md bg-accent/10 text-accent text-[11px] font-medium">
+                    <Zap className="w-3 h-3" />
+                    Live odds
+                  </span>
+                )}
+                <span className="text-xs text-text-muted font-mono">{result.games_trained_on} games trained</span>
+              </div>
             </div>
           </div>
         </div>
@@ -179,7 +225,7 @@ export default function PlayerPage() {
       <section>
         <h2 className="text-lg font-semibold text-text-primary mb-5 tracking-tight">ML Predictions</h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {['PTS', 'REB', 'AST', 'PRA'].map(stat => {
+          {STATS.map(stat => {
             const prediction = result.predictions[stat]
             if (!prediction) return null
             return (
@@ -187,7 +233,13 @@ export default function PlayerPage() {
                 key={stat}
                 stat={stat}
                 prediction={prediction}
-                onClick={() => { setSelectedStat(stat); setEvaluation(null) }}
+                onClick={() => {
+                  const pred = result.predictions[stat]?.prediction
+                  if (pred == null) return
+                  // Round to nearest 0.5 (standard betting line increment)
+                  const rounded = Math.round(pred * 2) / 2
+                  setLineInputs(prev => ({ ...prev, [stat]: String(rounded) }))
+                }}
               />
             )
           })}
@@ -196,115 +248,155 @@ export default function PlayerPage() {
 
       {/* Line Evaluation */}
       <section className="card p-6">
-        <h2 className="text-lg font-semibold text-text-primary mb-5 tracking-tight">Evaluate Line</h2>
-        <div className="flex flex-wrap items-end gap-4">
-          <div>
-            <label className="block text-xs font-medium text-text-muted mb-2 uppercase tracking-wider">Stat</label>
-            <select
-              value={selectedStat || ''}
-              onChange={e => { setSelectedStat(e.target.value); setEvaluation(null) }}
-              className="bg-bg-secondary border border-border-subtle rounded-lg px-3 py-2.5 text-sm text-text-primary focus:outline-none focus:border-accent"
-            >
-              <option value="">Select stat</option>
-              {['PTS', 'REB', 'AST', 'PRA'].map(stat => (
-                <option key={stat} value={stat}>{stat}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-text-muted mb-2 uppercase tracking-wider">Line</label>
-            <input
-              type="number"
-              step="0.5"
-              value={lineInput}
-              onChange={e => setLineInput(e.target.value)}
-              placeholder="e.g., 26.5"
-              className="w-28"
-            />
-          </div>
-          <button
-            onClick={handleEvaluateLine}
-            disabled={!selectedStat || !lineInput || isEvaluating}
-            className="btn btn-primary"
-          >
-            {isEvaluating ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Evaluating...
-              </>
-            ) : 'Evaluate'}
-          </button>
+        <div className="flex items-center justify-between mb-5">
+          <h2 className="text-lg font-semibold text-text-primary tracking-tight">Evaluate Lines</h2>
+          {hasOdds && !oddsLoading && (
+            <span className="flex items-center gap-1 px-2 py-1 rounded-md bg-accent/10 text-accent text-[11px] font-medium">
+              <Zap className="w-3 h-3" />
+              Lines auto-filled from live odds
+            </span>
+          )}
         </div>
 
-        {evaluation && (
-          <div className={`mt-6 p-5 rounded-xl border ${isOver ? 'border-accent-success/15 bg-accent-success/[0.03]' : 'border-accent-danger/15 bg-accent-danger/[0.03]'}`}>
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5">
-              <div>
-                <div className={`pill ${isOver ? 'pill-over' : 'pill-under'} mb-4`}>{evaluation.recommendation}</div>
-                <div className="grid grid-cols-3 gap-6">
-                  <div>
-                    <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Line</div>
-                    <div className="font-mono text-xl font-bold text-text-primary">{evaluation.line}</div>
-                  </div>
-                  <div>
-                    <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Prediction</div>
-                    <div className={`font-mono text-xl font-bold ${isOver ? 'text-accent-success' : 'text-accent-danger'}`}>
-                      {evaluation.prediction.toFixed(1)}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Edge</div>
-                    <div className={`font-mono text-xl font-bold ${Math.abs(evaluation.diff_pct) >= 8 ? 'text-accent' : 'text-text-primary'}`}>
-                      {evaluation.diff_pct > 0 ? '+' : ''}{evaluation.diff_pct.toFixed(1)}%
-                    </div>
-                  </div>
-                </div>
-
-                {evaluation.prob_over !== null && evaluation.prob_over !== undefined && (
-                  <div className="mt-5">
-                    <div className="flex items-center justify-between text-xs mb-2">
-                      <span className="text-accent-danger">Under</span>
-                      <span className="text-text-muted">{evaluation.prob_over.toFixed(0)}% Over</span>
-                      <span className="text-accent-success">Over</span>
-                    </div>
-                    <div className="h-1.5 bg-accent-danger/15 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-accent-success transition-all duration-500 rounded-full"
-                        style={{ width: `${evaluation.prob_over}%` }}
-                      />
-                    </div>
-                  </div>
-                )}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
+          {STATS.map(stat => {
+            const hasLiveOdd = hasOdds && typeof odds?.[stat as keyof typeof odds] === 'number'
+            return (
+              <div key={stat}>
+                <label className="flex items-center gap-1.5 text-xs font-medium text-text-muted mb-2 uppercase tracking-wider">
+                  {stat}
+                  {hasLiveOdd && <span className="text-accent normal-case font-normal tracking-normal">· live</span>}
+                </label>
+                <input
+                  type="number"
+                  step="0.5"
+                  value={lineInputs[stat] ?? ''}
+                  onChange={e => setLineInputs(prev => ({ ...prev, [stat]: e.target.value }))}
+                  placeholder="—"
+                  className="w-full"
+                />
               </div>
+            )
+          })}
+        </div>
 
-              <div className="flex flex-col items-end gap-2">
-                <button
-                  onClick={handleSavePick}
-                  disabled={isSaving}
-                  className={`btn ${isOver ? 'btn-over' : 'btn-under'}`}
-                >
-                  {isSaving ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Saving...
-                    </>
-                  ) : (
-                    <>
-                      <Check className="w-4 h-4" />
-                      Save Pick
-                    </>
-                  )}
-                </button>
-                {saveMessage && (
-                  <span className={`text-xs ${saveMessage.includes('success') ? 'text-accent-success' : 'text-accent-danger'}`}>
-                    {saveMessage}
-                  </span>
-                )}
-              </div>
-            </div>
+        <button
+          onClick={handleEvaluateAll}
+          disabled={!hasAnyLine || isEvaluatingAll}
+          className="btn btn-primary w-full"
+        >
+          {isEvaluatingAll ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Evaluating…
+            </>
+          ) : (
+            <>
+              <PlaySquare className="w-4 h-4" />
+              Evaluate All Lines
+            </>
+          )}
+        </button>
+
+        {allEvaluations.length > 0 && (
+          <div className="mt-6 space-y-4">
+            {allEvaluations.map(ev => (
+              <EvalResult
+                key={ev.stat}
+                evaluation={ev}
+                isSaving={isSaving}
+                saveMessage={saveMessage}
+                onSave={() => handleSavePick(ev)}
+              />
+            ))}
           </div>
         )}
       </section>
+    </div>
+  )
+}
+
+function EvalResult({
+  evaluation,
+  isSaving,
+  saveMessage,
+  onSave,
+}: {
+  evaluation: LineEvaluation
+  isSaving: boolean
+  saveMessage: string | null
+  onSave: () => void
+}) {
+  const isOver = evaluation.recommendation.includes('OVER')
+  return (
+    <div className={`mt-6 p-5 rounded-xl border ${isOver ? 'border-accent-success/15 bg-accent-success/[0.03]' : 'border-accent-danger/15 bg-accent-danger/[0.03]'}`}>
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5">
+        <div>
+          <div className="flex items-center gap-2 mb-4">
+            <div className={`pill ${isOver ? 'pill-over' : 'pill-under'}`}>{evaluation.recommendation}</div>
+            <span className="text-xs text-text-muted font-mono">{evaluation.stat}</span>
+          </div>
+          <div className="grid grid-cols-3 gap-6">
+            <div>
+              <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Line</div>
+              <div className="font-mono text-xl font-bold text-text-primary">{evaluation.line}</div>
+            </div>
+            <div>
+              <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Prediction</div>
+              <div className={`font-mono text-xl font-bold ${isOver ? 'text-accent-success' : 'text-accent-danger'}`}>
+                {evaluation.prediction.toFixed(1)}
+              </div>
+            </div>
+            <div>
+              <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Edge</div>
+              <div className={`font-mono text-xl font-bold ${Math.abs(evaluation.diff_pct) >= 8 ? 'text-accent' : 'text-text-primary'}`}>
+                {evaluation.diff_pct > 0 ? '+' : ''}{evaluation.diff_pct.toFixed(1)}%
+              </div>
+            </div>
+          </div>
+
+          {evaluation.prob_over !== null && evaluation.prob_over !== undefined && (
+            <div className="mt-5">
+              <div className="flex items-center justify-between text-xs mb-2">
+                <span className="text-accent-danger">Under</span>
+                <span className="text-text-muted">{evaluation.prob_over.toFixed(0)}% Over</span>
+                <span className="text-accent-success">Over</span>
+              </div>
+              <div className="h-1.5 bg-accent-danger/15 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-accent-success transition-all duration-500 rounded-full"
+                  style={{ width: `${evaluation.prob_over}%` }}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-col items-end gap-2">
+          <button
+            onClick={onSave}
+            disabled={isSaving}
+            className={`btn ${isOver ? 'btn-over' : 'btn-under'}`}
+          >
+            {isSaving ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              <>
+                <Check className="w-4 h-4" />
+                Save Pick
+              </>
+            )}
+          </button>
+          {saveMessage && (
+            <span className={`text-xs ${saveMessage.includes('saved') ? 'text-accent-success' : 'text-accent-danger'}`}>
+              {saveMessage}
+            </span>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
