@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Check, Loader2, Zap, PlaySquare } from 'lucide-react'
+import { ArrowLeft, Check, Loader2, Zap, PlaySquare, Plus } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { usePrediction } from '../hooks/usePrediction'
 import PredictionCard from '../components/PredictionCard'
 import { evaluateLine, createPick, LineEvaluation, getPlayerOdds } from '../api/client'
 import { getNbaHeadshotUrl } from '../utils/nba'
+import { useParlayStore } from '../store/parlayStore'
 
 const STATS = ['PTS', 'REB', 'AST', 'PRA'] as const
 
@@ -291,6 +292,7 @@ export default function PlayerPage() {
               <EvalResult
                 key={ev.stat}
                 evaluation={ev}
+                playerName={result.player_name}
                 onSave={buildSavePick(ev)}
               />
             ))}
@@ -303,14 +305,38 @@ export default function PlayerPage() {
 
 function EvalResult({
   evaluation,
+  playerName,
   onSave,
 }: {
   evaluation: LineEvaluation
+  playerName: string
   onSave: () => Promise<void>
 }) {
   const [isSaving, setIsSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const isOver = evaluation.recommendation.includes('OVER')
+  const { addLeg, removeLeg, hasLeg, legs } = useParlayStore()
+  const inParlay = hasLeg(playerName, evaluation.stat)
+
+  const handleParlayToggle = () => {
+    if (inParlay) {
+      const idx = legs.findIndex(l => l.player === playerName && l.stat === evaluation.stat)
+      if (idx !== -1) removeLeg(idx)
+    } else {
+      const prob = evaluation.prob_over != null
+        ? (isOver ? evaluation.prob_over : 100 - evaluation.prob_over)
+        : (isOver ? 60 : 40)
+      addLeg({
+        player: playerName,
+        stat: evaluation.stat,
+        line: evaluation.line,
+        prediction: evaluation.prediction,
+        direction: isOver ? 'OVER' : 'UNDER',
+        prob,
+        edge_pct: evaluation.diff_pct,
+      })
+    }
+  }
 
   const handleSave = async () => {
     setIsSaving(true)
@@ -371,23 +397,37 @@ function EvalResult({
         </div>
 
         <div className="flex flex-col items-end gap-2">
-          <button
-            onClick={handleSave}
-            disabled={isSaving}
-            className={`btn ${isOver ? 'btn-over' : 'btn-under'}`}
-          >
-            {isSaving ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Saving...
-              </>
-            ) : (
-              <>
-                <Check className="w-4 h-4" />
-                Save Pick
-              </>
-            )}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleParlayToggle}
+              title={inParlay ? 'Remove from parlay' : 'Add to parlay'}
+              className={`flex items-center gap-1 px-2 py-1.5 rounded-md text-[11px] font-medium transition-all duration-150 border ${
+                inParlay
+                  ? 'bg-accent/15 border-accent/30 text-accent'
+                  : 'bg-bg-elevated border-border-subtle text-text-muted hover:text-accent hover:border-accent/30'
+              }`}
+            >
+              {inParlay ? <Check className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
+              Parlay
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={isSaving}
+              className={`btn ${isOver ? 'btn-over' : 'btn-under'}`}
+            >
+              {isSaving ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Check className="w-4 h-4" />
+                  Save Pick
+                </>
+              )}
+            </button>
+          </div>
           {saveMessage && (
             <span className={`text-xs ${saveMessage.includes('saved') ? 'text-accent-success' : 'text-accent-danger'}`}>
               {saveMessage}
