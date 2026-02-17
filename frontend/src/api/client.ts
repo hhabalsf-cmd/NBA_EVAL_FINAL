@@ -130,6 +130,14 @@ export interface BestBet {
   confidence?: number
 }
 
+export interface PlayerOdds {
+  PTS?: number
+  REB?: number
+  AST?: number
+  PRA?: number
+  found: boolean
+}
+
 export interface ProgressEvent {
   stage: string
   progress: number
@@ -138,6 +146,12 @@ export interface ProgressEvent {
 }
 
 // API Functions
+
+export async function getPlayerOdds(playerName: string): Promise<PlayerOdds> {
+  const response = await fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/odds`)
+  if (!response.ok) return { found: false }
+  return response.json()
+}
 
 export async function searchPlayers(query: string): Promise<PlayerInfo[]> {
   const response = await fetch(`${API_BASE}/players/search?q=${encodeURIComponent(query)}`)

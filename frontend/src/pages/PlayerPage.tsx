@@ -17,8 +17,6 @@ export default function PlayerPage() {
   const [lineInputs, setLineInputs] = useState<Record<string, string>>({})
   const [allEvaluations, setAllEvaluations] = useState<LineEvaluation[]>([])
   const [isEvaluatingAll, setIsEvaluatingAll] = useState(false)
-  const [isSaving, setIsSaving] = useState(false)
-  const [saveMessage, setSaveMessage] = useState<string | null>(null)
 
   useEffect(() => {
     if (playerName) predict(decodeURIComponent(playerName))
@@ -70,35 +68,24 @@ export default function PlayerPage() {
     }
   }
 
-  const handleSavePick = async (evalData?: LineEvaluation) => {
-    const evalToSave = evalData
-    if (!evalToSave || !result) return
-    setIsSaving(true)
-    setSaveMessage(null)
-    try {
-      const direction = evalToSave.recommendation.includes('OVER') ? 'OVER' : 'UNDER'
-      await createPick({
-        player: result.player_name,
-        player_id: result.player_id,
-        team_abbrev: result.team_abbrev || undefined,
-        stat: evalToSave.stat,
-        line: evalToSave.line,
-        prediction: evalToSave.prediction,
-        direction,
-        edge: evalToSave.difference,
-        confidence: evalToSave.confidence || undefined,
-        opponent: result.game_info?.opponent,
-        is_home: result.game_info?.is_home,
-        model_type: result.model_type,
-        game_date: result.game_info?.game_date?.split('T')[0],
-      })
-      setSaveMessage('Pick saved!')
-      setTimeout(() => setSaveMessage(null), 3000)
-    } catch {
-      setSaveMessage('Failed to save pick')
-    } finally {
-      setIsSaving(false)
-    }
+  const buildSavePick = (evalData: LineEvaluation) => async () => {
+    if (!result) return
+    const direction = evalData.recommendation.includes('OVER') ? 'OVER' : 'UNDER'
+    await createPick({
+      player: result.player_name,
+      player_id: result.player_id,
+      team_abbrev: result.team_abbrev || undefined,
+      stat: evalData.stat,
+      line: evalData.line,
+      prediction: evalData.prediction,
+      direction,
+      edge: evalData.diff_pct,
+      confidence: evalData.confidence || undefined,
+      opponent: result.game_info?.opponent,
+      is_home: result.game_info?.is_home,
+      model_type: result.model_type,
+      game_date: result.game_info?.game_date?.split('T')[0],
+    })
   }
 
   if (isLoading) {
@@ -304,9 +291,7 @@ export default function PlayerPage() {
               <EvalResult
                 key={ev.stat}
                 evaluation={ev}
-                isSaving={isSaving}
-                saveMessage={saveMessage}
-                onSave={() => handleSavePick(ev)}
+                onSave={buildSavePick(ev)}
               />
             ))}
           </div>
@@ -318,16 +303,29 @@ export default function PlayerPage() {
 
 function EvalResult({
   evaluation,
-  isSaving,
-  saveMessage,
   onSave,
 }: {
   evaluation: LineEvaluation
-  isSaving: boolean
-  saveMessage: string | null
-  onSave: () => void
+  onSave: () => Promise<void>
 }) {
+  const [isSaving, setIsSaving] = useState(false)
+  const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const isOver = evaluation.recommendation.includes('OVER')
+
+  const handleSave = async () => {
+    setIsSaving(true)
+    setSaveMessage(null)
+    try {
+      await onSave()
+      setSaveMessage('Pick saved!')
+      setTimeout(() => setSaveMessage(null), 3000)
+    } catch {
+      setSaveMessage('Failed to save pick')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
   return (
     <div className={`mt-6 p-5 rounded-xl border ${isOver ? 'border-accent-success/15 bg-accent-success/[0.03]' : 'border-accent-danger/15 bg-accent-danger/[0.03]'}`}>
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5">
@@ -374,7 +372,7 @@ function EvalResult({
 
         <div className="flex flex-col items-end gap-2">
           <button
-            onClick={onSave}
+            onClick={handleSave}
             disabled={isSaving}
             className={`btn ${isOver ? 'btn-over' : 'btn-under'}`}
           >

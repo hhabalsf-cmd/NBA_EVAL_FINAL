@@ -1,5 +1,8 @@
 """Service layer wrapping existing ML prediction classes."""
 import sys
+import time
+import unicodedata
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, Generator
 import asyncio
@@ -24,6 +27,9 @@ class PredictionService:
         self.evaluator = LineEvaluator()
         self._team_stats_cache = None
         self._injuries_cache = None
+        self._odds_cache: Optional[Dict] = None
+        self._odds_cache_time: float = 0
+        self._ODDS_CACHE_TTL = 30 * 60  # 30 minutes
 
     def get_team_stats(self) -> Dict:
         """Get cached team defensive stats."""
@@ -36,6 +42,47 @@ class PredictionService:
         if self._injuries_cache is None:
             self._injuries_cache = self.scraper.get_injury_report()
         return self._injuries_cache
+
+    @staticmethod
+    def _normalize_name(name: str) -> str:
+        """Normalize a player name: strip accents, lowercase, strip whitespace."""
+        nfkd = unicodedata.normalize('NFKD', name)
+        ascii_name = ''.join(c for c in nfkd if not unicodedata.combining(c))
+        return ascii_name.lower().strip()
+
+    def get_player_odds(self, player_name: str) -> Dict:
+        """Return today's consensus prop lines for *player_name* (30-min cache)."""
+        now = time.time()
+
+        # Refresh cache if stale
+        if self._odds_cache is None or (now - self._odds_cache_time) > self._ODDS_CACHE_TTL:
+            try:
+                props = OddsAPI().get_all_todays_props()
+            except Exception:
+                props = []
+            # Build lookup: normalized_name -> {stat -> line}
+            lookup: Dict[str, Dict[str, float]] = {}
+            for prop in props:
+                norm = self._normalize_name(prop.get('player', ''))
+                stat = prop.get('stat')
+                line = prop.get('consensus_line')
+                if norm and stat and line is not None:
+                    lookup.setdefault(norm, {})[stat] = line
+            self._odds_cache = lookup
+            self._odds_cache_time = now
+
+        target = self._normalize_name(player_name)
+        # Exact match first
+        if target in self._odds_cache:
+            lines = self._odds_cache[target]
+            return {**lines, 'found': True}
+
+        # Partial / fuzzy match: check if target words are a subset of any key
+        for norm_key, lines in self._odds_cache.items():
+            if target in norm_key or norm_key in target:
+                return {**lines, 'found': True}
+
+        return {'found': False}
 
     def search_players(self, query: str) -> list:
         """Search for players by name."""
@@ -212,6 +259,14 @@ class PredictionService:
         # Get vs stats
         vs_stats = self.scraper.get_vs_team_stats(player_info['player_id'], opponent) if opponent else None
 
+        # Calculate actual days rest from last game date
+        try:
+            import pandas as pd
+            last_game = pd.to_datetime(df_features['GAME_DATE'].iloc[-1])
+            days_rest = min((datetime.now() - last_game).days, 7)
+        except Exception:
+            days_rest = 2  # Fallback if date parsing fails
+
         # Create prediction features
         pred_features = FeatureEngineer.get_prediction_features(
             df_features,
@@ -222,13 +277,13 @@ class PredictionService:
             opp_def_rating=opp_def_rating,
             opp_pace=opp_pace,
             opp_ast_allowed=opp_ast_allowed,
-            days_rest=2,  # Default
+            days_rest=days_rest,
             vs_stats=vs_stats
         )
 
         # Estimate minutes for this game context
         estimated_minutes = FeatureEngineer.estimate_minutes(
-            df_features, is_home, 2, injuries_team
+            df_features, is_home, days_rest, injuries_team
         )
 
         # Make predictions with minutes-based scaling

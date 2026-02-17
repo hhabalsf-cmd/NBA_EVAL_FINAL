@@ -106,6 +106,14 @@ async def predict_player_stats_sync(request: PredictionRequest):
     return PredictionResponse(**result)
 
 
+@router.get("/{player_name}/odds")
+async def get_player_odds(player_name: str):
+    """Get today's consensus prop lines for a player (30-min cached)."""
+    service = get_prediction_service()
+    result = service.get_player_odds(player_name)
+    return result
+
+
 @router.post("/evaluate-line", response_model=LineEvaluation)
 async def evaluate_line(request: LineEvaluationRequest):
     """Evaluate a betting line against a prediction."""
