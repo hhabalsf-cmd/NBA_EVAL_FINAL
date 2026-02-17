@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Loader2 } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 
 interface SignupFormProps {
@@ -18,9 +19,9 @@ export default function SignupForm({ onSuccess }: SignupFormProps) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={handleSubmit} className="space-y-5">
       <div>
-        <label className="block text-xs text-text-muted mb-1.5">Email</label>
+        <label className="block text-xs font-medium text-text-muted mb-2 uppercase tracking-wider">Email</label>
         <input
           type="email"
           value={email}
@@ -31,7 +32,7 @@ export default function SignupForm({ onSuccess }: SignupFormProps) {
         />
       </div>
       <div>
-        <label className="block text-xs text-text-muted mb-1.5">Username</label>
+        <label className="block text-xs font-medium text-text-muted mb-2 uppercase tracking-wider">Username</label>
         <input
           type="text"
           value={username}
@@ -42,7 +43,7 @@ export default function SignupForm({ onSuccess }: SignupFormProps) {
         />
       </div>
       <div>
-        <label className="block text-xs text-text-muted mb-1.5">Password</label>
+        <label className="block text-xs font-medium text-text-muted mb-2 uppercase tracking-wider">Password</label>
         <input
           type="password"
           value={password}
@@ -54,7 +55,12 @@ export default function SignupForm({ onSuccess }: SignupFormProps) {
       </div>
       {error && <p className="text-xs text-accent-danger">{error}</p>}
       <button type="submit" disabled={isLoading} className="btn btn-primary w-full">
-        {isLoading ? <><div className="spinner w-4 h-4" /> Creating account...</> : 'Create Account'}
+        {isLoading ? (
+          <>
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Creating account...
+          </>
+        ) : 'Create Account'}
       </button>
     </form>
   )

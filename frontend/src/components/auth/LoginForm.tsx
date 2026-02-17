@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Loader2 } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 
 interface LoginFormProps {
@@ -17,9 +18,9 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={handleSubmit} className="space-y-5">
       <div>
-        <label className="block text-xs text-text-muted mb-1.5">Email</label>
+        <label className="block text-xs font-medium text-text-muted mb-2 uppercase tracking-wider">Email</label>
         <input
           type="email"
           value={email}
@@ -30,7 +31,7 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
         />
       </div>
       <div>
-        <label className="block text-xs text-text-muted mb-1.5">Password</label>
+        <label className="block text-xs font-medium text-text-muted mb-2 uppercase tracking-wider">Password</label>
         <input
           type="password"
           value={password}
@@ -42,7 +43,12 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
       </div>
       {error && <p className="text-xs text-accent-danger">{error}</p>}
       <button type="submit" disabled={isLoading} className="btn btn-primary w-full">
-        {isLoading ? <><div className="spinner w-4 h-4" /> Signing in...</> : 'Sign In'}
+        {isLoading ? (
+          <>
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Signing in...
+          </>
+        ) : 'Sign In'}
       </button>
     </form>
   )

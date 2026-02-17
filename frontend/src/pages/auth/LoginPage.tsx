@@ -14,16 +14,16 @@ export default function LoginPage() {
   return (
     <div className="flex items-center justify-center min-h-[60vh]">
       <div className="w-full max-w-sm">
-        <div className="text-center mb-6">
-          <h1 className="text-xl font-bold text-text-primary mb-1">Sign in to EVAL</h1>
+        <div className="text-center mb-8">
+          <h1 className="text-xl font-semibold text-text-primary mb-1.5 tracking-tight">Sign in to EVAL</h1>
           <p className="text-sm text-text-secondary">Enter your credentials to continue</p>
         </div>
         <div className="card p-6">
           <LoginForm onSuccess={() => navigate('/')} />
         </div>
-        <p className="text-center text-sm text-text-muted mt-4">
+        <p className="text-center text-sm text-text-muted mt-5">
           Don't have an account?{' '}
-          <Link to="/signup" className="text-accent hover:underline">Sign up</Link>
+          <Link to="/signup" className="text-accent hover:text-accent-hover transition-colors">Sign up</Link>
         </p>
       </div>
     </div>

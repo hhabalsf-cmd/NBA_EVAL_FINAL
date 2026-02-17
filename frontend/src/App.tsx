@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
+import { Home, Gamepad2, History, Activity } from 'lucide-react'
 import HomePage from './pages/HomePage'
 import PlayerPage from './pages/PlayerPage'
 import HistoryPage from './pages/HistoryPage'
@@ -15,14 +16,17 @@ function App() {
 
   return (
     <BrowserRouter>
-      <div className="min-h-screen bg-bg-primary">
+      <div className="min-h-screen bg-bg-primary flex flex-col">
         {/* Navigation */}
-        <nav className="sticky top-0 z-50 bg-bg-secondary border-b border-border-subtle">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6">
-            <div className="flex items-center justify-between h-14">
+        <nav className="sticky top-0 z-50 bg-bg-secondary/80 backdrop-blur-xl border-b border-border-subtle">
+          <div className="max-w-5xl mx-auto px-5 sm:px-8">
+            <div className="flex items-center justify-between h-16">
               {/* Logo */}
-              <NavLink to="/" className="flex items-center gap-2">
-                <span className="font-mono font-bold text-lg text-accent">Bettin'Jrys</span>
+              <NavLink to="/" className="flex items-center gap-2.5 group">
+                <Activity className="w-5 h-5 text-accent transition-transform group-hover:scale-110" strokeWidth={2.5} />
+                <span className="font-mono font-semibold text-[15px] tracking-tight text-text-primary">
+                  EVAL
+                </span>
               </NavLink>
 
               {/* Nav Links */}
@@ -31,49 +35,52 @@ function App() {
                   to="/"
                   end
                   className={({ isActive }) =>
-                    `px-3 py-1.5 text-sm font-medium transition-colors border-b-2 ${
+                    `flex items-center gap-2 px-3.5 py-2 text-sm font-medium rounded-lg transition-all duration-150 ${
                       isActive
-                        ? 'border-accent text-text-primary'
-                        : 'border-transparent text-text-secondary hover:text-text-primary'
+                        ? 'bg-accent-muted text-accent'
+                        : 'text-text-muted hover:text-text-secondary hover:bg-bg-tertiary'
                     }`
                   }
                 >
-                  Home
+                  <Home className="w-4 h-4" />
+                  <span className="hidden sm:inline">Home</span>
                 </NavLink>
                 <NavLink
                   to="/games"
                   className={({ isActive }) =>
-                    `px-3 py-1.5 text-sm font-medium transition-colors border-b-2 ${
+                    `flex items-center gap-2 px-3.5 py-2 text-sm font-medium rounded-lg transition-all duration-150 ${
                       isActive
-                        ? 'border-accent text-text-primary'
-                        : 'border-transparent text-text-secondary hover:text-text-primary'
+                        ? 'bg-accent-muted text-accent'
+                        : 'text-text-muted hover:text-text-secondary hover:bg-bg-tertiary'
                     }`
                   }
                 >
-                  Games
+                  <Gamepad2 className="w-4 h-4" />
+                  <span className="hidden sm:inline">Games</span>
                 </NavLink>
                 <NavLink
                   to="/history"
                   className={({ isActive }) =>
-                    `px-3 py-1.5 text-sm font-medium transition-colors border-b-2 ${
+                    `flex items-center gap-2 px-3.5 py-2 text-sm font-medium rounded-lg transition-all duration-150 ${
                       isActive
-                        ? 'border-accent text-text-primary'
-                        : 'border-transparent text-text-secondary hover:text-text-primary'
+                        ? 'bg-accent-muted text-accent'
+                        : 'text-text-muted hover:text-text-secondary hover:bg-bg-tertiary'
                     }`
                   }
                 >
-                  History
+                  <History className="w-4 h-4" />
+                  <span className="hidden sm:inline">History</span>
                 </NavLink>
               </div>
 
               {/* Auth */}
-              <div className="flex items-center gap-3">
+              <div className="flex items-center">
                 {isAuthenticated ? (
                   <UserMenu />
                 ) : (
                   <NavLink
                     to="/login"
-                    className="text-sm font-medium text-text-secondary hover:text-text-primary transition-colors"
+                    className="text-sm font-medium text-text-muted hover:text-text-primary transition-colors px-3 py-1.5"
                   >
                     Sign In
                   </NavLink>
@@ -84,7 +91,7 @@ function App() {
         </nav>
 
         {/* Main Content */}
-        <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
+        <main className="flex-1 max-w-5xl w-full mx-auto px-5 sm:px-8 py-10">
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/player/:playerName" element={<PlayerPage />} />
@@ -104,9 +111,10 @@ function App() {
         </main>
 
         {/* Footer */}
-        <footer className="border-t border-border-subtle py-6 mt-auto">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 text-center text-text-muted text-xs">
-            ML-Powered Player Prop Analysis
+        <footer className="border-t border-border-subtle py-8 mt-auto">
+          <div className="max-w-5xl mx-auto px-5 sm:px-8 flex items-center justify-between">
+            <span className="text-text-muted text-xs tracking-wide">ML-Powered Analysis</span>
+            <span className="text-text-muted text-xs tracking-wide font-mono">EVAL</span>
           </div>
         </footer>
       </div>

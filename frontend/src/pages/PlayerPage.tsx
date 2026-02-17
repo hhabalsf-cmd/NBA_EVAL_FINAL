@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
+import { ArrowLeft, Check, Loader2 } from 'lucide-react'
 import { usePrediction } from '../hooks/usePrediction'
 import PredictionCard from '../components/PredictionCard'
 import { evaluateLine, createPick, LineEvaluation } from '../api/client'
+import { getNbaHeadshotUrl } from '../utils/nba'
 
 export default function PlayerPage() {
   const { playerName } = useParams<{ playerName: string }>()
@@ -70,22 +72,22 @@ export default function PlayerPage() {
 
   if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center py-20">
-        <div className="spinner mb-4" style={{ width: 40, height: 40 }} />
-        <div className="text-sm text-text-primary mb-2">{message}</div>
+      <div className="flex flex-col items-center justify-center py-24">
+        <Loader2 className="w-8 h-8 text-accent animate-spin mb-5" />
+        <div className="text-sm text-text-primary mb-3">{message}</div>
         <div className="w-48 progress-bar">
           <div className="progress-bar-fill" style={{ width: `${progress}%` }} />
         </div>
-        <div className="text-xs text-text-muted mt-1.5">{progress}% complete</div>
+        <div className="text-xs text-text-muted mt-2">{progress}% complete</div>
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center py-20">
-        <h2 className="text-lg font-semibold text-text-primary mb-2">Couldn't Load Predictions</h2>
-        <p className="text-sm text-text-secondary mb-4">{error}</p>
+      <div className="flex flex-col items-center justify-center py-24">
+        <h2 className="text-lg font-medium text-text-primary mb-2">Couldn't Load Predictions</h2>
+        <p className="text-sm text-text-secondary mb-6">{error}</p>
         <button onClick={() => navigate('/')} className="btn btn-primary">Back to Search</button>
       </div>
     )
@@ -101,25 +103,35 @@ export default function PlayerPage() {
       <section>
         <button
           onClick={() => navigate('/')}
-          className="text-sm text-text-muted hover:text-text-primary mb-3 flex items-center gap-1 transition-colors"
+          className="text-sm text-text-muted hover:text-text-primary mb-4 flex items-center gap-1.5 transition-colors"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-          </svg>
+          <ArrowLeft className="w-4 h-4" />
           Back
         </button>
-        <div className="flex items-baseline justify-between">
-          <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-text-primary">{result.player_name}</h1>
-            {result.team_abbrev && <p className="text-sm text-text-secondary">{result.team_abbrev}</p>}
+        <div className="flex items-center gap-5">
+          <img
+            src={getNbaHeadshotUrl(result.player_id)}
+            alt={result.player_name}
+            className="w-24 h-24 md:w-28 md:h-28 rounded-2xl object-cover bg-bg-secondary shadow-lg shadow-black/20"
+            onError={e => { (e.target as HTMLImageElement).src = getNbaHeadshotUrl(0) }}
+          />
+          <div className="flex-1 min-w-0">
+            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-2">
+              <div>
+                <h1 className="text-2xl md:text-3xl font-bold text-text-primary tracking-tight">{result.player_name}</h1>
+                {result.team_abbrev && (
+                  <p className="text-sm text-text-secondary mt-1">{result.team_abbrev}</p>
+                )}
+              </div>
+              <span className="text-xs text-text-muted font-mono">{result.games_trained_on} games trained</span>
+            </div>
           </div>
-          <span className="text-xs text-text-muted">{result.games_trained_on} games trained</span>
         </div>
       </section>
 
       {/* Game Info */}
       {result.game_info && (
-        <section className="card p-4">
+        <section className="card p-5">
           <div className="flex flex-wrap items-center gap-6 text-sm">
             <div>
               <span className="text-text-muted">Matchup: </span>
@@ -132,18 +144,31 @@ export default function PlayerPage() {
             {result.opponent_context && (
               <div>
                 <span className="text-text-muted">Opp Def: </span>
-                <span className="text-text-primary font-medium">{result.opponent_context.def_rank} ({result.opponent_context.def_rating.toFixed(1)})</span>
+                <span className="text-text-primary font-medium">
+                  {result.opponent_context.def_rank} ({result.opponent_context.def_rating.toFixed(1)})
+                </span>
               </div>
             )}
           </div>
 
           {result.vs_stats && result.vs_stats.games > 0 && (
-            <div className="mt-3 pt-3 border-t border-border-subtle">
-              <div className="text-xs text-text-muted mb-1.5">vs {result.game_info.opponent} ({result.vs_stats.games} games)</div>
-              <div className="flex gap-4 text-sm">
-                <span><span className="text-text-muted">PTS:</span> <span className="text-text-primary font-medium">{result.vs_stats.avg_pts.toFixed(1)}</span></span>
-                <span><span className="text-text-muted">REB:</span> <span className="text-text-primary font-medium">{result.vs_stats.avg_reb.toFixed(1)}</span></span>
-                <span><span className="text-text-muted">AST:</span> <span className="text-text-primary font-medium">{result.vs_stats.avg_ast.toFixed(1)}</span></span>
+            <div className="mt-4 pt-4 border-t border-border-subtle">
+              <div className="text-xs text-text-muted mb-2">
+                vs {result.game_info.opponent} ({result.vs_stats.games} games)
+              </div>
+              <div className="flex gap-5 text-sm">
+                <span>
+                  <span className="text-text-muted">PTS:</span>{' '}
+                  <span className="text-text-primary font-medium">{result.vs_stats.avg_pts.toFixed(1)}</span>
+                </span>
+                <span>
+                  <span className="text-text-muted">REB:</span>{' '}
+                  <span className="text-text-primary font-medium">{result.vs_stats.avg_reb.toFixed(1)}</span>
+                </span>
+                <span>
+                  <span className="text-text-muted">AST:</span>{' '}
+                  <span className="text-text-primary font-medium">{result.vs_stats.avg_ast.toFixed(1)}</span>
+                </span>
               </div>
             </div>
           )}
@@ -152,7 +177,7 @@ export default function PlayerPage() {
 
       {/* Predictions Grid */}
       <section>
-        <h2 className="text-lg font-bold text-text-primary mb-4">ML Predictions</h2>
+        <h2 className="text-lg font-semibold text-text-primary mb-5 tracking-tight">ML Predictions</h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {['PTS', 'REB', 'AST', 'PRA'].map(stat => {
             const prediction = result.predictions[stat]
@@ -170,15 +195,15 @@ export default function PlayerPage() {
       </section>
 
       {/* Line Evaluation */}
-      <section className="card p-5">
-        <h2 className="text-lg font-bold text-text-primary mb-4">Evaluate Line</h2>
-        <div className="flex flex-wrap items-end gap-3">
+      <section className="card p-6">
+        <h2 className="text-lg font-semibold text-text-primary mb-5 tracking-tight">Evaluate Line</h2>
+        <div className="flex flex-wrap items-end gap-4">
           <div>
-            <label className="block text-xs text-text-muted mb-1.5">Stat</label>
+            <label className="block text-xs font-medium text-text-muted mb-2 uppercase tracking-wider">Stat</label>
             <select
               value={selectedStat || ''}
               onChange={e => { setSelectedStat(e.target.value); setEvaluation(null) }}
-              className="bg-bg-tertiary border border-border-subtle rounded-lg px-3 py-2.5 text-sm text-text-primary focus:outline-none focus:border-accent"
+              className="bg-bg-secondary border border-border-subtle rounded-lg px-3 py-2.5 text-sm text-text-primary focus:outline-none focus:border-accent"
             >
               <option value="">Select stat</option>
               {['PTS', 'REB', 'AST', 'PRA'].map(stat => (
@@ -187,7 +212,7 @@ export default function PlayerPage() {
             </select>
           </div>
           <div>
-            <label className="block text-xs text-text-muted mb-1.5">Line</label>
+            <label className="block text-xs font-medium text-text-muted mb-2 uppercase tracking-wider">Line</label>
             <input
               type="number"
               step="0.5"
@@ -203,44 +228,50 @@ export default function PlayerPage() {
             className="btn btn-primary"
           >
             {isEvaluating ? (
-              <><div className="spinner w-4 h-4" /> Evaluating...</>
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Evaluating...
+              </>
             ) : 'Evaluate'}
           </button>
         </div>
 
         {evaluation && (
-          <div className={`mt-5 p-5 rounded-lg border ${isOver ? 'border-accent-success/20' : 'border-accent-danger/20'}`}>
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div className={`mt-6 p-5 rounded-xl border ${isOver ? 'border-accent-success/15 bg-accent-success/[0.03]' : 'border-accent-danger/15 bg-accent-danger/[0.03]'}`}>
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5">
               <div>
-                <div className={`pill ${isOver ? 'pill-over' : 'pill-under'} mb-3`}>{evaluation.recommendation}</div>
-                <div className="grid grid-cols-3 gap-5">
+                <div className={`pill ${isOver ? 'pill-over' : 'pill-under'} mb-4`}>{evaluation.recommendation}</div>
+                <div className="grid grid-cols-3 gap-6">
                   <div>
-                    <div className="text-[11px] text-text-muted uppercase tracking-wider mb-0.5">Line</div>
+                    <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Line</div>
                     <div className="font-mono text-xl font-bold text-text-primary">{evaluation.line}</div>
                   </div>
                   <div>
-                    <div className="text-[11px] text-text-muted uppercase tracking-wider mb-0.5">Prediction</div>
+                    <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Prediction</div>
                     <div className={`font-mono text-xl font-bold ${isOver ? 'text-accent-success' : 'text-accent-danger'}`}>
                       {evaluation.prediction.toFixed(1)}
                     </div>
                   </div>
                   <div>
-                    <div className="text-[11px] text-text-muted uppercase tracking-wider mb-0.5">Edge</div>
-                    <div className={`font-mono text-xl font-bold ${Math.abs(evaluation.diff_pct) >= 8 ? 'text-accent-gold' : 'text-text-primary'}`}>
+                    <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Edge</div>
+                    <div className={`font-mono text-xl font-bold ${Math.abs(evaluation.diff_pct) >= 8 ? 'text-accent' : 'text-text-primary'}`}>
                       {evaluation.diff_pct > 0 ? '+' : ''}{evaluation.diff_pct.toFixed(1)}%
                     </div>
                   </div>
                 </div>
 
                 {evaluation.prob_over !== null && evaluation.prob_over !== undefined && (
-                  <div className="mt-4">
-                    <div className="flex items-center justify-between text-xs mb-1.5">
+                  <div className="mt-5">
+                    <div className="flex items-center justify-between text-xs mb-2">
                       <span className="text-accent-danger">Under</span>
                       <span className="text-text-muted">{evaluation.prob_over.toFixed(0)}% Over</span>
                       <span className="text-accent-success">Over</span>
                     </div>
-                    <div className="h-2 bg-accent-danger/20 rounded-full overflow-hidden">
-                      <div className="h-full bg-accent-success transition-all duration-500 rounded-full" style={{ width: `${evaluation.prob_over}%` }} />
+                    <div className="h-1.5 bg-accent-danger/15 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-accent-success transition-all duration-500 rounded-full"
+                        style={{ width: `${evaluation.prob_over}%` }}
+                      />
                     </div>
                   </div>
                 )}
@@ -253,12 +284,13 @@ export default function PlayerPage() {
                   className={`btn ${isOver ? 'btn-over' : 'btn-under'}`}
                 >
                   {isSaving ? (
-                    <><div className="spinner w-4 h-4" /> Saving...</>
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Saving...
+                    </>
                   ) : (
                     <>
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
+                      <Check className="w-4 h-4" />
                       Save Pick
                     </>
                   )}
