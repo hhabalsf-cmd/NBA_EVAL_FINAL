@@ -16,7 +16,6 @@ Usage:
 
 import sys
 import os
-import time
 import io
 import warnings
 import argparse
@@ -37,61 +36,15 @@ from nba_evaluator import (
 # Enhanced stacked predictor
 from enhanced_predictor import EnhancedFeatureEngineer, EnhancedMLPredictor
 
+# Shared backtest utilities
+from backtest_utils import (
+    DEFAULT_PLAYERS, STATS_TO_TEST, fetch_full_game_log,
+    parse_minutes, build_result_row, compute_proxy_lines,
+)
+
 # ── Config ──────────────────────────────────────────────────────────────────
 
-DEFAULT_PLAYERS = [
-    "Nikola Jokic",
-    "Luka Doncic",
-    "Jayson Tatum",
-    "Anthony Edwards",
-    "Shai Gilgeous-Alexander",
-    "LeBron James",
-    "Giannis Antetokounmpo",
-    "Kevin Durant",
-    "Tyrese Haliburton",
-    "De'Aaron Fox",
-    "Donovan Mitchell",
-    "Trae Young",
-    "Karl-Anthony Towns",
-    "Paolo Banchero",
-    "Devin Booker",
-]
-
-STATS_TO_TEST = ["PTS", "REB", "AST", "PRA"]
 MODELS = ["random_forest", "gradient_boost", "stacked"]
-
-# ── Data helpers ─────────────────────────────────────────────────────────────
-
-def fetch_full_game_log(scraper, player_id):
-    """Fetch current + last season game logs for a player."""
-    from nba_api.stats.endpoints import playergamelog
-
-    all_games = []
-    for season in ["2025-26", "2024-25"]:
-        try:
-            log = playergamelog.PlayerGameLog(player_id=player_id, season=season)
-            time.sleep(0.7)
-            df = log.get_data_frames()[0]
-            df["SEASON"] = season
-            all_games.append(df)
-        except Exception as e:
-            print(f"    Warning: Could not fetch {season}: {e}")
-
-    if not all_games:
-        return pd.DataFrame()
-
-    combined = pd.concat(all_games, ignore_index=True)
-    combined["GAME_DATE"] = pd.to_datetime(combined["GAME_DATE"])
-    return combined.sort_values("GAME_DATE").reset_index(drop=True)
-
-
-def parse_minutes(val):
-    try:
-        if ":" in str(val):
-            return float(str(val).split(":")[0])
-        return float(val) if pd.notna(val) else 0
-    except (ValueError, TypeError):
-        return 0
 
 
 # ── Per-game prediction helpers ───────────────────────────────────────────────
@@ -219,11 +172,7 @@ def run_backtest_player(player_name, game_log, team_stats,
         actuals["PRA"] = actuals["PTS"] + actuals["REB"] + actuals["AST"]
 
         # Season averages as proxy line
-        season_before = current[current["GAME_DATE"] < test_date]
-        proxy_lines = {}
-        for stat in ["PTS", "REB", "AST"]:
-            proxy_lines[stat] = float(season_before[stat].mean()) if len(season_before) > 0 else 0
-        proxy_lines["PRA"] = proxy_lines["PTS"] + proxy_lines["REB"] + proxy_lines["AST"]
+        proxy_lines = compute_proxy_lines(current, test_date)
 
         matchup = str(test_game.get("MATCHUP", ""))
         opponent = matchup.split(" ")[-1] if matchup else ""
@@ -245,30 +194,12 @@ def run_backtest_player(player_name, game_log, team_stats,
             for stat in STATS_TO_TEST:
                 if stat not in preds:
                     continue
-                pred = preds[stat]
-                actual = actuals[stat]
-                proxy = proxy_lines[stat]
-                edge_pct = ((pred - proxy) / proxy * 100) if proxy > 0 else 0
-                direction = "OVER" if pred > proxy else "UNDER"
-                hit = (actual > proxy) if direction == "OVER" else (actual < proxy)
-
-                results[model_type].append({
-                    "player": player_name,
-                    "game_date": test_date.strftime("%Y-%m-%d"),
-                    "stat": stat,
-                    "prediction": round(pred, 1),
-                    "actual": actual,
-                    "proxy_line": round(proxy, 1),
-                    "error": round(pred - actual, 1),
-                    "abs_error": round(abs(pred - actual), 1),
-                    "edge_pct": round(edge_pct, 1),
-                    "abs_edge": round(abs(edge_pct), 1),
-                    "direction": direction,
-                    "hit": hit,
-                    "opponent": opponent,
-                    "is_home": is_home,
-                    "minutes": minutes,
-                })
+                results[model_type].append(build_result_row(
+                    player_name, test_date, stat,
+                    pred=preds[stat], actual=actuals[stat],
+                    proxy_line=proxy_lines[stat],
+                    opponent=opponent, is_home=is_home, minutes=minutes,
+                ))
 
         # ── Stacked model ────────────────────────────────────────────────────
         try:
@@ -280,30 +211,12 @@ def run_backtest_player(player_name, game_log, team_stats,
             for stat in STATS_TO_TEST:
                 if stat not in preds:
                     continue
-                pred = preds[stat]
-                actual = actuals[stat]
-                proxy = proxy_lines[stat]
-                edge_pct = ((pred - proxy) / proxy * 100) if proxy > 0 else 0
-                direction = "OVER" if pred > proxy else "UNDER"
-                hit = (actual > proxy) if direction == "OVER" else (actual < proxy)
-
-                results["stacked"].append({
-                    "player": player_name,
-                    "game_date": test_date.strftime("%Y-%m-%d"),
-                    "stat": stat,
-                    "prediction": round(pred, 1),
-                    "actual": actual,
-                    "proxy_line": round(proxy, 1),
-                    "error": round(pred - actual, 1),
-                    "abs_error": round(abs(pred - actual), 1),
-                    "edge_pct": round(edge_pct, 1),
-                    "abs_edge": round(abs(edge_pct), 1),
-                    "direction": direction,
-                    "hit": hit,
-                    "opponent": opponent,
-                    "is_home": is_home,
-                    "minutes": minutes,
-                })
+                results["stacked"].append(build_result_row(
+                    player_name, test_date, stat,
+                    pred=preds[stat], actual=actuals[stat],
+                    proxy_line=proxy_lines[stat],
+                    opponent=opponent, is_home=is_home, minutes=minutes,
+                ))
 
     return results
 

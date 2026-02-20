@@ -26,6 +26,8 @@ def _pick_to_response(p: dict) -> PickResponse:
         id=p['id'],
         timestamp=p['timestamp'],
         player=p['player'],
+        player_id=p.get('player_id'),
+        team_abbrev=p.get('team_abbrev'),
         stat=p['stat'],
         line=p['line'],
         prediction=p['prediction'],
@@ -38,8 +40,9 @@ def _pick_to_response(p: dict) -> PickResponse:
         won=bool(p['won']) if p['won'] is not None else None,
         model_type=p.get('model_type'),
         game_date=p.get('game_date'),
-        voided=bool(p.get('voided')) if p.get('voided') else None,
+        voided=bool(p.get('voided')) if p.get('voided') is not None else None,
         void_reason=p.get('void_reason'),
+        prob_over=p.get('prob_over'),
     )
 
 
@@ -73,7 +76,8 @@ async def create_pick(pick: PickCreate):
         'opponent': pick.opponent,
         'is_home': 1 if pick.is_home else 0,
         'model_type': pick.model_type,
-        'game_date': pick.game_date
+        'game_date': pick.game_date,
+        'prob_over': pick.prob_over,
     }
 
     pick_id = db.save_pick(pick_data)

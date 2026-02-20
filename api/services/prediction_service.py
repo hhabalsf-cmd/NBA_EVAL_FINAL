@@ -88,7 +88,7 @@ class PredictionService:
         """Search for players by name."""
         from nba_api.stats.static import players
 
-        all_players = players.get_players()
+        all_players = players.get_active_players()
         query_lower = query.lower()
 
         # First try exact matches
@@ -286,8 +286,12 @@ class PredictionService:
             df_features, is_home, days_rest, injuries_team
         )
 
+        # Refresh recent_averages from live game log so bias correction and L10 display are always current
+        predictor._update_recent_averages(df_features)
+
         # Make predictions with minutes-based scaling
         predictions = predictor.predict(pred_features, estimated_minutes=estimated_minutes)
+        predictions = predictor.apply_injury_boost(predictions, injuries_team, injuries_opp)
 
         await asyncio.sleep(0.1)
 
@@ -310,7 +314,11 @@ class PredictionService:
                 "range_low": round(confidence_info.get('low', pred * 0.8), 1),
                 "range_high": round(confidence_info.get('high', pred * 1.2), 1),
                 "uncertainty_std": round(uncertainty['std'], 1) if uncertainty else None,
-                "recent_avg": round(predictor.recent_averages.get(stat, 0), 1) if predictor.recent_averages else None
+                "recent_avg": round(
+                    (df_features['PTS'] + df_features['REB'] + df_features['AST']).tail(10).mean()
+                    if stat == 'PRA'
+                    else df_features[stat].tail(10).mean()
+                , 1) if stat in df_features.columns or stat == 'PRA' else None
             }
 
         # Build opponent context

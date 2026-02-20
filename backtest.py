@@ -18,12 +18,11 @@ Usage:
 
 import sys
 import os
-import time
 import warnings
 import argparse
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 
 warnings.filterwarnings("ignore")
 
@@ -34,51 +33,10 @@ from nba_evaluator import (
     NBADataScraper, FeatureEngineer, MLPredictor,
     CacheManager, TEAM_ABBREV_TO_NAME, TEAM_NAME_TO_ABBREV
 )
-
-
-# High-volume players for backtesting
-DEFAULT_PLAYERS = [
-    "Nikola Jokic",
-    "Luka Doncic",
-    "Jayson Tatum",
-    "Anthony Edwards",
-    "Shai Gilgeous-Alexander",
-    "LeBron James",
-    "Giannis Antetokounmpo",
-    "Kevin Durant",
-    "Tyrese Haliburton",
-    "De'Aaron Fox",
-    "Donovan Mitchell",
-    "Trae Young",
-    "Karl-Anthony Towns",
-    "Paolo Banchero",
-    "Devin Booker",
-]
-
-STATS_TO_TEST = ['PTS', 'REB', 'AST', 'PRA']
-
-
-def fetch_full_game_log(scraper, player_id):
-    """Fetch full game log for a player (current + last season)."""
-    seasons = ['2025-26', '2024-25']
-    all_games = []
-    for season in seasons:
-        try:
-            from nba_api.stats.endpoints import playergamelog
-            log = playergamelog.PlayerGameLog(player_id=player_id, season=season)
-            time.sleep(0.7)
-            df = log.get_data_frames()[0]
-            df['SEASON'] = season
-            all_games.append(df)
-        except Exception as e:
-            print(f"    Warning: Could not fetch {season}: {e}")
-
-    if all_games:
-        combined = pd.concat(all_games, ignore_index=True)
-        combined['GAME_DATE'] = pd.to_datetime(combined['GAME_DATE'])
-        combined = combined.sort_values('GAME_DATE').reset_index(drop=True)
-        return combined
-    return pd.DataFrame()
+from backtest_utils import (
+    DEFAULT_PLAYERS, STATS_TO_TEST, fetch_full_game_log,
+    parse_minutes, build_result_row, compute_proxy_lines,
+)
 
 
 def run_backtest_for_player(player_name, game_log, team_stats, num_test_games=15,
@@ -137,14 +95,7 @@ def run_backtest_for_player(player_name, game_log, team_stats, num_test_games=15
         opponent = matchup.split(' ')[-1] if matchup else ''
 
         # Minutes check — skip DNPs
-        min_val = test_game.get('MIN', 0)
-        try:
-            if ':' in str(min_val):
-                minutes = float(str(min_val).split(':')[0])
-            else:
-                minutes = float(min_val) if pd.notna(min_val) else 0
-        except (ValueError, TypeError):
-            minutes = 0
+        minutes = parse_minutes(test_game.get('MIN', 0))
 
         if minutes < 10:
             continue  # Skip DNP / very limited minutes
@@ -194,56 +145,20 @@ def run_backtest_for_player(player_name, game_log, team_stats, num_test_games=15
                 continue
 
             # Calculate season averages up to this point (proxy for prop lines)
-            season_data_before = current_season[current_season['GAME_DATE'] < test_date]
-            season_avgs = {}
-            for stat in ['PTS', 'REB', 'AST']:
-                if stat in season_data_before.columns and len(season_data_before) > 0:
-                    season_avgs[stat] = float(season_data_before[stat].mean())
-                else:
-                    season_avgs[stat] = 0
-            season_avgs['PRA'] = season_avgs['PTS'] + season_avgs['REB'] + season_avgs['AST']
+            proxy_lines = compute_proxy_lines(current_season, test_date)
 
             # Record results for each stat
             for stat in STATS_TO_TEST:
                 if stat not in predictions:
                     continue
 
-                pred = predictions[stat]
-                actual = actuals[stat]
-                proxy_line = season_avgs[stat]
-
-                # Calculate edge (using season avg as proxy line)
-                if proxy_line > 0:
-                    edge_pct = ((pred - proxy_line) / proxy_line) * 100
-                else:
-                    edge_pct = 0
-
-                direction = "OVER" if pred > proxy_line else "UNDER"
-
-                # Did the "pick" hit?
-                if direction == "OVER":
-                    hit = actual > proxy_line
-                else:
-                    hit = actual < proxy_line
-
-                results.append({
-                    'player': player_name,
-                    'game_date': test_date.strftime('%Y-%m-%d'),
-                    'stat': stat,
-                    'prediction': round(pred, 1),
-                    'actual': actual,
-                    'proxy_line': round(proxy_line, 1),
-                    'error': round(pred - actual, 1),
-                    'abs_error': round(abs(pred - actual), 1),
-                    'edge_pct': round(edge_pct, 1),
-                    'abs_edge': round(abs(edge_pct), 1),
-                    'direction': direction,
-                    'hit': hit,
-                    'opponent': opponent,
-                    'is_home': is_home,
-                    'minutes': minutes,
-                    'games_trained_on': len(train_data),
-                })
+                results.append(build_result_row(
+                    player_name, test_date, stat,
+                    pred=predictions[stat], actual=actuals[stat],
+                    proxy_line=proxy_lines[stat],
+                    opponent=opponent, is_home=is_home,
+                    minutes=minutes, games_trained_on=len(train_data),
+                ))
 
         except Exception as e:
             print(f"    Error on {test_date.strftime('%Y-%m-%d')} vs {opponent}: {e}")

@@ -12,11 +12,16 @@ import SettingsPage from './pages/SettingsPage'
 import ProtectedRoute from './components/auth/ProtectedRoute'
 import UserMenu from './components/UserMenu'
 import { useAuthStore } from './store/authStore'
-import { useParlayStore } from './store/parlayStore'
+import { useQuery } from '@tanstack/react-query'
+import { getPicks } from './api/client'
 
 function App() {
   const { isAuthenticated } = useAuthStore()
-  const { legs } = useParlayStore()
+  const { data: pendingPicks = [] } = useQuery({
+    queryKey: ['pending-picks'],
+    queryFn: () => getPicks(30, true),
+    staleTime: 1000 * 30,
+  })
 
   return (
     <BrowserRouter>
@@ -74,7 +79,7 @@ function App() {
                   <History className="w-4 h-4" />
                   <span className="hidden sm:inline">History</span>
                 </NavLink>
-                <NavLink
+<NavLink
                   to="/parlay"
                   className={({ isActive }) =>
                     `flex items-center gap-2 px-3.5 py-2 text-sm font-medium rounded-lg transition-all duration-150 ${
@@ -86,9 +91,9 @@ function App() {
                 >
                   <Dice5 className="w-4 h-4" />
                   <span className="hidden sm:inline">Parlays</span>
-                  {legs.length > 0 && (
+                  {pendingPicks.length > 0 && (
                     <span className="flex items-center justify-center w-4 h-4 rounded-full bg-accent text-white text-[10px] font-bold">
-                      {legs.length}
+                      {pendingPicks.length}
                     </span>
                   )}
                 </NavLink>
@@ -119,7 +124,7 @@ function App() {
             <Route path="/player/:playerName" element={<PlayerPage />} />
             <Route path="/games" element={<GamesPage />} />
             <Route path="/history" element={<HistoryPage />} />
-            <Route path="/parlay" element={<ParlayPage />} />
+<Route path="/parlay" element={<ParlayPage />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/signup" element={<SignupPage />} />
             <Route

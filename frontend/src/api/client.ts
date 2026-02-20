@@ -91,6 +91,7 @@ export interface Pick {
   game_date?: string
   voided?: boolean
   void_reason?: string
+  prob_over?: number
 }
 
 export interface PerformanceStats {
@@ -471,4 +472,59 @@ export async function getGameAccuracyStats(): Promise<GameAccuracyStats> {
   const response = await fetch(`${API_BASE}/games/stats/accuracy`)
   if (!response.ok) throw new Error('Failed to fetch game accuracy stats')
   return response.json()
+}
+
+// === Injury Types ===
+
+export interface InjuredPlayer {
+  name: string
+  status: 'out' | 'questionable'
+}
+
+export interface TeamInjuryInfo {
+  abbrev: string
+  out: InjuredPlayer[]
+  questionable: InjuredPlayer[]
+}
+
+export interface TeamInjuriesData {
+  team: TeamInjuryInfo | null
+  opponent: TeamInjuryInfo | null
+}
+
+export async function getTeamInjuries(playerName: string): Promise<TeamInjuriesData> {
+  const res = await fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/team-injuries`)
+  if (!res.ok) throw new Error('Failed to fetch injuries')
+  return res.json()
+}
+
+// === Standings Types ===
+
+export interface StandingsTeam {
+  team_id: number
+  team: string
+  conference: string
+  rank: number
+  wins: number
+  losses: number
+  pct: number
+  gb: number | string
+  home: string
+  away: string
+  l10: string
+  streak: string
+}
+
+export interface StandingsData {
+  east: StandingsTeam[]
+  west: StandingsTeam[]
+  fetched_at: number
+}
+
+// === Standings API Functions ===
+
+export async function getStandings(): Promise<StandingsData> {
+  const res = await fetch(`${API_BASE}/standings`)
+  if (!res.ok) throw new Error('Failed to fetch standings')
+  return res.json()
 }

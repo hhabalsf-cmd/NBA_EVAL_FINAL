@@ -56,6 +56,7 @@ def init_db():
         ("graded_at", "TEXT"),
         ("voided", "INTEGER DEFAULT 0"),  # 1 = DNP/voided, not counted in performance
         ("void_reason", "TEXT"),  # Reason for void (DNP, postponed, etc.)
+        ("prob_over", "REAL"),  # ML probability of going OVER the line (0-100)
     ]
 
     # Get existing columns
@@ -88,6 +89,12 @@ def init_db():
         )
     """)
 
+    # Add extended_data column if missing (stores full prediction JSON for GET /today)
+    cursor.execute("PRAGMA table_info(game_predictions)")
+    gp_columns = {row[1] for row in cursor.fetchall()}
+    if 'extended_data' not in gp_columns:
+        cursor.execute("ALTER TABLE game_predictions ADD COLUMN extended_data TEXT")
+
     conn.commit()
     conn.close()
 
@@ -101,14 +108,19 @@ def save_game_prediction(prediction_data: dict) -> int:
     if isinstance(key_factors, list):
         key_factors = json.dumps(key_factors)
 
+    # Store full prediction payload for fast retrieval by GET /today
+    extended_data = prediction_data.get('extended_data')
+    if extended_data is None and prediction_data.get('matchup'):
+        extended_data = json.dumps(prediction_data)
+
     cursor.execute("""
         INSERT INTO game_predictions (
             timestamp, game_date, home_team, away_team,
             home_team_id, away_team_id, predicted_winner,
             home_win_prob, away_win_prob, confidence,
-            key_factors, model_version
+            key_factors, model_version, extended_data
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         datetime.now().isoformat(),
         prediction_data.get('game_date'),
@@ -122,12 +134,92 @@ def save_game_prediction(prediction_data: dict) -> int:
         prediction_data.get('confidence'),
         key_factors,
         prediction_data.get('model_version', 'v1.0'),
+        extended_data,
     ))
 
     pred_id = cursor.lastrowid
     conn.commit()
     conn.close()
     return pred_id
+
+
+def get_todays_stored_predictions() -> list:
+    """Get today's stored game predictions from the DB (no NBA API call)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    today = datetime.now().strftime('%Y-%m-%d')
+    # Fetch most recent prediction per matchup for today
+    cursor.execute("""
+        SELECT * FROM game_predictions
+        WHERE game_date = ?
+        ORDER BY timestamp DESC
+    """, (today,))
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    seen = set()
+    results = []
+    for row in rows:
+        d = dict(row)
+        key = (d['home_team'], d['away_team'])
+        if key in seen:
+            continue
+        seen.add(key)
+
+        # Prefer full extended_data if available
+        if d.get('extended_data'):
+            try:
+                pred = json.loads(d['extended_data'])
+                pred['prediction_id'] = d['id']
+                results.append(pred)
+                continue
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Fallback: reconstruct minimal structure
+        key_factors = []
+        if d.get('key_factors'):
+            try:
+                key_factors = json.loads(d['key_factors'])
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        results.append({
+            'matchup': {
+                'home_team': {
+                    'team_id': d.get('home_team_id', 0),
+                    'team_abbrev': d['home_team'],
+                    'team_name': d['home_team'],
+                    'record': '?-?',
+                    'off_rating': 0.0,
+                    'def_rating': 0.0,
+                    'net_rating': 0.0,
+                    'pace': 0.0,
+                },
+                'away_team': {
+                    'team_id': d.get('away_team_id', 0),
+                    'team_abbrev': d['away_team'],
+                    'team_name': d['away_team'],
+                    'record': '?-?',
+                    'off_rating': 0.0,
+                    'def_rating': 0.0,
+                    'net_rating': 0.0,
+                    'pace': 0.0,
+                },
+                'game_date': d['game_date'],
+                'game_time': None,
+            },
+            'predicted_winner': d['predicted_winner'],
+            'home_win_prob': d['home_win_prob'],
+            'away_win_prob': d['away_win_prob'],
+            'confidence': d.get('confidence', 50.0),
+            'key_factors': key_factors,
+            'prediction_id': d['id'],
+        })
+
+    return results
 
 
 def get_game_predictions(days: int = 7) -> list:
@@ -383,8 +475,8 @@ def save_pick(pick_data: dict) -> int:
     cursor.execute("""
         INSERT INTO picks (timestamp, player, stat, line, prediction, direction,
                           edge, confidence, opponent, is_home, model_type,
-                          game_date, player_id, team_abbrev)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          game_date, player_id, team_abbrev, prob_over)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         datetime.now().isoformat(),
         pick_data.get('player'),
@@ -399,7 +491,8 @@ def save_pick(pick_data: dict) -> int:
         pick_data.get('model_type', 'unknown'),
         pick_data.get('game_date'),
         pick_data.get('player_id'),
-        pick_data.get('team_abbrev')
+        pick_data.get('team_abbrev'),
+        pick_data.get('prob_over'),
     ))
 
     pick_id = cursor.lastrowid

@@ -25,7 +25,7 @@ def get_game_service() -> GamePredictionService:
 
 
 @router.get("/today", response_model=TodaysGamesResponse)
-async def get_todays_games():
+def get_todays_games():
     """Get today's games with win predictions."""
     service = get_game_service()
     return service.get_todays_games()
@@ -55,21 +55,21 @@ async def predict_todays_games():
 
 
 @router.get("/history")
-async def get_prediction_history(days: int = Query(default=7, ge=1, le=90)):
+def get_prediction_history(days: int = Query(default=7, ge=1, le=90)):
     """Get past game predictions with results."""
     service = get_game_service()
     return service.get_prediction_history(days)
 
 
 @router.post("/auto-grade")
-async def auto_grade_predictions():
+def auto_grade_predictions():
     """Auto-grade pending game predictions using final scores."""
     service = get_game_service()
     return service.auto_grade()
 
 
 @router.get("/stats/accuracy", response_model=GameAccuracyStats)
-async def get_accuracy_stats():
+def get_accuracy_stats():
     """Get prediction accuracy statistics."""
     service = get_game_service()
     return service.get_accuracy_stats()

@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Check, Loader2, Zap, PlaySquare, Plus } from 'lucide-react'
+import { ArrowLeft, Check, Loader2, Zap, PlaySquare } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { usePrediction } from '../hooks/usePrediction'
 import PredictionCard from '../components/PredictionCard'
-import { evaluateLine, createPick, LineEvaluation, getPlayerOdds } from '../api/client'
+import PlayerSearch from '../components/PlayerSearch'
+import { evaluateLine, createPick, LineEvaluation, getPlayerOdds, getTeamInjuries, TeamInjuryInfo } from '../api/client'
 import { getNbaHeadshotUrl } from '../utils/nba'
-import { useParlayStore } from '../store/parlayStore'
 
 const STATS = ['PTS', 'REB', 'AST', 'PRA'] as const
 
@@ -20,8 +20,20 @@ export default function PlayerPage() {
   const [isEvaluatingAll, setIsEvaluatingAll] = useState(false)
 
   useEffect(() => {
-    if (playerName) predict(decodeURIComponent(playerName))
+    if (playerName) {
+      setLineInputs({})
+      setAllEvaluations([])
+      predict(decodeURIComponent(playerName))
+    }
   }, [playerName, predict])
+
+  // Fetch team injury report once prediction resolves
+  const { data: injuries } = useQuery({
+    queryKey: ['team-injuries', playerName],
+    queryFn: () => getTeamInjuries(decodeURIComponent(playerName!)),
+    enabled: !!playerName && !!result,
+    staleTime: 1000 * 60 * 30,
+  })
 
   // Fetch live odds once we have the player name
   const { data: odds, isLoading: oddsLoading } = useQuery({
@@ -86,6 +98,7 @@ export default function PlayerPage() {
       is_home: result.game_info?.is_home,
       model_type: result.model_type,
       game_date: result.game_info?.game_date?.split('T')[0],
+      prob_over: evalData.prob_over,
     })
   }
 
@@ -121,13 +134,18 @@ export default function PlayerPage() {
     <div className="space-y-8">
       {/* Header */}
       <section>
-        <button
-          onClick={() => navigate('/app')}
-          className="text-sm text-text-muted hover:text-text-primary mb-4 flex items-center gap-1.5 transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Back
-        </button>
+        <div className="flex items-center gap-3 mb-4">
+          <button
+            onClick={() => navigate('/app')}
+            className="text-sm text-text-muted hover:text-text-primary flex items-center gap-1.5 transition-colors flex-shrink-0"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Back
+          </button>
+          <div className="flex-1 max-w-sm">
+            <PlayerSearch placeholder="Search another player…" />
+          </div>
+        </div>
         <div className="flex items-center gap-5">
           <img
             src={getNbaHeadshotUrl(result.player_id)}
@@ -206,6 +224,24 @@ export default function PlayerPage() {
               </div>
             </div>
           )}
+
+        </section>
+      )}
+
+      {/* Injury Report — standalone card, shows even without a game today */}
+      {injuries && (injuries.team || injuries.opponent) &&
+        ((injuries.team?.out.length ?? 0) > 0 ||
+          (injuries.team?.questionable.length ?? 0) > 0 ||
+          (injuries.opponent?.out.length ?? 0) > 0 ||
+          (injuries.opponent?.questionable.length ?? 0) > 0) && (
+        <section className="card p-5">
+          <div className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">
+            Injury Report
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {injuries.team && <InjuryColumn info={injuries.team} label="Your Team" />}
+            {injuries.opponent && <InjuryColumn info={injuries.opponent} label="Opponent" />}
+          </div>
         </section>
       )}
 
@@ -303,9 +339,42 @@ export default function PlayerPage() {
   )
 }
 
+function InjuryColumn({ info, label }: { info: TeamInjuryInfo; label: string }) {
+  const hasAny = info.out.length > 0 || info.questionable.length > 0
+  if (!hasAny) return null
+
+  return (
+    <div>
+      <div className="text-[11px] text-text-muted mb-1.5">
+        <span className="font-medium text-text-secondary">{info.abbrev}</span>
+        <span className="ml-1 text-text-muted">· {label}</span>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {info.out.map(p => (
+          <span
+            key={p.name}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-500/10 border border-red-500/20 text-red-400 text-[11px] font-medium"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0" />
+            {p.name}
+          </span>
+        ))}
+        {info.questionable.map(p => (
+          <span
+            key={p.name}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-yellow-500/10 border border-yellow-500/20 text-yellow-400 text-[11px] font-medium"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 flex-shrink-0" />
+            {p.name}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function EvalResult({
   evaluation,
-  playerName,
   onSave,
 }: {
   evaluation: LineEvaluation
@@ -315,36 +384,14 @@ function EvalResult({
   const [isSaving, setIsSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const isOver = evaluation.recommendation.includes('OVER')
-  const { addLeg, removeLeg, hasLeg, legs } = useParlayStore()
-  const inParlay = hasLeg(playerName, evaluation.stat)
-
-  const handleParlayToggle = () => {
-    if (inParlay) {
-      const idx = legs.findIndex(l => l.player === playerName && l.stat === evaluation.stat)
-      if (idx !== -1) removeLeg(idx)
-    } else {
-      const prob = evaluation.prob_over != null
-        ? (isOver ? evaluation.prob_over : 100 - evaluation.prob_over)
-        : (isOver ? 60 : 40)
-      addLeg({
-        player: playerName,
-        stat: evaluation.stat,
-        line: evaluation.line,
-        prediction: evaluation.prediction,
-        direction: isOver ? 'OVER' : 'UNDER',
-        prob,
-        edge_pct: evaluation.diff_pct,
-      })
-    }
-  }
 
   const handleSave = async () => {
     setIsSaving(true)
     setSaveMessage(null)
     try {
       await onSave()
-      setSaveMessage('Pick saved!')
-      setTimeout(() => setSaveMessage(null), 3000)
+      setSaveMessage('Saved! Appears in Parlay Builder.')
+      setTimeout(() => setSaveMessage(null), 4000)
     } catch {
       setSaveMessage('Failed to save pick')
     } finally {
@@ -397,39 +444,25 @@ function EvalResult({
         </div>
 
         <div className="flex flex-col items-end gap-2">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleParlayToggle}
-              title={inParlay ? 'Remove from parlay' : 'Add to parlay'}
-              className={`flex items-center gap-1 px-2 py-1.5 rounded-md text-[11px] font-medium transition-all duration-150 border ${
-                inParlay
-                  ? 'bg-accent/15 border-accent/30 text-accent'
-                  : 'bg-bg-elevated border-border-subtle text-text-muted hover:text-accent hover:border-accent/30'
-              }`}
-            >
-              {inParlay ? <Check className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
-              Parlay
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={isSaving}
-              className={`btn ${isOver ? 'btn-over' : 'btn-under'}`}
-            >
-              {isSaving ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                <>
-                  <Check className="w-4 h-4" />
-                  Save Pick
-                </>
-              )}
-            </button>
-          </div>
+          <button
+            onClick={handleSave}
+            disabled={isSaving}
+            className={`btn ${isOver ? 'btn-over' : 'btn-under'}`}
+          >
+            {isSaving ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              <>
+                <Check className="w-4 h-4" />
+                Save Pick
+              </>
+            )}
+          </button>
           {saveMessage && (
-            <span className={`text-xs ${saveMessage.includes('saved') ? 'text-accent-success' : 'text-accent-danger'}`}>
+            <span className={`text-xs text-right max-w-[160px] leading-snug ${saveMessage.includes('Saved') ? 'text-accent-success' : 'text-accent-danger'}`}>
               {saveMessage}
             </span>
           )}

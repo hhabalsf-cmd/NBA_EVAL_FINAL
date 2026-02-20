@@ -103,7 +103,7 @@ export default function PlayerSearch({
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           autoFocus={autoFocus}
-          className="w-full pl-11 pr-4 py-3 bg-bg-secondary border border-border-subtle rounded-xl
+          className="w-full !pl-11 pr-4 py-3 bg-bg-secondary border border-border-subtle rounded-xl
                      text-text-primary placeholder-text-muted text-sm
                      focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/10
                      transition-all duration-150"

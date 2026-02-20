@@ -106,6 +106,38 @@ async def predict_player_stats_sync(request: PredictionRequest):
     return PredictionResponse(**result)
 
 
+@router.get("/{player_name}/team-injuries")
+async def get_team_injuries(player_name: str):
+    """Get injury report for a player's team and their next opponent (30-min cached)."""
+    service = get_prediction_service()
+
+    player_info = service.get_player_info(player_name)
+    if not player_info:
+        raise HTTPException(status_code=404, detail=f"Player '{player_name}' not found")
+
+    team_abbrev = player_info.get('team_abbrev', '')
+    game_info = service.scraper.get_player_next_game(player_info)
+    opponent = game_info.get('opponent', '') if game_info else ''
+
+    injuries = service.get_injuries()
+
+    def extract_team(abbrev: str):
+        if not abbrev:
+            return None
+        team_data = injuries.get(abbrev, {})
+        players = team_data.get('players', [])
+        return {
+            "abbrev": abbrev,
+            "out": [p for p in players if p.get('status') == 'out'],
+            "questionable": [p for p in players if p.get('status') == 'questionable'],
+        }
+
+    return {
+        "team": extract_team(team_abbrev),
+        "opponent": extract_team(opponent) if opponent else None,
+    }
+
+
 @router.get("/{player_name}/odds")
 async def get_player_odds(player_name: str):
     """Get today's consensus prop lines for a player (30-min cached)."""
@@ -136,10 +168,17 @@ async def evaluate_line(request: LineEvaluationRequest):
         prediction = result['predictions'][request.stat]['prediction']
 
     # Evaluate the line
+    # Use per-stat CV (coefficient of variation) reflecting real NBA game-to-game variance.
+    # NBA stats typically vary 35-50% around the mean each game; using the tight
+    # ±15% / 1.645 estimate produced unrealistically high probabilities (90-100%).
+    _stat_cv = {'PTS': 0.40, 'REB': 0.45, 'AST': 0.50, 'PRA': 0.35}
+    cv = _stat_cv.get(request.stat, 0.40)
+    estimated_std = prediction * cv
     confidence_info = {
         'confidence': 75,
-        'low': prediction * 0.85,
-        'high': prediction * 1.15
+        'low': prediction * (1 - cv),
+        'high': prediction * (1 + cv),
+        'std': estimated_std,
     }
 
     evaluation = service.evaluate_line(prediction, request.line, request.stat, confidence_info)

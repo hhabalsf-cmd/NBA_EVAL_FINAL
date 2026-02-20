@@ -338,7 +338,7 @@ class NBADataScraper:
         return pd.DataFrame()
     
     def get_injury_report(self):
-        """Scrape current NBA injury report from multiple sources"""
+        """Fetch current NBA injury report from ESPN API"""
         cached = CacheManager.get('injuries', 'report', expiry_type='injury_report')
         if cached is not None:
             return cached
@@ -347,77 +347,58 @@ class NBADataScraper:
         injuries = {abbrev: {'out': 0, 'questionable': 0, 'doubtful': 0, 'players': []}
                     for abbrev in TEAM_ABBREV_TO_NAME}
 
-        # Try CBS Sports first (usually most reliable structure)
+        # Build reverse lookup: lowercase full name → abbreviation
+        name_to_abbrev = {name.lower(): abbrev for abbrev, name in TEAM_ABBREV_TO_NAME.items()}
+
         try:
-            resp = self.session.get("https://www.cbssports.com/nba/injuries/", timeout=10)
-            soup = BeautifulSoup(resp.text, 'html.parser')
+            resp = self.session.get(
+                "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries",
+                timeout=10
+            )
+            resp.raise_for_status()
+            data = resp.json()
 
-            # Look for injury tables
-            tables = soup.find_all('table')
-            for table in tables:
-                rows = table.find_all('tr')
-                current_team = None
+            for team_entry in data.get('injuries', []):
+                espn_name = team_entry.get('displayName', '').lower()
+                team_abbrev = name_to_abbrev.get(espn_name)
+                if not team_abbrev:
+                    continue
 
-                for row in rows:
-                    # Try to identify team headers
-                    header = row.find(['th', 'td'], class_=lambda x: x and 'team' in str(x).lower())
-                    if header:
-                        team_text = header.get_text().strip().lower()
-                        for abbrev, name in TEAM_ABBREV_TO_NAME.items():
-                            if name.lower() in team_text or abbrev.lower() in team_text:
-                                current_team = abbrev
-                                break
+                for injury in team_entry.get('injuries', []):
+                    athlete = injury.get('athlete', {})
+                    player_name = athlete.get('displayName', '')
+                    status = injury.get('status', '').lower()
+                    note = injury.get('shortComment', '')
 
-                    # Parse injury status
-                    if current_team:
-                        cells = row.find_all('td')
-                        if len(cells) >= 2:
-                            status_text = ' '.join(cell.get_text().lower() for cell in cells)
+                    if status == 'out':
+                        injuries[team_abbrev]['out'] += 1
+                        injuries[team_abbrev]['players'].append(
+                            {'name': player_name, 'status': 'out', 'note': note}
+                        )
+                    elif status == 'doubtful':
+                        injuries[team_abbrev]['doubtful'] += 1
+                        injuries[team_abbrev]['players'].append(
+                            {'name': player_name, 'status': 'doubtful', 'note': note}
+                        )
+                    elif status in ('questionable', 'day-to-day'):
+                        injuries[team_abbrev]['questionable'] += 1
+                        injuries[team_abbrev]['players'].append(
+                            {'name': player_name, 'status': 'questionable', 'note': note}
+                        )
+                    # Suspensions count as out for lineup purposes
+                    elif status == 'suspension':
+                        injuries[team_abbrev]['out'] += 1
+                        injuries[team_abbrev]['players'].append(
+                            {'name': player_name, 'status': 'out', 'note': note}
+                        )
 
-                            if 'out' in status_text:
-                                injuries[current_team]['out'] += 1
-                            elif 'doubtful' in status_text:
-                                injuries[current_team]['doubtful'] += 1
-                            elif 'questionable' in status_text or 'gtd' in status_text:
-                                injuries[current_team]['questionable'] += 1
-
-                            # Try to get player name
-                            player_cell = cells[0] if cells else None
-                            if player_cell:
-                                player_name = player_cell.get_text().strip()
-                                if player_name and len(player_name) > 2:
-                                    injuries[current_team]['players'].append({
-                                        'name': player_name,
-                                        'status': 'out' if 'out' in status_text else 'questionable'
-                                    })
-
+            print(f"  ✅ Loaded injury report ({sum(t['out'] for t in injuries.values())} players out across all teams)")
             CacheManager.set('injuries', injuries, 'report')
             return injuries
 
         except Exception as e:
-            print(f"  ⚠️ CBS source failed: {e}")
+            print(f"  ⚠️ ESPN injury source failed: {e}")
 
-        # Fallback: Try Rotowire
-        try:
-            resp = self.session.get("https://www.rotowire.com/basketball/injury-report.php", timeout=10)
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            text = soup.get_text().lower()
-
-            # Simple keyword counting as fallback
-            for abbrev, name in TEAM_ABBREV_TO_NAME.items():
-                team_section = text.find(name.lower())
-                if team_section != -1:
-                    section = text[team_section:team_section+500]
-                    injuries[abbrev]['out'] = section.count('out')
-                    injuries[abbrev]['questionable'] = section.count('questionable') + section.count('gtd')
-
-            CacheManager.set('injuries', injuries, 'report')
-            return injuries
-
-        except Exception as e:
-            print(f"  ⚠️ Rotowire source failed: {e}")
-
-        # Return default if all sources fail
         return injuries
 
     def get_player_injury_status(self, player_name, injuries_data):
@@ -1226,9 +1207,22 @@ class MLPredictor:
         # Fantasy (composite metric)
         'ROLL_5_FANTASY_PTS',
         # Assist efficiency
-        'ROLL_5_AST_TOV',
+        'AST_TOV_RATIO', 'ROLL_5_AST_TOV',
+        # Per-36-minute normalized stats
+        'ROLL_5_PTS_PER36', 'ROLL_10_PTS_PER36',
+        'ROLL_5_REB_PER36', 'ROLL_10_REB_PER36',
+        'ROLL_5_AST_PER36', 'ROLL_10_AST_PER36',
+        # Blowout-adjusted rolling averages
+        'ROLL_10_PTS_BLOWOUT_ADJ', 'ROLL_10_REB_BLOWOUT_ADJ', 'ROLL_10_AST_BLOWOUT_ADJ',
+        # Rolling opponent context
+        'OPP_DEF_RATING_ROLL10', 'OPP_PACE_ROLL10',
+        # Head-to-head matchup stats
+        'VS_OPP_AVG_PTS', 'VS_OPP_AVG_REB', 'VS_OPP_AVG_AST', 'VS_OPP_GAMES',
+        'VS_OPP_PTS_DIFF', 'VS_OPP_REB_DIFF', 'VS_OPP_AST_DIFF',
         # Interaction features
         'B2B_VS_ELITE', 'HOT_VS_WEAK', 'RESTED_HOME',
+        # Injury context (0 in training data; non-zero at prediction time via apply_injury_boost)
+        'INJURIES_TEAM', 'INJURIES_OPP',
     ]
 
     # Per-stat optimized hyperparameters for Gradient Boosting
@@ -1530,9 +1524,15 @@ class MLPredictor:
             print("⚠️ Insufficient data for training (need at least 20 games)")
             return False
 
-        # Apply exponential recency weighting (stronger than linear)
+        # Apply exponential recency weighting.
+        # Exponent scales with dataset size so recent games carry proportionally more weight
+        # for large (multi-season) datasets without over-reacting to the last few games:
+        # - 50 games  → span -1.5  (recent 10 = ~28% of weight, 7x oldest→newest)
+        # - 100 games → span -1.9  (recent 10 = ~18% of weight, 7x oldest→newest)
+        # - 200 games → span -2.5  (recent 10 = ~13% of weight, 12x oldest→newest)
         n_games = len(df_clean)
-        recency_weights = np.exp(np.linspace(-1.0, 0, n_games))
+        exponent_span = -max(1.5, min(2.5, n_games / 80))
+        recency_weights = np.exp(np.linspace(exponent_span, 0, n_games))
         recency_weights = recency_weights / recency_weights.sum() * n_games
 
         X = df_clean[available_features].values
@@ -1760,9 +1760,10 @@ class MLPredictor:
             print("  ⚠️ Insufficient data for update")
             return False
 
-        # Apply stronger recency weighting for updates
+        # Apply stronger recency weighting for updates (same adaptive formula as full train)
         n_games = len(df_clean)
-        recency_weights = np.exp(np.linspace(-1.2, 0, n_games))
+        exponent_span = -max(1.5, min(2.5, n_games / 80))
+        recency_weights = np.exp(np.linspace(exponent_span, 0, n_games))
         recency_weights = recency_weights / recency_weights.sum() * n_games
 
         X = df_clean[feature_cols].values
@@ -1869,20 +1870,19 @@ class MLPredictor:
     
     # Per-stat bias correction weights — lower = trust the ML model more
     BIAS_CORRECTION_BY_STAT = {
-        'PTS': 0.15,
-        'REB': 0.15,
-        'AST': 0.20,
-        'PRA': 0.12,
+        'PTS': 0.10,
+        'REB': 0.10,
+        'AST': 0.15,
+        'PRA': 0.08,
     }
 
-    # Asymmetric over-prediction dampening factors.
-    # Backtest shows OVER predictions hit only 44% vs UNDER at 54%.
-    # Apply a stronger downward pull when model predicts above recent avg.
+    # Symmetric regression-to-mean dampening — applied in both directions.
+    # Prevents extreme swings without systematically capping hot players.
     OVER_DAMPENING_BY_STAT = {
-        'PTS': 0.08,  # Pull OVER predictions down by 8% of the excess
-        'REB': 0.10,
-        'AST': 0.10,
-        'PRA': 0.08,
+        'PTS': 0.05,
+        'REB': 0.06,
+        'AST': 0.06,
+        'PRA': 0.05,
     }
 
     def predict(self, features_df, bias_correction=None, estimated_minutes=None):
@@ -1973,15 +1973,14 @@ class MLPredictor:
                 bc = self.BIAS_CORRECTION_BY_STAT.get(stat, 0.15)
                 pred = (1 - bc) * pred + bc * recent_avg
 
-            # --- Asymmetric Over-Prediction Dampening ---
-            # Backtest shows model systematically over-predicts.
-            # When prediction exceeds recent average, pull it back proportionally.
+            # --- Symmetric Regression-to-Mean Dampening ---
+            # Softly pull predictions toward recent avg in both directions to reduce noise.
+            # Symmetric so hot/trending-up players aren't systematically capped.
             if hasattr(self, 'recent_averages') and stat in self.recent_averages:
                 recent_avg = self.recent_averages[stat]
-                if pred > recent_avg:
-                    excess = pred - recent_avg
-                    dampening = self.OVER_DAMPENING_BY_STAT.get(stat, 0.08)
-                    pred = pred - (excess * dampening)
+                dampening = self.OVER_DAMPENING_BY_STAT.get(stat, 0.08)
+                diff = pred - recent_avg
+                pred = pred - (diff * dampening)  # pulls toward recent_avg regardless of direction
 
             # --- Rolling Performance Feedback (Improvement #9) ---
             rolling_bias = self.get_rolling_bias(stat)
@@ -1999,6 +1998,44 @@ class MLPredictor:
             predictions['PRA'] = 0.6 * component_sum + 0.4 * predictions['PRA']
 
         return predictions
+
+    def apply_injury_boost(self, predictions, injuries_team=0, injuries_opp=0):
+        """Apply post-prediction usage adjustment based on injury counts.
+
+        Each teammate OUT redistributes their minutes/usage to remaining players.
+        Each opponent OUT slightly eases the defensive matchup for scoring.
+
+        Args:
+            predictions: dict of {stat: predicted_value} from predict()
+            injuries_team: number of the player's own teammates ruled OUT
+            injuries_opp: number of opponent players ruled OUT
+
+        Returns:
+            New predictions dict with injury adjustments applied.
+        """
+        if injuries_team == 0 and injuries_opp == 0:
+            return predictions
+
+        result = dict(predictions)
+
+        # Teammate OUT → usage redistribution: +2.5% per player, capped at +10%
+        if injuries_team > 0:
+            boost = min(injuries_team * 0.025, 0.10)
+            for stat in ('PTS', 'REB', 'AST'):
+                if stat in result:
+                    result[stat] = result[stat] * (1 + boost)
+
+        # Opponent OUT → easier scoring: +1% per player, capped at +4%, PTS only
+        if injuries_opp > 0:
+            pts_boost = min(injuries_opp * 0.010, 0.04)
+            if 'PTS' in result:
+                result['PTS'] = result['PTS'] * (1 + pts_boost)
+
+        # Reconcile PRA with adjusted components
+        if all(s in result for s in ('PTS', 'REB', 'AST')):
+            result['PRA'] = result['PTS'] + result['REB'] + result['AST']
+
+        return result
 
     def get_prediction_uncertainty(self, features_df, stat):
         """Get prediction uncertainty using model-specific methods"""
@@ -2019,8 +2056,14 @@ class MLPredictor:
         model = self.models[stat]
 
         if isinstance(model, RandomForestRegressor):
+            # Apply feature selection mask if it was used during training
+            X_pred = X_scaled
+            if self.selected_features and stat in self.selected_features:
+                expected = getattr(model, 'n_features_in_', X_scaled.shape[1])
+                if len(self.selected_features[stat]) == expected:
+                    X_pred = X_scaled[:, self.selected_features[stat]]
             # Get predictions from all trees
-            tree_preds = np.array([tree.predict(X_scaled)[0]
+            tree_preds = np.array([tree.predict(X_pred)[0]
                                    for tree in model.estimators_])
             return {
                 'mean': np.mean(tree_preds),
@@ -2317,6 +2360,9 @@ class LineEvaluator:
                 position = (line - confidence_info['low']) / range_size
                 prob_over = max(0, min(100, (1 - position) * 100))
                 result['prob_over'] = prob_over
+            else:
+                # high == low: no spread info, default to coin flip
+                result['prob_over'] = 50.0
 
         return result
     
@@ -2634,6 +2680,7 @@ def find_best_bets(min_edge=5.0, max_edge=50.0, max_results=20, select_games=Fal
                 df, is_home, days_rest, injuries_team
             )
             all_predictions = predictor.predict(features_df, estimated_minutes=estimated_minutes)
+            all_predictions = predictor.apply_injury_boost(all_predictions, injuries_team, injuries_opp)
             if not all_predictions or stat not in all_predictions:
                 continue
             prediction = all_predictions[stat]
@@ -3347,7 +3394,10 @@ def interactive_mode():
         estimated_minutes = FeatureEngineer.estimate_minutes(
             df, is_home, days_rest_val, injuries_team
         )
+        # Refresh recent_averages from live game log before predicting
+        predictor._update_recent_averages(df)
         predictions = predictor.predict(features_df, estimated_minutes=estimated_minutes)
+        predictions = predictor.apply_injury_boost(predictions, injuries_team, injuries_opp)
 
         # Get uncertainty estimates
         uncertainty = {}
@@ -3403,13 +3453,19 @@ def interactive_mode():
                     except Exception as e:
                         print(f"  ⚠️ Error evaluating {stat}: {e}")
 
-        # Print results
+        # Print results — compute L10 live from current game log (not frozen pkl value)
+        live_l10 = {}
+        for _s in ['PTS', 'REB', 'AST']:
+            if _s in df.columns:
+                live_l10[_s] = df[_s].tail(10).mean()
+        if all(c in df.columns for c in ['PTS', 'REB', 'AST']):
+            live_l10['PRA'] = (df['PTS'] + df['REB'] + df['AST']).tail(10).mean()
         print_results(
             player_name, game_info, predictions, evaluations, vs_stats,
             feature_importance=feature_importance,
             uncertainty=uncertainty,
             team_stats=team_stats,
-            recent_averages=predictor.recent_averages
+            recent_averages=live_l10
         )
 
         print("\n💾 Model auto-saved with latest data.")
@@ -3504,7 +3560,7 @@ Examples:
     parser.add_argument('--stat', '-s', type=str, choices=['PTS', 'REB', 'AST', 'PRA'],
                        help='Stat to predict')
     parser.add_argument('--line', '-l', type=float, help='Betting line to evaluate')
-    parser.add_argument('--model', '-m', type=str, default='random_forest',
+    parser.add_argument('--model', '-m', type=str, default='gradient_boost',
                        choices=['random_forest', 'gradient_boost', 'neural'],
                        help='ML model type')
     parser.add_argument('--ensemble', '-e', action='store_true',
@@ -3694,6 +3750,7 @@ Examples:
         df, is_home, days_rest_cli, injuries_team
     )
     predictions = predictor.predict(features_df, estimated_minutes=estimated_minutes)
+    predictions = predictor.apply_injury_boost(predictions, injuries_team, injuries_opp)
 
     # Get uncertainty estimates
     uncertainty = {}
@@ -3727,13 +3784,19 @@ Examples:
             evaluations.append(eval_result)
             evaluator.log_prediction(player_name, eval_result)
 
-    # Print results
+    # Print results — compute L10 live from current game log (not frozen pkl value)
+    live_l10 = {}
+    for _s in ['PTS', 'REB', 'AST']:
+        if _s in df.columns:
+            live_l10[_s] = df[_s].tail(10).mean()
+    if all(c in df.columns for c in ['PTS', 'REB', 'AST']):
+        live_l10['PRA'] = (df['PTS'] + df['REB'] + df['AST']).tail(10).mean()
     print_results(
         player_name, game_info, predictions, evaluations, vs_stats,
         feature_importance=feature_importance,
         uncertainty=uncertainty,
         team_stats=team_stats,
-        recent_averages=predictor.recent_averages
+        recent_averages=live_l10
     )
 
 

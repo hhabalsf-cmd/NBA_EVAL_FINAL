@@ -1,7 +1,6 @@
-import { ArrowRight, Plus, Check } from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
 import { BestBet } from '../api/client'
 import { useNavigate } from 'react-router-dom'
-import { useParlayStore } from '../store/parlayStore'
 
 interface BetCardProps {
   bet: BestBet
@@ -11,29 +10,9 @@ interface BetCardProps {
 export default function BetCard({ bet, rank }: BetCardProps) {
   const navigate = useNavigate()
   const isOver = bet.direction === 'OVER'
-  const { addLeg, removeLeg, hasLeg, legs } = useParlayStore()
-  const inParlay = hasLeg(bet.player, bet.stat)
 
   const handleClick = () => {
     navigate(`/player/${encodeURIComponent(bet.player)}`)
-  }
-
-  const handleParlayToggle = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (inParlay) {
-      const idx = legs.findIndex(l => l.player === bet.player && l.stat === bet.stat)
-      if (idx !== -1) removeLeg(idx)
-    } else {
-      addLeg({
-        player: bet.player,
-        stat: bet.stat,
-        line: bet.line,
-        prediction: bet.prediction,
-        direction: bet.direction,
-        prob: bet.prob_over ?? (isOver ? 60 : 40),
-        edge_pct: bet.edge_pct,
-      })
-    }
   }
 
   return (
@@ -81,25 +60,11 @@ export default function BetCard({ bet, rank }: BetCardProps) {
         <div className={`pill ${isOver ? 'pill-over' : 'pill-under'}`}>
           {bet.recommendation}
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[11px] text-text-muted">Edge</span>
-            <span className={`font-mono font-semibold text-sm ${Math.abs(bet.edge_pct) >= 8 ? 'text-accent' : 'text-text-primary'}`}>
-              {bet.edge_pct > 0 ? '+' : ''}{bet.edge_pct.toFixed(1)}%
-            </span>
-          </div>
-          <button
-            onClick={handleParlayToggle}
-            title={inParlay ? 'Remove from parlay' : 'Add to parlay'}
-            className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium transition-all duration-150 border ${
-              inParlay
-                ? 'bg-accent/15 border-accent/30 text-accent'
-                : 'bg-bg-elevated border-border-subtle text-text-muted hover:text-accent hover:border-accent/30'
-            }`}
-          >
-            {inParlay ? <Check className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
-            Parlay
-          </button>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[11px] text-text-muted">Edge</span>
+          <span className={`font-mono font-semibold text-sm ${Math.abs(bet.edge_pct) >= 8 ? 'text-accent' : 'text-text-primary'}`}>
+            {bet.edge_pct > 0 ? '+' : ''}{bet.edge_pct.toFixed(1)}%
+          </span>
         </div>
       </div>
 

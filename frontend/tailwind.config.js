@@ -36,8 +36,11 @@ export default {
       },
       animation: {
         'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-        'slide-up': 'slide-up 0.2s ease-out',
+        'slide-up': 'slide-up 0.3s ease-out both',
         'fade-in': 'fade-in 0.15s ease-out',
+        'slide-out': 'slide-out 0.2s ease-in forwards',
+        'pop':       'pop 0.25s ease-out',
+        'check-in':  'check-in 0.2s ease-out forwards',
       },
       keyframes: {
         'slide-up': {
@@ -47,6 +50,20 @@ export default {
         'fade-in': {
           '0%': { opacity: '0' },
           '100%': { opacity: '1' },
+        },
+        'slide-out': {
+          '0%':   { opacity: '1', transform: 'translateX(0)' },
+          '100%': { opacity: '0', transform: 'translateX(40px)' },
+        },
+        'pop': {
+          '0%':   { transform: 'scale(1)' },
+          '50%':  { transform: 'scale(1.12)' },
+          '100%': { transform: 'scale(1)' },
+        },
+        'check-in': {
+          '0%':   { opacity: '0', transform: 'scale(0)' },
+          '60%':  { opacity: '1', transform: 'scale(1.2)' },
+          '100%': { opacity: '1', transform: 'scale(1)' },
         },
       },
       borderRadius: {

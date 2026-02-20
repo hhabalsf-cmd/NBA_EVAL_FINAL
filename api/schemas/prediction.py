@@ -110,12 +110,15 @@ class PickCreate(BaseModel):
     is_home: Optional[bool] = None
     model_type: str = "unknown"
     game_date: Optional[str] = None
+    prob_over: Optional[float] = None
 
 
 class PickResponse(BaseModel):
     id: int
     timestamp: str
     player: str
+    player_id: Optional[int] = None
+    team_abbrev: Optional[str] = None
     stat: str
     line: float
     prediction: float
@@ -130,6 +133,7 @@ class PickResponse(BaseModel):
     game_date: Optional[str] = None
     voided: Optional[bool] = None
     void_reason: Optional[str] = None
+    prob_over: Optional[float] = None
 
 
 class PickGradeRequest(BaseModel):

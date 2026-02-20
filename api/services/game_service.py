@@ -29,30 +29,8 @@ class GamePredictionService:
             self._model_loaded = True
 
     def get_todays_games(self) -> Dict:
-        """Get today's games with predictions (non-streaming)."""
-        self._ensure_model()
-
-        predictions = self.predictor.predict_all_today()
-
-        # Save predictions to database
-        for pred in predictions:
-            matchup = pred['matchup']
-            home = matchup['home_team']
-            away = matchup['away_team']
-
-            db.save_game_prediction({
-                'game_date': matchup.get('game_date', datetime.now().strftime('%Y-%m-%d')),
-                'home_team': home['team_abbrev'],
-                'away_team': away['team_abbrev'],
-                'home_team_id': home.get('team_id'),
-                'away_team_id': away.get('team_id'),
-                'predicted_winner': pred['predicted_winner'],
-                'home_win_prob': pred['home_win_prob'],
-                'away_win_prob': pred['away_win_prob'],
-                'confidence': pred['confidence'],
-                'key_factors': pred.get('key_factors', []),
-            })
-
+        """Return today's stored game predictions from DB (no NBA API call)."""
+        predictions = db.get_todays_stored_predictions()
         return {
             'predictions': predictions,
             'generated_at': datetime.now().isoformat(),
@@ -119,7 +97,7 @@ class GamePredictionService:
                 pred['matchup']['game_time'] = game.get('game_time', '')
                 predictions.append(pred)
 
-                # Save to DB
+                # Save to DB including full extended_data for fast GET /today
                 matchup = pred['matchup']
                 home = matchup['home_team']
                 away = matchup['away_team']
@@ -134,6 +112,7 @@ class GamePredictionService:
                     'away_win_prob': pred['away_win_prob'],
                     'confidence': pred['confidence'],
                     'key_factors': pred.get('key_factors', []),
+                    'matchup': matchup,  # triggers extended_data storage
                 })
 
             await asyncio.sleep(0.1)
