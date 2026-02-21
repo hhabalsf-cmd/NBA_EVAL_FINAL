@@ -84,11 +84,43 @@ class PredictionService:
 
         return {'found': False}
 
-    def search_players(self, query: str) -> list:
-        """Search for players by name."""
-        from nba_api.stats.static import players
+    # Class-level cache for current season players
+    _current_season_players: list = None
+    _current_season_players_time: float = 0
+    _PLAYERS_CACHE_TTL = 60 * 60 * 6  # 6 hours
 
-        all_players = players.get_active_players()
+    def _get_current_season_players(self) -> list:
+        """Get current season players from live API (cached 6 hours)."""
+        now = time.time()
+        if (PredictionService._current_season_players is not None
+                and now - PredictionService._current_season_players_time < self._PLAYERS_CACHE_TTL):
+            return PredictionService._current_season_players
+        try:
+            from nba_api.stats.endpoints import commonallplayers
+            cap = commonallplayers.CommonAllPlayers(
+                is_only_current_season=1, season='2025-26', timeout=15,
+            )
+            df = cap.get_data_frames()[0]
+            player_list = []
+            for _, row in df.iterrows():
+                name_parts = str(row['DISPLAY_FIRST_LAST']).split(' ', 1)
+                player_list.append({
+                    'id': int(row['PERSON_ID']),
+                    'full_name': str(row['DISPLAY_FIRST_LAST']),
+                    'first_name': name_parts[0] if name_parts else '',
+                    'last_name': name_parts[1] if len(name_parts) > 1 else '',
+                    'is_active': True,
+                })
+            PredictionService._current_season_players = player_list
+            PredictionService._current_season_players_time = now
+            return player_list
+        except Exception:
+            from nba_api.stats.static import players
+            return players.get_active_players()
+
+    def search_players(self, query: str) -> list:
+        """Search for players by name using live roster data."""
+        all_players = self._get_current_season_players()
         query_lower = query.lower()
 
         # First try exact matches

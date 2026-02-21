@@ -979,6 +979,28 @@ class FeatureEngineer:
         if 'EXTENDED_REST' in df.columns and 'IS_HOME' in df.columns:
             df['RESTED_HOME'] = df['EXTENDED_REST'] * df['IS_HOME']
 
+        # --- VS_OPP head-to-head features (leak-free expanding window) ---
+        if 'OPPONENT' in df.columns:
+            for stat in ['PTS', 'REB', 'AST']:
+                df[f'VS_OPP_AVG_{stat}'] = (
+                    df.groupby('OPPONENT')[stat]
+                    .apply(lambda x: x.expanding().mean().shift(1))
+                    .reset_index(level=0, drop=True)
+                )
+            df['VS_OPP_GAMES'] = (
+                df.groupby('OPPONENT')['PTS']
+                .apply(lambda x: x.expanding().count().shift(1))
+                .reset_index(level=0, drop=True)
+            ).clip(upper=10)
+            for stat in ['PTS', 'REB', 'AST']:
+                roll_col = f'ROLL_10_{stat}'
+                if roll_col in df.columns:
+                    df[f'VS_OPP_{stat}_DIFF'] = df[f'VS_OPP_AVG_{stat}'] - df[roll_col]
+                else:
+                    df[f'VS_OPP_{stat}_DIFF'] = 0
+            vs_opp_cols = [c for c in df.columns if c.startswith('VS_OPP_')]
+            df[vs_opp_cols] = df[vs_opp_cols].fillna(0)
+
         # Defragment the DataFrame after all column additions
         df = df.copy()
 
@@ -1716,10 +1738,17 @@ class MLPredictor:
                 print(f"  ⚠️ Model was saved {age_days} days ago ({trained_at}) — triggering full retrain")
                 return True
 
-        # Check feature set mismatch (new features added or removed)
-        if self.feature_names and set(self.feature_names) != set(self.FEATURE_COLS):
-            print(f"  ⚠️ Feature set changed ({len(self.feature_names)} → {len(self.FEATURE_COLS)} features) — triggering full retrain")
-            return True
+        # Check feature set mismatch — only retrain if features the model was
+        # trained on have been REMOVED from FEATURE_COLS. Features in FEATURE_COLS
+        # but absent from training data (e.g. INJURIES_TEAM/OPP, VS_OPP_* before
+        # backfill) are expected and not a mismatch.
+        if self.feature_names:
+            saved_set = set(self.feature_names)
+            declared_set = set(self.FEATURE_COLS)
+            removed_features = saved_set - declared_set
+            if removed_features:
+                print(f"  ⚠️ Features removed from FEATURE_COLS: {removed_features} — triggering full retrain")
+                return True
 
         return False
 
@@ -1739,6 +1768,13 @@ class MLPredictor:
         # Check if model needs a full retrain instead of warm-start
         if self._needs_full_retrain():
             print("\n♻️ Auto-retraining from scratch for better accuracy...")
+            return self.train(df, stats)
+
+        # Check for genuinely new features in data that model wasn't trained on
+        available_now = [f for f in self.FEATURE_COLS if f in df.columns]
+        new_data_features = set(available_now) - set(self.feature_names)
+        if new_data_features:
+            print(f"  ⚠️ New features available in data: {new_data_features} — triggering full retrain")
             return self.train(df, stats)
 
         # Filter to only new games since last training
