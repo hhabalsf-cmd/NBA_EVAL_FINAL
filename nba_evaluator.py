@@ -1991,14 +1991,20 @@ class MLPredictor:
                 minutes_ratio = max(0.85, min(1.15, minutes_ratio))
                 pred = pred * minutes_ratio
 
-            # --- Bias Correction: single symmetric blend toward recent average ---
-            # Replaces the previous 4 stacking corrections (residual, bias correction,
-            # dampening, rolling feedback) which compounded into an OVER bias.
-            # A single 12% blend anchors predictions without direction bias.
+            # --- Bias Correction: blend toward recent average ---
+            # Anchors predictions to recent performance, preventing wild swings.
             if hasattr(self, 'recent_averages') and stat in self.recent_averages:
                 recent_avg = self.recent_averages[stat]
-                blend_weight = 0.12
-                pred = (1 - blend_weight) * pred + blend_weight * recent_avg
+                bc = self.BIAS_CORRECTION_BY_STAT.get(stat, 0.15)
+                pred = (1 - bc) * pred + bc * recent_avg
+
+            # --- Symmetric Regression-to-Mean Dampening ---
+            # Softly pull predictions toward recent avg in both directions to reduce noise.
+            if hasattr(self, 'recent_averages') and stat in self.recent_averages:
+                recent_avg = self.recent_averages[stat]
+                dampening = self.OVER_DAMPENING_BY_STAT.get(stat, 0.08)
+                diff = pred - recent_avg
+                pred = pred - (diff * dampening)
 
             predictions[stat] = pred
 
