@@ -42,6 +42,14 @@ from nba_api.stats.endpoints import (
     teamdashboardbygeneralsplits,
 )
 from nba_api.stats.static import players, teams
+from nba_api.library.http import NBAHTTP
+
+# Fix nba_api headers: NBA now blocks requests with Referer: stats.nba.com
+_nba_session = NBAHTTP.get_session()
+_nba_session.headers.update({
+    'Referer': 'https://www.nba.com/',
+    'Origin': 'https://www.nba.com',
+})
 
 # ML Libraries
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
@@ -971,6 +979,35 @@ class FeatureEngineer:
         if 'EXTENDED_REST' in df.columns and 'IS_HOME' in df.columns:
             df['RESTED_HOME'] = df['EXTENDED_REST'] * df['IS_HOME']
 
+        # =====================
+        # HEAD-TO-HEAD MATCHUP HISTORY
+        # =====================
+        # Compute rolling averages vs each opponent using only prior games (no leakage)
+        if 'OPPONENT' in df.columns:
+            for stat in ['PTS', 'REB', 'AST']:
+                df[f'VS_OPP_AVG_{stat}'] = (
+                    df.groupby('OPPONENT')[stat]
+                    .apply(lambda x: x.expanding().mean().shift(1))
+                    .reset_index(level=0, drop=True)
+                )
+            df['VS_OPP_GAMES'] = (
+                df.groupby('OPPONENT')['PTS']
+                .apply(lambda x: x.expanding().count().shift(1))
+                .reset_index(level=0, drop=True)
+            ).clip(upper=10)
+
+            # Diff features: how much player over/under-performs vs this opponent
+            for stat in ['PTS', 'REB', 'AST']:
+                roll_col = f'ROLL_10_{stat}'
+                if roll_col in df.columns:
+                    df[f'VS_OPP_{stat}_DIFF'] = df[f'VS_OPP_AVG_{stat}'] - df[roll_col]
+                else:
+                    df[f'VS_OPP_{stat}_DIFF'] = 0
+
+            # Fill NaN (first game vs an opponent) with 0
+            vs_opp_cols = [c for c in df.columns if c.startswith('VS_OPP_')]
+            df[vs_opp_cols] = df[vs_opp_cols].fillna(0)
+
         # Defragment the DataFrame after all column additions
         df = df.copy()
 
@@ -1460,7 +1497,14 @@ class MLPredictor:
         self.residual_models[stat] = residual_model
 
     def _train_probability_calibrator(self, X, y, weights, stat, tscv):
-        """Train isotonic regression for probability calibration (Improvement #5)."""
+        """Train probability calibrator using empirical residual distribution.
+
+        Instead of fitting an IsotonicRegression on synthetic data (which was
+        overconfident), we store the raw out-of-fold residuals. At prediction
+        time, P(over) = fraction of historical residuals that would push the
+        actual result above the line. This is mathematically sound and avoids
+        the circular calibration problem.
+        """
         oof_preds = np.full(len(y), np.nan)
         for train_idx, val_idx in tscv.split(X):
             fold_model = sklearn_clone(self.models[stat])
@@ -1471,33 +1515,11 @@ class MLPredictor:
         if valid_mask.sum() < 30:
             return
 
-        preds = oof_preds[valid_mask]
-        actuals = y[valid_mask]
-        std_estimate = np.std(actuals - preds) or 1.0
-
-        # Generate calibration data across hypothetical lines
-        z_scores = []
-        outcomes = []
-        for i in range(len(preds)):
-            # Test multiple line offsets around the prediction
-            for offset in np.linspace(-2 * std_estimate, 2 * std_estimate, 9):
-                hypothetical_line = preds[i] + offset
-                z = (hypothetical_line - preds[i]) / (std_estimate + 0.1)
-                went_over = 1 if actuals[i] > hypothetical_line else 0
-                z_scores.append(z)
-                outcomes.append(went_over)
-
-        z_scores = np.array(z_scores)
-        outcomes = np.array(outcomes)
-
-        # Bin z-scores and compute actual over rates
-        calibrator = IsotonicRegression(y_min=0.02, y_max=0.98, out_of_bounds='clip')
-        # Map z-score to raw CDF-based probability, then calibrate
-        raw_prob_over = 1 - scipy_stats.norm.cdf(z_scores)
-        calibrator.fit(raw_prob_over, outcomes)
+        # Store sorted residuals (actual - predicted) for empirical CDF
+        residuals = y[valid_mask] - oof_preds[valid_mask]
         self.probability_calibrator[stat] = {
-            'calibrator': calibrator,
-            'std_estimate': std_estimate,
+            'residuals': np.sort(residuals),
+            'std_estimate': float(np.std(residuals)) or 1.0,
         }
 
     def train(self, df, stats=None):
@@ -1709,9 +1731,18 @@ class MLPredictor:
                 return True
 
         # Check feature set mismatch (new features added or removed)
-        if self.feature_names and set(self.feature_names) != set(self.FEATURE_COLS):
-            print(f"  ⚠️ Feature set changed ({len(self.feature_names)} → {len(self.FEATURE_COLS)} features) — triggering full retrain")
-            return True
+        # Only retrain if features the model was trained on are no longer in FEATURE_COLS
+        # (removed features) or if FEATURE_COLS has new features that the model wasn't
+        # trained on AND those features actually exist in the data (checked later in update()).
+        # Prediction-time-only features (e.g. INJURIES_TEAM/INJURIES_OPP) may be in
+        # FEATURE_COLS but absent from training data — that's expected, not a mismatch.
+        if self.feature_names:
+            saved_set = set(self.feature_names)
+            declared_set = set(self.FEATURE_COLS)
+            removed_features = saved_set - declared_set
+            if removed_features:
+                print(f"  ⚠️ Features removed from FEATURE_COLS: {removed_features} — triggering full retrain")
+                return True
 
         return False
 
@@ -1731,6 +1762,13 @@ class MLPredictor:
         # Check if model needs a full retrain instead of warm-start
         if self._needs_full_retrain():
             print("\n♻️ Auto-retraining from scratch for better accuracy...")
+            return self.train(df, stats)
+
+        # Check if new features became available in the data that the model wasn't trained on
+        available_now = [f for f in self.FEATURE_COLS if f in df.columns]
+        new_data_features = set(available_now) - set(self.feature_names)
+        if new_data_features:
+            print(f"  ⚠️ New features available in data: {new_data_features} — triggering full retrain")
             return self.train(df, stats)
 
         # Filter to only new games since last training
@@ -1953,40 +1991,14 @@ class MLPredictor:
                 minutes_ratio = max(0.85, min(1.15, minutes_ratio))
                 pred = pred * minutes_ratio
 
-            # --- Learned Residual Correction (Improvement #6) ---
-            if stat in self.residual_models and hasattr(self, 'recent_averages') and stat in self.recent_averages:
-                recent_avg = self.recent_averages[stat]
-                residual_X = np.array([[
-                    pred,
-                    recent_avg,
-                    recent_avg,  # 10g proxy (same as recent avg if we only have it)
-                    3.0,  # std proxy fallback
-                ]])
-                predicted_residual = self.residual_models[stat].predict(residual_X)[0]
-                # Clip residual correction to avoid wild swings
-                max_correction = abs(pred) * 0.15
-                predicted_residual = np.clip(predicted_residual, -max_correction, max_correction)
-                pred = pred + predicted_residual
-            elif hasattr(self, 'recent_averages') and stat in self.recent_averages:
-                # Fallback: symmetric bias correction
-                recent_avg = self.recent_averages[stat]
-                bc = self.BIAS_CORRECTION_BY_STAT.get(stat, 0.15)
-                pred = (1 - bc) * pred + bc * recent_avg
-
-            # --- Symmetric Regression-to-Mean Dampening ---
-            # Softly pull predictions toward recent avg in both directions to reduce noise.
-            # Symmetric so hot/trending-up players aren't systematically capped.
+            # --- Bias Correction: single symmetric blend toward recent average ---
+            # Replaces the previous 4 stacking corrections (residual, bias correction,
+            # dampening, rolling feedback) which compounded into an OVER bias.
+            # A single 12% blend anchors predictions without direction bias.
             if hasattr(self, 'recent_averages') and stat in self.recent_averages:
                 recent_avg = self.recent_averages[stat]
-                dampening = self.OVER_DAMPENING_BY_STAT.get(stat, 0.08)
-                diff = pred - recent_avg
-                pred = pred - (diff * dampening)  # pulls toward recent_avg regardless of direction
-
-            # --- Rolling Performance Feedback (Improvement #9) ---
-            rolling_bias = self.get_rolling_bias(stat)
-            if abs(rolling_bias) > 0.3:  # Only correct if meaningful bias detected
-                correction = rolling_bias * 0.5  # Apply 50% of detected bias
-                pred = pred - correction
+                blend_weight = 0.12
+                pred = (1 - blend_weight) * pred + blend_weight * recent_avg
 
             predictions[stat] = pred
 
@@ -2287,24 +2299,31 @@ class ProbabilityCalculator:
     def calculate(prediction, line, std, calibrator_data=None):
         """Calculate calibrated probability of going OVER the line.
 
+        Uses empirical residual distribution when available: P(over) is the
+        fraction of historical OOF residuals that would push the actual result
+        above the line. Falls back to raw Gaussian CDF otherwise.
+
         Args:
             prediction: Model's point prediction
             line: The betting line
             std: Standard deviation / uncertainty estimate
-            calibrator_data: Optional dict with 'calibrator' (IsotonicRegression) and 'std_estimate'
+            calibrator_data: Optional dict with 'residuals' (sorted array) and 'std_estimate'
         Returns:
             Probability of going over (0-100)
         """
+        # Empirical residual-based probability (preferred)
+        if calibrator_data and 'residuals' in calibrator_data:
+            residuals = calibrator_data['residuals']
+            # actual = prediction + residual, so need residual > (line - prediction)
+            threshold = line - prediction
+            # Fraction of historical residuals that exceed the threshold
+            prob_over = float(np.mean(residuals > threshold))
+            prob_over = np.clip(prob_over, 0.05, 0.95)
+            return round(prob_over * 100, 1)
+
+        # Fallback: raw Gaussian CDF (no isotonic overlay)
         z = (line - prediction) / (std + 0.1)
         raw_prob_over = 1 - scipy_stats.norm.cdf(z)
-
-        if calibrator_data and 'calibrator' in calibrator_data:
-            try:
-                calibrated = calibrator_data['calibrator'].predict([raw_prob_over])[0]
-                return round(calibrated * 100, 1)
-            except Exception:
-                pass
-
         return round(raw_prob_over * 100, 1)
 
 
@@ -2319,16 +2338,31 @@ class LineEvaluator:
         diff = prediction - line
         diff_pct = (diff / line) * 100
 
-        # Determine recommendation
-        if abs(diff_pct) < 3:
-            recommendation = "LEAN OVER" if diff > 0 else "LEAN UNDER"
-            strength = "SLIGHT"
-        elif abs(diff_pct) < 8:
-            recommendation = "OVER" if diff > 0 else "UNDER"
-            strength = "MODERATE"
+        # Determine recommendation — use uncertainty-aware thresholds when possible
+        std = confidence_info.get('std', None) if confidence_info else None
+        if std and std > 0:
+            # Edge as multiple of model uncertainty (z-score)
+            z_score = abs(diff) / std
+            if z_score < 0.3:
+                recommendation = "LEAN OVER" if diff > 0 else "LEAN UNDER"
+                strength = "SLIGHT"
+            elif z_score < 0.7:
+                recommendation = "OVER" if diff > 0 else "UNDER"
+                strength = "MODERATE"
+            else:
+                recommendation = "STRONG OVER" if diff > 0 else "STRONG UNDER"
+                strength = "HIGH"
         else:
-            recommendation = "STRONG OVER" if diff > 0 else "STRONG UNDER"
-            strength = "HIGH"
+            # Fallback: percentage-based thresholds
+            if abs(diff_pct) < 3:
+                recommendation = "LEAN OVER" if diff > 0 else "LEAN UNDER"
+                strength = "SLIGHT"
+            elif abs(diff_pct) < 8:
+                recommendation = "OVER" if diff > 0 else "UNDER"
+                strength = "MODERATE"
+            else:
+                recommendation = "STRONG OVER" if diff > 0 else "STRONG UNDER"
+                strength = "HIGH"
 
         result = {
             'stat': stat,
