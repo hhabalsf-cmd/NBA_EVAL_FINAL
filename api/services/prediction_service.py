@@ -84,52 +84,11 @@ class PredictionService:
 
         return {'found': False}
 
-    _current_season_players: Optional[list] = None
-    _current_season_players_time: float = 0
-    _PLAYERS_CACHE_TTL = 60 * 60 * 6  # 6 hours
-
-    def _get_current_season_players(self) -> list:
-        """Get current-season player roster from live NBA API (cached 6h).
-
-        Falls back to nba_api static list if the API call fails.
-        """
-        now = time.time()
-        if (self._current_season_players is not None
-                and now - self._current_season_players_time < self._PLAYERS_CACHE_TTL):
-            return self._current_season_players
-
-        try:
-            from nba_api.stats.endpoints import commonallplayers
-            cap = commonallplayers.CommonAllPlayers(
-                is_only_current_season=1,
-                season='2025-26',
-                timeout=15,
-            )
-            df = cap.get_data_frames()[0]
-            # Reshape to match the dict format used by nba_api.stats.static.players
-            player_list = []
-            for _, row in df.iterrows():
-                player_list.append({
-                    'id': row['PERSON_ID'],
-                    'full_name': row['DISPLAY_FIRST_LAST'],
-                    'first_name': row['DISPLAY_FIRST_LAST'].split(' ')[0] if ' ' in row['DISPLAY_FIRST_LAST'] else row['DISPLAY_FIRST_LAST'],
-                    'last_name': ' '.join(row['DISPLAY_FIRST_LAST'].split(' ')[1:]) if ' ' in row['DISPLAY_FIRST_LAST'] else '',
-                    'is_active': True,
-                    'team_id': row.get('TEAM_ID'),
-                    'team_abbreviation': row.get('TEAM_ABBREVIATION', ''),
-                    'team_name': f"{row.get('TEAM_CITY', '')} {row.get('TEAM_NAME', '')}".strip(),
-                })
-            PredictionService._current_season_players = player_list
-            PredictionService._current_season_players_time = now
-            return player_list
-        except Exception:
-            # Fallback to static list
-            from nba_api.stats.static import players
-            return players.get_active_players()
-
     def search_players(self, query: str) -> list:
-        """Search for players by name using live current-season roster."""
-        all_players = self._get_current_season_players()
+        """Search for players by name."""
+        from nba_api.stats.static import players
+
+        all_players = players.get_active_players()
         query_lower = query.lower()
 
         # First try exact matches
