@@ -42,6 +42,14 @@ from nba_api.stats.endpoints import (
     teamdashboardbygeneralsplits,
 )
 from nba_api.stats.static import players, teams
+from nba_api.library.http import NBAHTTP
+
+# Fix nba_api headers: NBA now blocks requests with Referer: stats.nba.com
+_nba_session = NBAHTTP.get_session()
+_nba_session.headers.update({
+    'Referer': 'https://www.nba.com/',
+    'Origin': 'https://www.nba.com',
+})
 
 # ML Libraries
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
