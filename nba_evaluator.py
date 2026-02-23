@@ -793,9 +793,10 @@ class FeatureEngineer:
             lambda x: x['PTS'] / x['FGA'] if x['FGA'] > 0 else 0, axis=1
         )
 
-        # Assist to Turnover ratio
+        # Assist to Turnover ratio — use floor of 2 on TOV denominator to prevent
+        # ratio explosion when TOV is 0-1 (which causes extreme model overfit on this feature)
         df['AST_TOV_RATIO'] = df.apply(
-            lambda x: x['AST'] / x['TOV'] if x['TOV'] > 0 else x['AST'], axis=1
+            lambda x: min(x['AST'] / max(x['TOV'], 2), 6.0), axis=1
         )
 
         # Stock stats (Steals + Blocks)
@@ -1435,12 +1436,64 @@ class MLPredictor:
         print(f"    Optuna best MAE: {study.best_value:.2f} (params: depth={best['max_depth']}, lr={best['learning_rate']:.3f}, n={best['n_estimators']})")
         return best
 
-    def _select_features(self, model, X, feature_names, cumulative_threshold=0.95):
-        """Select features by cumulative importance (Improvement #1)."""
+    # Features that are stat-specific and should NOT be used to predict other stats.
+    # Shared features (MIN, schedule, opponent, efficiency, usage) are allowed everywhere.
+    STAT_SPECIFIC_FEATURES = {
+        'PTS': {
+            'ROLL_5_REB', 'ROLL_10_REB', 'EMA_5_REB', 'STD_10_REB',
+            'REB_TREND', 'ROLL_5_REB_PACE_ADJ', 'ROLL_5_REB_PER36', 'ROLL_10_REB_PER36',
+            'ROLL_10_REB_BLOWOUT_ADJ', 'VS_OPP_AVG_REB', 'VS_OPP_REB_DIFF',
+            'ROLL_5_AST', 'ROLL_10_AST', 'EMA_5_AST', 'STD_10_AST',
+            'AST_TREND', 'ROLL_5_AST_PACE_ADJ', 'ROLL_5_AST_PER36', 'ROLL_10_AST_PER36',
+            'ROLL_10_AST_BLOWOUT_ADJ', 'VS_OPP_AVG_AST', 'VS_OPP_AST_DIFF',
+            'AST_TOV_RATIO', 'ROLL_5_AST_TOV',
+        },
+        'REB': {
+            'ROLL_5_PTS', 'ROLL_10_PTS', 'EMA_5_PTS', 'STD_10_PTS',
+            'PTS_TREND', 'ROLL_5_PTS_PACE_ADJ', 'ROLL_5_PTS_PER36', 'ROLL_10_PTS_PER36',
+            'ROLL_10_PTS_BLOWOUT_ADJ', 'VS_OPP_AVG_PTS', 'VS_OPP_PTS_DIFF',
+            'ROLL_5_AST', 'ROLL_10_AST', 'EMA_5_AST', 'STD_10_AST',
+            'AST_TREND', 'ROLL_5_AST_PACE_ADJ', 'ROLL_5_AST_PER36', 'ROLL_10_AST_PER36',
+            'ROLL_10_AST_BLOWOUT_ADJ', 'VS_OPP_AVG_AST', 'VS_OPP_AST_DIFF',
+            'AST_TOV_RATIO', 'ROLL_5_AST_TOV',
+            'ROLL_5_TS_PCT', 'ROLL_10_TS_PCT', 'ROLL_5_EFG_PCT', 'ROLL_5_PTS_PER_FGA',
+        },
+        'AST': {
+            'ROLL_5_PTS', 'ROLL_10_PTS', 'EMA_5_PTS', 'STD_10_PTS',
+            'PTS_TREND', 'ROLL_5_PTS_PACE_ADJ', 'ROLL_5_PTS_PER36', 'ROLL_10_PTS_PER36',
+            'ROLL_10_PTS_BLOWOUT_ADJ', 'VS_OPP_AVG_PTS', 'VS_OPP_PTS_DIFF',
+            'ROLL_5_REB', 'ROLL_10_REB', 'EMA_5_REB', 'STD_10_REB',
+            'REB_TREND', 'ROLL_5_REB_PACE_ADJ', 'ROLL_5_REB_PER36', 'ROLL_10_REB_PER36',
+            'ROLL_10_REB_BLOWOUT_ADJ', 'VS_OPP_AVG_REB', 'VS_OPP_REB_DIFF',
+            'ROLL_5_TS_PCT', 'ROLL_10_TS_PCT', 'ROLL_5_EFG_PCT', 'ROLL_5_PTS_PER_FGA',
+        },
+        # PRA uses all features since it's a composite stat
+        'PRA': set(),
+    }
+
+    def _select_features(self, model, X, feature_names, cumulative_threshold=0.95, stat=None):
+        """Select features by cumulative importance with cross-stat pruning.
+
+        When training a stat-specific model (PTS/REB/AST), zero out importance of
+        features that belong to other stat categories to prevent cross-stat
+        contamination (e.g., AST features dominating a PTS model).
+        """
         if not hasattr(model, 'feature_importances_'):
             return np.arange(X.shape[1]), feature_names
 
-        importances = model.feature_importances_
+        importances = model.feature_importances_.copy()
+
+        # Zero out cross-stat features so they are pruned first
+        if stat and stat in self.STAT_SPECIFIC_FEATURES:
+            excluded = self.STAT_SPECIFIC_FEATURES[stat]
+            for i, fname in enumerate(feature_names):
+                if fname in excluded:
+                    importances[i] = 0.0
+            # Renormalize remaining importances
+            total = importances.sum()
+            if total > 0:
+                importances = importances / total
+
         sorted_idx = np.argsort(importances)[::-1]
         cumsum = np.cumsum(importances[sorted_idx])
         # Keep features explaining cumulative_threshold of importance
@@ -1615,7 +1668,7 @@ class MLPredictor:
 
                 # --- Feature Selection (Improvement #1) ---
                 if hasattr(model, 'feature_importances_') and len(available_features) > 20:
-                    sel_idx, sel_names = self._select_features(model, X_scaled, available_features)
+                    sel_idx, sel_names = self._select_features(model, X_scaled, available_features, stat=stat)
                     if len(sel_names) < len(available_features):
                         X_sel = X_scaled[:, sel_idx]
                         # Retrain on selected features
@@ -1913,20 +1966,22 @@ class MLPredictor:
             self.recent_averages[stat] = recent_vals.mean()
     
     # Per-stat bias correction weights — lower = trust the ML model more
+    # Increased from original values to combat systematic over-prediction bias
+    # (OVER picks hitting 47.1% vs UNDER 62.2%)
     BIAS_CORRECTION_BY_STAT = {
-        'PTS': 0.10,
-        'REB': 0.10,
-        'AST': 0.15,
-        'PRA': 0.08,
+        'PTS': 0.15,
+        'REB': 0.15,
+        'AST': 0.20,
+        'PRA': 0.12,
     }
 
-    # Symmetric regression-to-mean dampening — applied in both directions.
-    # Prevents extreme swings without systematically capping hot players.
+    # Regression-to-mean dampening — pulls predictions toward recent avg.
+    # Slightly asymmetric: stronger when prediction is ABOVE avg (over-prediction bias).
     OVER_DAMPENING_BY_STAT = {
-        'PTS': 0.05,
-        'REB': 0.06,
-        'AST': 0.06,
-        'PRA': 0.05,
+        'PTS': 0.08,
+        'REB': 0.10,
+        'AST': 0.10,
+        'PRA': 0.08,
     }
 
     def predict(self, features_df, bias_correction=None, estimated_minutes=None):
@@ -2017,14 +2072,17 @@ class MLPredictor:
                 bc = self.BIAS_CORRECTION_BY_STAT.get(stat, 0.15)
                 pred = (1 - bc) * pred + bc * recent_avg
 
-            # --- Symmetric Regression-to-Mean Dampening ---
-            # Softly pull predictions toward recent avg in both directions to reduce noise.
-            # Symmetric so hot/trending-up players aren't systematically capped.
+            # --- Regression-to-Mean Dampening ---
+            # Pull predictions toward recent avg. Slightly stronger when ABOVE avg
+            # to combat the model's systematic over-prediction bias.
             if hasattr(self, 'recent_averages') and stat in self.recent_averages:
                 recent_avg = self.recent_averages[stat]
                 dampening = self.OVER_DAMPENING_BY_STAT.get(stat, 0.08)
                 diff = pred - recent_avg
-                pred = pred - (diff * dampening)  # pulls toward recent_avg regardless of direction
+                # Asymmetric: 50% stronger pull when over-predicting (above avg)
+                if diff > 0:
+                    dampening = dampening * 1.5
+                pred = pred - (diff * dampening)
 
             # --- Rolling Performance Feedback (Improvement #9) ---
             rolling_bias = self.get_rolling_bias(stat)
@@ -2035,11 +2093,11 @@ class MLPredictor:
             predictions[stat] = pred
 
         # Reconcile PRA with component predictions to avoid inconsistency.
-        # The independent PRA model can drift from PTS+REB+AST after bias/residual
-        # corrections are applied separately. Blend: 60% component sum, 40% PRA model.
+        # Heavily weight component sum (85%) since the independent PRA model's
+        # composite predictions compound errors (PRA picks are 0-3 all-time).
         if 'PRA' in predictions and all(s in predictions for s in ['PTS', 'REB', 'AST']):
             component_sum = predictions['PTS'] + predictions['REB'] + predictions['AST']
-            predictions['PRA'] = 0.6 * component_sum + 0.4 * predictions['PRA']
+            predictions['PRA'] = 0.85 * component_sum + 0.15 * predictions['PRA']
 
         return predictions
 
@@ -2143,9 +2201,29 @@ class MLPredictor:
         'PRA': 2.5,
     }
 
+    def _sample_size_penalty(self):
+        """Reduce confidence for models trained on few games.
+
+        Returns a multiplier (0-1) that scales down confidence for small samples.
+        Players with <75 games get up to 15% penalty, <100 gets 5%.
+        """
+        n = getattr(self, 'games_trained_on', 200)
+        if n >= 100:
+            return 1.0
+        elif n >= 75:
+            # Linear interpolation: 75 games → 0.95, 100 games → 1.0
+            return 0.95 + 0.05 * (n - 75) / 25
+        else:
+            # Linear interpolation: 30 games → 0.80, 75 games → 0.95
+            return max(0.80, 0.80 + 0.15 * (n - 30) / 45)
+
     def get_confidence(self, df, stat, prediction, features_df=None):
         """Calculate confidence interval using quantile regression when available,
-        falling back to historical variance with per-stat calibration."""
+        falling back to historical variance with per-stat calibration.
+
+        Applies a sample-size penalty for players with limited training data."""
+
+        sample_penalty = self._sample_size_penalty()
 
         # --- Quantile Regression bounds (Improvement #4) ---
         q10_key, q90_key = f'{stat}_q10', f'{stat}_q90'
@@ -2179,6 +2257,7 @@ class MLPredictor:
                 cap = self.CONFIDENCE_CAPS.get(stat, 85)
                 raw_confidence = 100 - quantile_std * scale
                 confidence = min(cap, max(55, raw_confidence))
+                confidence = confidence * sample_penalty  # Apply sample-size discount
 
                 return {
                     'low': round(q10, 1),
@@ -2199,6 +2278,7 @@ class MLPredictor:
             cap = self.CONFIDENCE_CAPS.get(stat, 85)
             raw_confidence = 100 - combined_std * scale
             confidence = min(cap, max(55, raw_confidence))
+            confidence = confidence * sample_penalty  # Apply sample-size discount
 
             return {
                 'low': round(prediction - 1.5 * combined_std, 1),
@@ -2537,13 +2617,14 @@ def print_results(player_name, game_info, predictions, evaluations, vs_stats=Non
     print("\n" + "=" * 65)
 
 
-def find_best_bets(min_edge=5.0, max_edge=50.0, max_results=20, select_games=False):
+def find_best_bets(min_edge=5.0, max_edge=55.0, max_results=20, select_games=False):
     """
     Analyze all today's player props and find the best betting opportunities.
 
     Args:
         min_edge: Minimum edge percentage to include (default 5%)
-        max_edge: Maximum edge percentage to include (default 50%) - filters out unreliable extreme predictions
+        max_edge: Maximum edge percentage to include (default 55%) - filters out unreliable extreme predictions.
+                  Reduced from 50% to exclude 60%+ edge picks which historically hit only 45.8%.
         max_results: Maximum number of results to show (default 20)
         select_games: If True, prompt user to select specific games to analyze
 
