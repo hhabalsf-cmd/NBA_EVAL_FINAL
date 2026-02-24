@@ -59,6 +59,15 @@ class VsStats(BaseModel):
     avg_ast: float
 
 
+class GameLogEntry(BaseModel):
+    game_date: str       # "Feb 20"
+    opponent: str        # "vs HOU" or "@ BOS"
+    min: float
+    pts: float
+    reb: float
+    ast: float
+
+
 class PredictionResponse(BaseModel):
     player_name: str
     player_id: int
@@ -69,6 +78,8 @@ class PredictionResponse(BaseModel):
     vs_stats: Optional[VsStats] = None
     model_type: str
     games_trained_on: int
+    game_log: Optional[List[GameLogEntry]] = None
+    avg_min_l10: Optional[float] = None
 
 
 # === Line Evaluation Schemas ===

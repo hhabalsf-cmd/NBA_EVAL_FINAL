@@ -45,6 +45,15 @@ export interface VsStats {
   avg_ast: number
 }
 
+export interface GameLogEntry {
+  game_date: string   // "Feb 20"
+  opponent: string    // "vs HOU" or "@ BOS"
+  min: number
+  pts: number
+  reb: number
+  ast: number
+}
+
 export interface PredictionResult {
   player_name: string
   player_id: number
@@ -55,6 +64,8 @@ export interface PredictionResult {
   vs_stats?: VsStats
   model_type: string
   games_trained_on: number
+  game_log?: GameLogEntry[]
+  avg_min_l10?: number
 }
 
 export interface LineEvaluation {

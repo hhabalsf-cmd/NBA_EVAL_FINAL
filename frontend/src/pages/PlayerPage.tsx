@@ -4,6 +4,7 @@ import { ArrowLeft, Check, Loader2, Zap, PlaySquare } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { usePrediction } from '../hooks/usePrediction'
 import PredictionCard from '../components/PredictionCard'
+import StatChartModal from '../components/StatChartModal'
 import PlayerSearch from '../components/PlayerSearch'
 import { evaluateLine, createPick, LineEvaluation, getPlayerOdds, getTeamInjuries, TeamInjuryInfo } from '../api/client'
 import { getNbaHeadshotUrl } from '../utils/nba'
@@ -18,6 +19,7 @@ export default function PlayerPage() {
   const [lineInputs, setLineInputs] = useState<Record<string, string>>({})
   const [allEvaluations, setAllEvaluations] = useState<LineEvaluation[]>([])
   const [isEvaluatingAll, setIsEvaluatingAll] = useState(false)
+  const [chartStat, setChartStat] = useState<string | null>(null)
 
   useEffect(() => {
     if (playerName) {
@@ -172,6 +174,9 @@ export default function PlayerPage() {
                 </span>
               )}
               <span className="text-[11px] sm:text-xs text-text-muted font-mono">{result.games_trained_on} games</span>
+              {result.avg_min_l10 != null && (
+                <span className="text-[11px] sm:text-xs text-text-muted font-mono">L10 MIN: {result.avg_min_l10.toFixed(1)}</span>
+              )}
             </div>
           </div>
         </div>
@@ -257,18 +262,21 @@ export default function PlayerPage() {
                 key={stat}
                 stat={stat}
                 prediction={prediction}
-                onClick={() => {
-                  const pred = result.predictions[stat]?.prediction
-                  if (pred == null) return
-                  // Round to nearest 0.5 (standard betting line increment)
-                  const rounded = Math.round(pred * 2) / 2
-                  setLineInputs(prev => ({ ...prev, [stat]: String(rounded) }))
-                }}
+                onChartClick={() => setChartStat(stat)}
               />
             )
           })}
         </div>
       </section>
+
+      {/* Stat Chart Modal */}
+      {chartStat && result.game_log && result.game_log.length > 0 && (
+        <StatChartModal
+          stat={chartStat}
+          gameLog={result.game_log}
+          onClose={() => setChartStat(null)}
+        />
+      )}
 
       {/* Line Evaluation */}
       <section className="card p-4 sm:p-6">

@@ -1,13 +1,13 @@
-import { TrendingUp, TrendingDown, MousePointerClick } from 'lucide-react'
+import { TrendingUp, TrendingDown, BarChart2 } from 'lucide-react'
 import { StatPrediction } from '../api/client'
 
 interface PredictionCardProps {
   stat: string
   prediction: StatPrediction
-  onClick?: () => void
+  onChartClick?: () => void
 }
 
-export default function PredictionCard({ stat, prediction, onClick }: PredictionCardProps) {
+export default function PredictionCard({ stat, prediction, onChartClick }: PredictionCardProps) {
   const getStatLabel = () => {
     switch (stat) {
       case 'PTS': return 'Points'
@@ -27,7 +27,7 @@ export default function PredictionCard({ stat, prediction, onClick }: Prediction
   const trendUp = prediction.recent_avg !== null && prediction.recent_avg !== undefined && prediction.prediction > prediction.recent_avg
 
   return (
-    <div onClick={onClick} className={`card p-5 ${onClick ? 'cursor-pointer card-hover group' : ''}`}>
+    <div onClick={onChartClick} className={`card p-5 ${onChartClick ? 'cursor-pointer card-hover group' : ''}`}>
       <div className="flex items-center justify-between mb-5">
         <span className="text-[11px] font-medium uppercase tracking-wider text-text-muted">{getStatLabel()}</span>
         <span className="font-mono font-semibold text-sm text-text-secondary">{stat}</span>
@@ -72,10 +72,10 @@ export default function PredictionCard({ stat, prediction, onClick }: Prediction
         </div>
       )}
 
-      {onClick && (
+      {onChartClick && (
         <div className="mt-3 flex items-center gap-1 text-[10px] text-text-muted opacity-0 group-hover:opacity-100 transition-opacity">
-          <MousePointerClick className="w-3 h-3" />
-          Fill line
+          <BarChart2 className="w-3 h-3" />
+          View chart
         </div>
       )}
     </div>

@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, Generator
 import asyncio
+import pandas as pd
 
 # Add parent directory to path to import existing modules
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -386,6 +387,28 @@ class PredictionService:
                 "avg_ast": round(vs_stats.get('avg_ast', 0), 1)
             }
 
+        # Build game log (last 20 games)
+        game_log_data = None
+        avg_min_l10 = None
+        try:
+            log_df = df_features[['GAME_DATE', 'MATCHUP', 'MIN_NUMERIC', 'PTS', 'REB', 'AST']].tail(20).copy()
+            game_log_data = []
+            for _, row in log_df.iterrows():
+                matchup = str(row['MATCHUP'])
+                is_home = 'vs.' in matchup
+                opp = matchup.split('vs.')[-1].strip() if is_home else matchup.split('@')[-1].strip()
+                game_log_data.append({
+                    "game_date": pd.to_datetime(row['GAME_DATE']).strftime('%b %d'),
+                    "opponent": f"vs {opp}" if is_home else f"@ {opp}",
+                    "min": round(float(row['MIN_NUMERIC']), 1),
+                    "pts": round(float(row['PTS']), 1),
+                    "reb": round(float(row['REB']), 1),
+                    "ast": round(float(row['AST']), 1),
+                })
+            avg_min_l10 = round(float(df_features['MIN_NUMERIC'].tail(10).mean()), 1)
+        except Exception:
+            pass  # Non-critical — omit if any issue
+
         # Final result
         yield {
             "stage": "complete",
@@ -400,7 +423,9 @@ class PredictionService:
                 "opponent_context": opponent_context,
                 "vs_stats": vs_stats_response,
                 "model_type": model_type,
-                "games_trained_on": predictor.games_trained_on
+                "games_trained_on": predictor.games_trained_on,
+                "game_log": game_log_data,
+                "avg_min_l10": avg_min_l10,
             }
         }
 
