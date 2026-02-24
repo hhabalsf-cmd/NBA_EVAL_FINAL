@@ -92,6 +92,7 @@ class LineEvaluation(BaseModel):
     confidence: Optional[float] = None
     range_low: Optional[float] = None
     range_high: Optional[float] = None
+    high_edge_warning: bool = False  # True when |edge| > 50% — historically unreliable
 
 
 # === Picks Schemas ===
