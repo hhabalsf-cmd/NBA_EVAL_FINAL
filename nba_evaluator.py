@@ -1970,8 +1970,8 @@ class MLPredictor:
     # (OVER picks hitting 47.1% vs UNDER 62.2%)
     BIAS_CORRECTION_BY_STAT = {
         'PTS': 0.15,
-        'REB': 0.15,
-        'AST': 0.20,
+        'REB': 0.20,   # increased from 0.15 — corrects +0.99 systematic over-prediction
+        'AST': 0.25,   # increased from 0.20 — corrects +0.96 systematic over-prediction
         'PRA': 0.12,
     }
 
@@ -1979,8 +1979,8 @@ class MLPredictor:
     # Slightly asymmetric: stronger when prediction is ABOVE avg (over-prediction bias).
     OVER_DAMPENING_BY_STAT = {
         'PTS': 0.08,
-        'REB': 0.10,
-        'AST': 0.10,
+        'REB': 0.18,   # increased from 0.10
+        'AST': 0.16,   # increased from 0.10
         'PRA': 0.08,
     }
 
