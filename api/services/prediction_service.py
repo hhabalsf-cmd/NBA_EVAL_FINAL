@@ -465,8 +465,8 @@ class BestBetsService:
                             edge = prediction - line
                             edge_pct = (edge / line) * 100
 
-                            # Only include if edge is significant
-                            if abs(edge_pct) >= min_edge:
+                            # Only include if edge is within the reliable range (>50% edge picks hit <27% historically)
+                            if abs(edge_pct) >= min_edge and abs(edge_pct) <= 50.0:
                                 direction = "OVER" if edge > 0 else "UNDER"
                                 strength = "STRONG" if abs(edge_pct) >= 8 else "MODERATE" if abs(edge_pct) >= 5 else "SLIGHT"
 
