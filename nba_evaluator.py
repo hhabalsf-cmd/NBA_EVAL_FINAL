@@ -2462,6 +2462,7 @@ class LineEvaluator:
             'diff_pct': diff_pct,
             'recommendation': recommendation,
             'strength': strength,
+            'high_edge_warning': abs(diff_pct) > 50,  # picks >50% edge hit <27% historically
         }
 
         if confidence_info:
