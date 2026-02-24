@@ -767,7 +767,7 @@ class FeatureEngineer:
     def create_features(game_log, player_info=None, game_info=None, injuries=None, team_stats=None):
         """Create comprehensive feature set from game log"""
         df = game_log.copy()
-        df = df.sort_values('GAME_DATE')
+        df = df.sort_values('GAME_DATE', key=lambda x: pd.to_datetime(x, format='mixed'))
 
         # Parse minutes
         df['MIN_NUMERIC'] = df['MIN'].apply(
