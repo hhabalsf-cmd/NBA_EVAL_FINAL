@@ -69,6 +69,7 @@ export interface LineEvaluation {
   confidence?: number
   range_low?: number
   range_high?: number
+  high_edge_warning?: boolean
 }
 
 export interface Pick {
