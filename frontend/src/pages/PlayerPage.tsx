@@ -137,54 +137,54 @@ export default function PlayerPage() {
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate('/app')}
-            className="text-sm text-text-muted hover:text-text-primary flex items-center gap-1.5 transition-colors flex-shrink-0"
+            className="text-sm text-text-muted hover:text-text-primary flex items-center gap-1.5 transition-colors flex-shrink-0 py-1"
           >
             <ArrowLeft className="w-4 h-4" />
             Back
           </button>
-          <div className="flex-1 max-w-sm">
+          <div className="flex-1 max-w-sm hidden sm:block">
             <PlayerSearch placeholder="Search another player…" />
           </div>
         </div>
-        <div className="flex items-center gap-5">
+        <div className="flex items-center gap-4 sm:gap-5">
           <img
             src={getNbaHeadshotUrl(result.player_id)}
             alt={result.player_name}
-            className="w-24 h-24 md:w-28 md:h-28 rounded-2xl object-cover bg-bg-secondary shadow-lg shadow-black/20"
+            className="w-18 h-18 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-2xl object-cover bg-bg-secondary shadow-lg shadow-black/20 flex-shrink-0"
             onError={e => { (e.target as HTMLImageElement).src = getNbaHeadshotUrl(0) }}
           />
           <div className="flex-1 min-w-0">
-            <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-2">
-              <div>
-                <h1 className="text-2xl md:text-3xl font-bold text-text-primary tracking-tight">{result.player_name}</h1>
-                {result.team_abbrev && (
-                  <p className="text-sm text-text-secondary mt-1">{result.team_abbrev}</p>
-                )}
-              </div>
-              <div className="flex items-center gap-3">
-                {oddsLoading && (
-                  <span className="flex items-center gap-1.5 text-xs text-text-muted">
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                    Fetching odds…
-                  </span>
-                )}
-                {hasOdds && !oddsLoading && (
-                  <span className="flex items-center gap-1 px-2 py-1 rounded-md bg-accent/10 text-accent text-[11px] font-medium">
-                    <Zap className="w-3 h-3" />
-                    Live odds
-                  </span>
-                )}
-                <span className="text-xs text-text-muted font-mono">{result.games_trained_on} games trained</span>
-              </div>
+            <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-text-primary tracking-tight">{result.player_name}</h1>
+            {result.team_abbrev && (
+              <p className="text-sm text-text-secondary mt-0.5">{result.team_abbrev}</p>
+            )}
+            <div className="flex items-center gap-2 sm:gap-3 mt-2 flex-wrap">
+              {oddsLoading && (
+                <span className="flex items-center gap-1.5 text-xs text-text-muted">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  Fetching odds…
+                </span>
+              )}
+              {hasOdds && !oddsLoading && (
+                <span className="flex items-center gap-1 px-2 py-1 rounded-md bg-accent/10 text-accent text-[11px] font-medium">
+                  <Zap className="w-3 h-3" />
+                  Live odds
+                </span>
+              )}
+              <span className="text-[11px] sm:text-xs text-text-muted font-mono">{result.games_trained_on} games</span>
             </div>
           </div>
+        </div>
+        {/* Mobile search */}
+        <div className="sm:hidden mt-4">
+          <PlayerSearch placeholder="Search another player…" />
         </div>
       </section>
 
       {/* Game Info */}
       {result.game_info && (
-        <section className="card p-5">
-          <div className="flex flex-wrap items-center gap-6 text-sm">
+        <section className="card p-4 sm:p-5">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
             <div>
               <span className="text-text-muted">Matchup: </span>
               <span className="text-text-primary font-medium">{result.game_info.matchup}</span>
@@ -271,13 +271,13 @@ export default function PlayerPage() {
       </section>
 
       {/* Line Evaluation */}
-      <section className="card p-6">
-        <div className="flex items-center justify-between mb-5">
+      <section className="card p-4 sm:p-6">
+        <div className="flex items-center justify-between mb-5 gap-2">
           <h2 className="text-lg font-semibold text-text-primary tracking-tight">Evaluate Lines</h2>
           {hasOdds && !oddsLoading && (
-            <span className="flex items-center gap-1 px-2 py-1 rounded-md bg-accent/10 text-accent text-[11px] font-medium">
+            <span className="flex items-center gap-1 px-2 py-1 rounded-md bg-accent/10 text-accent text-[11px] font-medium flex-shrink-0">
               <Zap className="w-3 h-3" />
-              Lines auto-filled from live odds
+              <span className="hidden sm:inline">Lines auto-filled from</span> live odds
             </span>
           )}
         </div>
@@ -400,27 +400,32 @@ function EvalResult({
   }
 
   return (
-    <div className={`mt-6 p-5 rounded-xl border ${isOver ? 'border-accent-success/15 bg-accent-success/[0.03]' : 'border-accent-danger/15 bg-accent-danger/[0.03]'}`}>
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5">
-        <div>
-          <div className="flex items-center gap-2 mb-4">
+    <div className={`mt-6 p-4 sm:p-5 rounded-xl border ${isOver ? 'border-accent-success/15 bg-accent-success/[0.03]' : 'border-accent-danger/15 bg-accent-danger/[0.03]'}`}>
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 sm:gap-5">
+        <div className="flex-1">
+          <div className="flex items-center gap-2 mb-3 sm:mb-4 flex-wrap">
             <div className={`pill ${isOver ? 'pill-over' : 'pill-under'}`}>{evaluation.recommendation}</div>
             <span className="text-xs text-text-muted font-mono">{evaluation.stat}</span>
+            {evaluation.high_edge_warning && (
+              <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-yellow-500/15 text-yellow-400 border border-yellow-500/20">
+                High Edge — Verify
+              </span>
+            )}
           </div>
-          <div className="grid grid-cols-3 gap-6">
+          <div className="grid grid-cols-3 gap-3 sm:gap-6">
             <div>
-              <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Line</div>
-              <div className="font-mono text-xl font-bold text-text-primary">{evaluation.line}</div>
+              <div className="text-[10px] sm:text-[11px] text-text-muted uppercase tracking-wider mb-1">Line</div>
+              <div className="font-mono text-lg sm:text-xl font-bold text-text-primary">{evaluation.line}</div>
             </div>
             <div>
-              <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Prediction</div>
-              <div className={`font-mono text-xl font-bold ${isOver ? 'text-accent-success' : 'text-accent-danger'}`}>
+              <div className="text-[10px] sm:text-[11px] text-text-muted uppercase tracking-wider mb-1">Pred</div>
+              <div className={`font-mono text-lg sm:text-xl font-bold ${isOver ? 'text-accent-success' : 'text-accent-danger'}`}>
                 {evaluation.prediction.toFixed(1)}
               </div>
             </div>
             <div>
-              <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Edge</div>
-              <div className={`font-mono text-xl font-bold ${Math.abs(evaluation.diff_pct) >= 8 ? 'text-accent' : 'text-text-primary'}`}>
+              <div className="text-[10px] sm:text-[11px] text-text-muted uppercase tracking-wider mb-1">Edge</div>
+              <div className={`font-mono text-lg sm:text-xl font-bold ${Math.abs(evaluation.diff_pct) >= 8 ? 'text-accent' : 'text-text-primary'}`}>
                 {evaluation.diff_pct > 0 ? '+' : ''}{evaluation.diff_pct.toFixed(1)}%
               </div>
             </div>
@@ -443,11 +448,11 @@ function EvalResult({
           )}
         </div>
 
-        <div className="flex flex-col items-end gap-2">
+        <div className="flex flex-col sm:items-end gap-2">
           <button
             onClick={handleSave}
             disabled={isSaving}
-            className={`btn ${isOver ? 'btn-over' : 'btn-under'}`}
+            className={`btn ${isOver ? 'btn-over' : 'btn-under'} w-full sm:w-auto`}
           >
             {isSaving ? (
               <>
