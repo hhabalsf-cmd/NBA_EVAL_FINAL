@@ -342,7 +342,11 @@ class NBADataScraper:
                 print(f"⚠️ Could not fetch {season}: {e}")
         
         if all_games:
-            return pd.concat(all_games, ignore_index=True)
+            combined = pd.concat(all_games, ignore_index=True)
+            # NBA API returns each season descending; sort ascending so tail() = most recent games
+            combined['_sort_date'] = pd.to_datetime(combined['GAME_DATE'], format='mixed')
+            combined = combined.sort_values('_sort_date', ascending=True).drop(columns=['_sort_date']).reset_index(drop=True)
+            return combined
         return pd.DataFrame()
     
     def get_injury_report(self):
