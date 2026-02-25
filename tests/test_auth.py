@@ -134,3 +134,9 @@ def test_update_user_avatar_stores_url():
     assert updated["avatar_url"] == "/uploads/avatars/test.jpg"
     fetched = get_user_by_id(uid)
     assert fetched["avatar_url"] == "/uploads/avatars/test.jpg"
+
+
+def test_update_user_avatar_unknown_user_returns_none():
+    from db import update_user_avatar
+    result = update_user_avatar("nonexistent-id", "/uploads/avatars/x.jpg")
+    assert result is None

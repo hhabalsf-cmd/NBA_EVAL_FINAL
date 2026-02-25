@@ -162,7 +162,7 @@ def get_user_by_id(user_id: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
-def update_user_avatar(user_id: str, avatar_url: str) -> dict:
+def update_user_avatar(user_id: str, avatar_url: str) -> Optional[dict]:
     """Set avatar_url for user. Returns updated user dict."""
     conn = get_connection()
     cursor = conn.cursor()
@@ -174,7 +174,7 @@ def update_user_avatar(user_id: str, avatar_url: str) -> dict:
     cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
-    return dict(row)
+    return dict(row) if row else None
 
 
 def save_game_prediction(prediction_data: dict) -> int:
