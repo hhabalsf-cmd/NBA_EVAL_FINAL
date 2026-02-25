@@ -95,6 +95,23 @@ def init_db():
     if 'extended_data' not in gp_columns:
         cursor.execute("ALTER TABLE game_predictions ADD COLUMN extended_data TEXT")
 
+    # Users table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id         TEXT PRIMARY KEY,
+            email      TEXT UNIQUE NOT NULL,
+            hashed_password TEXT NOT NULL,
+            username   TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    # Add user_id to picks if not present
+    cursor.execute("PRAGMA table_info(picks)")
+    picks_columns = {row[1] for row in cursor.fetchall()}
+    if "user_id" not in picks_columns:
+        cursor.execute("ALTER TABLE picks ADD COLUMN user_id TEXT")
+
     conn.commit()
     conn.close()
 
