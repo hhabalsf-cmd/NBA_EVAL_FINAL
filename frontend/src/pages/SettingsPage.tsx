@@ -11,7 +11,7 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<Tab>('profile')
   const [uploadError, setUploadError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const { user, updateAvatar, isUploadingAvatar } = useAuthStore()
+  const { user, updateAvatar, removeAvatar, isUploadingAvatar } = useAuthStore()
 
   if (!user) return null
 
@@ -106,6 +106,22 @@ export default function SettingsPage() {
               >
                 {isUploadingAvatar ? 'Uploading…' : 'Change photo'}
               </button>
+              {user.avatar_url && (
+                <button
+                  onClick={async () => {
+                    setUploadError(null)
+                    try {
+                      await removeAvatar()
+                    } catch (err) {
+                      setUploadError((err as Error).message)
+                    }
+                  }}
+                  disabled={isUploadingAvatar}
+                  className="text-xs text-text-muted hover:text-accent-danger transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isUploadingAvatar ? 'Removing…' : 'Remove photo'}
+                </button>
+              )}
               <p className="text-xs text-text-muted">JPEG, PNG, or WebP · max 2MB</p>
             </div>
 
