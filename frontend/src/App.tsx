@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
-import { Home, Gamepad2, History, Activity, Dice5, FlaskConical, Sun, Moon } from 'lucide-react'
+import { Home, Gamepad2, History, Dice5, FlaskConical, Sun, Moon } from 'lucide-react'
 import { useThemeStore } from './store/themeStore'
 import HomePage from './pages/HomePage'
 import LandingPage from './pages/LandingPage'
@@ -42,10 +42,12 @@ function App() {
           <div className="max-w-5xl mx-auto px-4 sm:px-8">
             <div className="flex items-center justify-between h-14 sm:h-16">
               {/* Logo */}
-              <NavLink to="/" className="flex items-center gap-2.5 group">
-                <Activity className="w-5 h-5 text-accent transition-transform group-hover:scale-110" strokeWidth={2.5} />
-                <span className="font-mono font-semibold text-[15px] tracking-tight text-text-primary">
-                  EVAL
+              <NavLink to="/" className="flex items-center gap-1 group">
+                <span className="font-bold text-[15px] tracking-tight text-text-primary group-hover:text-accent transition-colors duration-150">
+                  Bettin&apos;
+                </span>
+                <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: '17px', letterSpacing: '0.05em', color: 'var(--accent)' }}>
+                  Jrys
                 </span>
               </NavLink>
 

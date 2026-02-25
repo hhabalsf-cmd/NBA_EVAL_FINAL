@@ -540,3 +540,64 @@ export async function getStandings(): Promise<StandingsData> {
   if (!res.ok) throw new Error('Failed to fetch standings')
   return res.json()
 }
+
+// === Research Mode Types ===
+
+export interface FullGameLogEntry {
+  game_date: string      // "Feb 20"
+  opponent: string       // "vs HOU" or "@ BOS"
+  is_home: boolean
+  min: number
+  pts: number
+  reb: number
+  ast: number
+  pra: number
+  fg_pct: number
+  fg3_pct: number
+  ft_pct: number
+  stl: number
+  blk: number
+  tov: number
+  plus_minus: number
+}
+
+export interface StatSplits {
+  games: number
+  pts: number
+  reb: number
+  ast: number
+  pra: number
+  min: number
+}
+
+export interface RollingAverages {
+  L3: StatSplits
+  L5: StatSplits
+  L10: StatSplits
+  L15: StatSplits
+  L20: StatSplits
+}
+
+export interface PlayerResearchData {
+  player_name: string
+  player_id: number
+  team_abbrev?: string
+  next_game?: GameInfo
+  game_log: FullGameLogEntry[]
+  season_averages: StatSplits
+  rolling_averages: RollingAverages
+  home_splits: StatSplits
+  away_splits: StatSplits
+  b2b_splits: StatSplits
+  rest_splits: StatSplits
+  vs_elite_def: StatSplits
+  vs_weak_def: StatSplits
+  opponent_context?: OpponentContext
+  vs_stats?: VsStats
+}
+
+export async function getPlayerResearch(playerName: string): Promise<PlayerResearchData> {
+  const res = await fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/research`)
+  if (!res.ok) throw new Error(`Failed to fetch research data for ${playerName}`)
+  return res.json()
+}

@@ -1,7 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <circle cx="50" cy="50" r="45" fill="#f59e0b" stroke="#d97706" stroke-width="3"/>
-  <path d="M50 5 v90" stroke="#d97706" stroke-width="2"/>
-  <path d="M5 50 h90" stroke="#d97706" stroke-width="2"/>
-  <path d="M50 5 Q25 50 50 95" stroke="#d97706" stroke-width="2" fill="none"/>
-  <path d="M50 5 Q75 50 50 95" stroke="#d97706" stroke-width="2" fill="none"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="32" height="32">
+  <!-- Outer ring -->
+  <circle cx="50" cy="50" r="47" fill="#09090B" stroke="#06B6D4" stroke-width="3"/>
+  <!-- Inner ring -->
+  <circle cx="50" cy="50" r="41" fill="none" stroke="#06B6D4" stroke-width="0.75" stroke-opacity="0.45"/>
+
+  <!-- Basketball -->
+  <circle cx="50" cy="50" r="20" fill="none" stroke="#F59E0B" stroke-width="2.2"/>
+  <!-- Vertical seam -->
+  <line x1="50" y1="30" x2="50" y2="70" stroke="#F59E0B" stroke-width="1.6"/>
+  <!-- Upper arc seam -->
+  <path d="M30,50 Q50,37 70,50" fill="none" stroke="#F59E0B" stroke-width="1.6"/>
+  <!-- Lower arc seam -->
+  <path d="M30,50 Q50,63 70,50" fill="none" stroke="#F59E0B" stroke-width="1.6"/>
+
+  <!-- Gavel head -->
+  <rect x="59" y="23" width="17" height="7" rx="2" fill="#06B6D4" transform="rotate(-42 67.5 26.5)"/>
+  <!-- Gavel handle -->
+  <line x1="60" y1="32" x2="37" y2="55" stroke="#06B6D4" stroke-width="2.6" stroke-linecap="round"/>
+  <!-- Gavel butt cap -->
+  <rect x="33" y="52" width="8" height="5" rx="1.5" fill="#06B6D4" transform="rotate(-42 37 54.5)"/>
+
+  <!-- Impact lines -->
+  <line x1="65" y1="25" x2="70" y2="20" stroke="#06B6D4" stroke-width="1.5" stroke-linecap="round" opacity="0.85"/>
+  <line x1="70" y1="30" x2="75" y2="29" stroke="#F59E0B" stroke-width="1.5" stroke-linecap="round" opacity="0.7"/>
+  <line x1="62" y1="21" x2="63" y2="16" stroke="#06B6D4" stroke-width="1" stroke-linecap="round" opacity="0.55"/>
 </svg>

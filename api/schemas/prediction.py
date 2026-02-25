@@ -293,3 +293,58 @@ class GameAccuracyStats(BaseModel):
     accuracy: float
     by_confidence_range: Dict[str, ConfidenceRangeItem]
     recent_streak: str
+
+
+# === Research Mode Schemas ===
+
+class FullGameLogEntry(BaseModel):
+    game_date: str       # e.g. "Feb 20"
+    opponent: str        # e.g. "vs HOU" or "@ BOS"
+    is_home: bool
+    min: float
+    pts: float
+    reb: float
+    ast: float
+    pra: float           # pts + reb + ast
+    fg_pct: float
+    fg3_pct: float
+    ft_pct: float
+    stl: float
+    blk: float
+    tov: float
+    plus_minus: float
+
+
+class StatSplits(BaseModel):
+    games: int
+    pts: float
+    reb: float
+    ast: float
+    pra: float
+    min: float
+
+
+class RollingAverages(BaseModel):
+    L3: StatSplits
+    L5: StatSplits
+    L10: StatSplits
+    L15: StatSplits
+    L20: StatSplits
+
+
+class PlayerResearchResponse(BaseModel):
+    player_name: str
+    player_id: int
+    team_abbrev: Optional[str] = None
+    next_game: Optional[GameInfo] = None
+    game_log: List[FullGameLogEntry]
+    season_averages: StatSplits
+    rolling_averages: RollingAverages
+    home_splits: StatSplits
+    away_splits: StatSplits
+    b2b_splits: StatSplits
+    rest_splits: StatSplits
+    vs_elite_def: StatSplits
+    vs_weak_def: StatSplits
+    opponent_context: Optional[OpponentContext] = None
+    vs_stats: Optional[VsStats] = None

@@ -119,7 +119,7 @@ export default function ParlayPage() {
     <div className="space-y-8">
       {/* Header */}
       <section>
-        <div className="flex items-center justify-between">
+        <div className="flex items-start sm:items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl md:text-3xl font-bold text-text-primary tracking-tight">Parlay Builder</h1>
             <p className="text-sm text-text-secondary mt-1">
@@ -128,14 +128,14 @@ export default function ParlayPage() {
                 : `${picks.length} pending pick${picks.length !== 1 ? 's' : ''} · ${selected.length} selected`}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-shrink-0">
             {selectedIds.size > 0 && (
               <button
                 onClick={() => setSelectedIds(new Set())}
                 className="btn btn-secondary text-sm"
               >
                 <X className="w-4 h-4" />
-                Clear Selection
+                <span className="hidden sm:inline">Clear Selection</span>
               </button>
             )}
             <button onClick={() => refetch()} className="btn btn-secondary text-sm" title="Refresh">
@@ -162,6 +162,37 @@ export default function ParlayPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Summary panel - shown first on mobile when picks selected */}
+          {selected.length > 0 && (
+            <div className="lg:hidden space-y-4">
+              <div className="card p-4 space-y-3">
+                <h2 className="text-sm font-semibold text-text-primary tracking-tight">Parlay Summary</h2>
+                <div className="flex items-center gap-6">
+                  <div>
+                    <div className="text-[10px] text-text-muted uppercase tracking-wider">Legs</div>
+                    <div className="font-mono text-lg font-bold text-text-primary">{selected.length}</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-text-muted uppercase tracking-wider">Prob</div>
+                    <div className={`font-mono text-lg font-bold ${combinedProb >= 20 ? 'text-accent-success' : combinedProb >= 10 ? 'text-accent' : 'text-accent-danger'}`}>
+                      {combinedProb.toFixed(1)}%
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-text-muted uppercase tracking-wider">Payout</div>
+                    <div className="font-mono text-lg font-bold text-text-primary">{parlayPayout.toFixed(2)}x</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-text-muted uppercase tracking-wider">EV</div>
+                    <div className={`font-mono text-lg font-bold ${expectedValue > 0 ? 'text-accent-success' : 'text-accent-danger'}`}>
+                      {expectedValue > 0 ? '+' : ''}{(expectedValue * 100).toFixed(1)}%
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Pick list */}
           <div className="lg:col-span-2 space-y-3">
             {/* Sort bar */}
@@ -218,7 +249,7 @@ export default function ParlayPage() {
                       className="absolute inset-0 rounded-xl ring-1 ring-accent/40 animate-pop pointer-events-none"
                     />
                   )}
-                  <div className="flex items-start gap-3">
+                  <div className="flex items-start gap-2 sm:gap-3">
                     {/* Checkbox */}
                     <div className={`mt-1 w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${
                       inParlay ? 'bg-accent border-accent' : 'border-border-subtle'
@@ -230,17 +261,17 @@ export default function ParlayPage() {
                       )}
                     </div>
 
-                    {/* Player headshot */}
+                    {/* Player headshot - hidden on very small screens */}
                     <img
                       src={getNbaHeadshotUrl(headshotId)}
                       alt={pick.player}
-                      className="w-11 h-11 rounded-xl object-cover bg-bg-secondary flex-shrink-0 shadow-sm"
+                      className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl object-cover bg-bg-secondary flex-shrink-0 shadow-sm hidden xs:block"
                       onError={e => { (e.target as HTMLImageElement).src = getNbaHeadshotUrl(0) }}
                     />
 
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className="font-medium text-text-primary truncate">{pick.player}</span>
+                      <div className="flex items-center gap-2 mb-2 flex-wrap">
+                        <span className="font-medium text-text-primary truncate text-sm sm:text-base">{pick.player}</span>
                         {pick.team_abbrev && (
                           <span className="text-[10px] text-text-muted font-mono">{pick.team_abbrev}</span>
                         )}
@@ -248,7 +279,7 @@ export default function ParlayPage() {
                           {pick.direction}
                         </span>
                       </div>
-                      <div className="flex flex-wrap gap-4 text-sm">
+                      <div className="flex flex-wrap gap-x-3 gap-y-1 sm:gap-4 text-xs sm:text-sm">
                         <div>
                           <span className="text-text-muted">Stat: </span>
                           <span className="font-mono font-semibold text-text-primary">{pick.stat}</span>
@@ -271,7 +302,7 @@ export default function ParlayPage() {
                         </div>
                       </div>
                       {pick.opponent && (
-                        <div className="text-xs text-text-muted mt-1">
+                        <div className="text-[11px] sm:text-xs text-text-muted mt-1">
                           vs {pick.opponent}{pick.game_date ? ` · ${pick.game_date}` : ''}
                         </div>
                       )}
@@ -281,7 +312,7 @@ export default function ParlayPage() {
                       <button
                         onClick={e => { e.stopPropagation(); handleDelete(pick.id) }}
                         disabled={deletingId === pick.id}
-                        className="p-1 rounded text-text-muted hover:text-accent-danger transition-colors"
+                        className="p-1.5 rounded text-text-muted hover:text-accent-danger transition-colors"
                         title="Remove pick"
                       >
                         {deletingId === pick.id ? (
@@ -313,8 +344,8 @@ export default function ParlayPage() {
             })}
           </div>
 
-          {/* Summary panel */}
-          <div className="space-y-4">
+          {/* Summary panel - desktop sidebar */}
+          <div className="hidden lg:block space-y-4">
             <div className="card p-5 space-y-4">
               <h2 className="text-base font-semibold text-text-primary tracking-tight">Parlay Summary</h2>
 

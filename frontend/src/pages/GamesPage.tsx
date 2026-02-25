@@ -55,18 +55,18 @@ export default function GamesPage() {
     <div className="space-y-8">
       {/* Header */}
       <section>
-        <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center justify-between gap-3 mb-2">
           <h1 className="text-2xl md:text-3xl font-bold text-text-primary tracking-tight">Today's Games</h1>
-          <button onClick={handlePredict} disabled={isStreaming} className="btn btn-primary text-sm">
+          <button onClick={handlePredict} disabled={isStreaming} className="btn btn-primary text-sm flex-shrink-0">
             {isStreaming ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Predicting...
+                <span className="hidden sm:inline">Predicting...</span>
               </>
             ) : (
               <>
                 <RefreshCw className="w-4 h-4" />
-                Refresh
+                <span className="hidden sm:inline">Refresh</span>
               </>
             )}
           </button>
@@ -139,9 +139,9 @@ export default function GamesPage() {
       )}
 
       {/* How It Works */}
-      <section className="card p-8">
-        <h2 className="text-lg font-semibold text-text-primary mb-8 tracking-tight">How Game Predictions Work</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+      <section className="card p-5 sm:p-8">
+        <h2 className="text-lg font-semibold text-text-primary mb-6 sm:mb-8 tracking-tight">How Game Predictions Work</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-5 sm:gap-6">
           {[
             { icon: BarChart3, t: 'Team Stats', d: 'Offensive & defensive ratings, pace, and net rating' },
             { icon: Zap, t: 'Context', d: 'Rest days, home court, back-to-backs, and head-to-head' },

@@ -23,18 +23,9 @@ async def get_todays_best_bets(
     min_edge: float = Query(default=5.0, description="Minimum edge percentage to include"),
     limit: int = Query(default=10, ge=1, le=50, description="Maximum number of bets to return")
 ):
-    """
-    Get the best betting opportunities for today's games.
-
-    This endpoint fetches today's props from The Odds API, runs predictions
-    for each player, and returns the props with the highest expected edge.
-
-    Note: This can be slow as it needs to run predictions for multiple players.
-    Consider using a cached result in production.
-    """
-    service = get_bets_service()
-    result = await service.get_todays_best_bets(min_edge=min_edge, limit=limit)
-    return BestBetsResponse(**result)
+    """Best bets disabled — returns empty until re-enabled."""
+    from datetime import datetime
+    return BestBetsResponse(bets=[], generated_at=datetime.now().isoformat(), games_count=0)
 
 
 @router.get("/quick", response_model=BestBetsResponse)
