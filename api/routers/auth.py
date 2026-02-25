@@ -159,3 +159,25 @@ async def upload_avatar(
         "role": updated.get("role", "user"),
         "avatar_url": updated.get("avatar_url"),
     }
+
+
+@router.delete("/avatar", status_code=200)
+async def delete_avatar(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+
+    # Delete all avatar files for this user from disk
+    for old in _AVATAR_DIR.glob(f"{user_id}.*"):
+        old.unlink(missing_ok=True)
+
+    updated = db.clear_user_avatar(user_id)
+    if not updated:
+        raise HTTPException(status_code=500, detail="Failed to update user")
+
+    return {
+        "id": updated["id"],
+        "email": updated["email"],
+        "username": updated["username"],
+        "created_at": updated["created_at"],
+        "role": updated.get("role", "user"),
+        "avatar_url": updated.get("avatar_url"),
+    }
