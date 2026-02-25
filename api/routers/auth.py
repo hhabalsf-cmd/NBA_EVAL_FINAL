@@ -132,15 +132,24 @@ async def upload_avatar(
 
     ext = _EXT_MAP[file.content_type]
     filename = f"{current_user['id']}.{ext}"
-    # Remove any old avatar files for this user (different extension)
-    for old in _AVATAR_DIR.glob(f"{current_user['id']}.*"):
-        old.unlink(missing_ok=True)
-
     dest = _AVATAR_DIR / filename
-    dest.write_bytes(contents)
+
+    # Write new file first — only clean up old files after successful write
+    try:
+        dest.write_bytes(contents)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="Failed to save avatar") from exc
+
+    # Remove old avatar files with a different extension (e.g. old .jpg when uploading .png)
+    for old in _AVATAR_DIR.glob(f"{current_user['id']}.*"):
+        if old != dest:
+            old.unlink(missing_ok=True)
 
     avatar_url = f"/uploads/avatars/{filename}"
     updated = db.update_user_avatar(current_user["id"], avatar_url)
+
+    if not updated:
+        raise HTTPException(status_code=500, detail="Failed to retrieve updated user")
 
     return {
         "id": updated["id"],
