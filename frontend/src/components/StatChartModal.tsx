@@ -122,14 +122,14 @@ export default function StatChartModal({ stat, gameLog, onClose }: StatChartModa
               formatter={(value: string) => value === 'value' ? label : 'L10 Rolling Avg'}
               wrapperStyle={{ fontSize: 11, color: 'var(--text-muted)' }}
             />
-            <Bar dataKey="value" fill="var(--accent)" opacity={0.85} radius={[3, 3, 0, 0]} maxBarSize={28} />
+            <Bar dataKey="value" fill="rgba(107,191,138,0.75)" radius={[3, 3, 0, 0]} maxBarSize={28} />
             <Line
               type="monotone"
               dataKey="rollAvg"
-              stroke="var(--accent-success)"
+              stroke="#FFFFFF"
               strokeWidth={2}
               dot={false}
-              activeDot={{ r: 4, fill: 'var(--accent-success)' }}
+              activeDot={{ r: 4, fill: '#FFFFFF' }}
             />
           </ComposedChart>
         </ResponsiveContainer>

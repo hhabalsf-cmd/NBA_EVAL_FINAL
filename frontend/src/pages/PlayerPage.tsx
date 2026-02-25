@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Check, Loader2, Zap, PlaySquare } from 'lucide-react'
+import { useParams, useNavigate, Link } from 'react-router-dom'
+import { ArrowLeft, Check, Loader2, Zap, PlaySquare, FlaskConical } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { usePrediction } from '../hooks/usePrediction'
 import PredictionCard from '../components/PredictionCard'
@@ -147,6 +147,13 @@ export default function PlayerPage() {
           <div className="flex-1 max-w-sm hidden sm:block">
             <PlayerSearch placeholder="Search another player…" />
           </div>
+          <Link
+            to={`/research/${encodeURIComponent(result.player_name)}`}
+            className="btn btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5 flex-shrink-0"
+          >
+            <FlaskConical className="w-3.5 h-3.5" />
+            Research
+          </Link>
         </div>
         <div className="flex items-center gap-4 sm:gap-5">
           <img
@@ -408,7 +415,7 @@ function EvalResult({
   }
 
   return (
-    <div className={`mt-6 p-4 sm:p-5 rounded-xl border ${isOver ? 'border-accent-success/15 bg-accent-success/[0.03]' : 'border-accent-danger/15 bg-accent-danger/[0.03]'}`}>
+    <div className={`mt-6 p-4 sm:p-5 rounded-xl border-y border-r ${isOver ? 'border-accent-success/20 bg-accent-success/[0.04] border-l-4 border-l-accent-success' : 'border-accent-danger/20 bg-accent-danger/[0.04] border-l-4 border-l-accent-danger'}`}>
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 sm:gap-5">
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-3 sm:mb-4 flex-wrap">

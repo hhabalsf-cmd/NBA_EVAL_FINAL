@@ -3,19 +3,55 @@
 @tailwind utilities;
 
 :root {
+  /* Dark theme (default) */
   --bg-primary: #09090B;
   --bg-secondary: #131316;
   --bg-tertiary: #1A1A1F;
   --bg-elevated: #232329;
-  --accent: #C9A87C;
-  --accent-hover: #B8956A;
+  --accent: #06B6D4;
+  --accent-hover: #0891B2;
+  --accent-muted: rgba(6, 182, 212, 0.12);
+  --accent-glow: rgba(6, 182, 212, 0.15);
+  --border-accent: rgba(6, 182, 212, 0.25);
   --accent-success: #6BBF8A;
+  --accent-warning: #E8A430;
   --accent-danger: #D4736E;
   --text-primary: #EDEDEC;
   --text-secondary: #8F8B87;
   --text-muted: #5C5955;
   --border-subtle: #1E1E22;
   --border-default: #2A2A30;
+  --row-hover: rgba(255, 255, 255, 0.015);
+  --shadow-card: 0 2px 12px rgba(0, 0, 0, 0.25);
+  --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* Light theme overrides */
+:root.light {
+  --bg-primary: #F8F8FA;
+  --bg-secondary: #EFEFF3;
+  --bg-tertiary: #E6E6EB;
+  --bg-elevated: #DCDCE2;
+  --accent: #0E7490;
+  --accent-hover: #155E75;
+  --accent-muted: rgba(14, 116, 144, 0.10);
+  --accent-glow: rgba(14, 116, 144, 0.12);
+  --border-accent: rgba(14, 116, 144, 0.2);
+  --accent-success: #237A45;
+  --accent-warning: #B5710D;
+  --accent-danger: #A83030;
+  --text-primary: #111113;
+  --text-secondary: #4A4744;
+  --text-muted: #8A8580;
+  --border-subtle: #D8D8DE;
+  --border-default: #BBBBC4;
+  --row-hover: rgba(0, 0, 0, 0.025);
+  --shadow-card: 0 2px 12px rgba(0, 0, 0, 0.08);
+  --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.10);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.14);
 }
 
 * {
@@ -24,6 +60,7 @@
 
 html {
   scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
@@ -34,6 +71,8 @@ body {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+  overflow-x: hidden;
 }
 
 /* Scrollbar */
@@ -61,24 +100,45 @@ body {
     background: var(--bg-tertiary);
     border: 1px solid var(--border-subtle);
     border-radius: 12px;
+    box-shadow: var(--shadow-sm);
+  }
+
+  /* Safe area padding for bottom nav on notched phones */
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* Hide scrollbar while keeping scroll functionality */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
   }
 }
 
 /* Card hover */
 .card-hover {
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
 .card-hover:hover {
   border-color: var(--border-default);
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+/* Card accent — amber top border for highlighted stat/prediction cards */
+.card-accent {
+  border-top: 2px solid var(--accent);
 }
 
 /* Progress bar */
 .progress-bar {
-  height: 3px;
+  height: 4px;
   background: var(--bg-elevated);
-  border-radius: 2px;
+  border-radius: 9999px;
   overflow: hidden;
 }
 
@@ -86,20 +146,20 @@ body {
   height: 100%;
   background: var(--accent);
   transition: width 0.3s ease;
-  border-radius: 2px;
+  border-radius: 9999px;
 }
 
 /* Confidence meter */
 .confidence-meter {
-  height: 4px;
+  height: 8px;
   background: var(--bg-elevated);
-  border-radius: 2px;
+  border-radius: 9999px;
   overflow: hidden;
 }
 
 .confidence-fill {
   height: 100%;
-  border-radius: 2px;
+  border-radius: 9999px;
   transition: width 0.5s ease;
 }
 
@@ -113,9 +173,18 @@ input[type="password"] {
   border-radius: 8px;
   padding: 10px 14px;
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: 1rem; /* 16px prevents iOS zoom on focus */
   font-family: inherit;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+@media (min-width: 640px) {
+  input[type="text"],
+  input[type="number"],
+  input[type="email"],
+  input[type="password"] {
+    font-size: 0.875rem;
+  }
 }
 
 input[type="text"]:focus,
@@ -124,7 +193,7 @@ input[type="email"]:focus,
 input[type="password"]:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(201, 168, 124, 0.1);
+  box-shadow: 0 0 0 3px var(--accent-muted);
 }
 
 input[type="text"]::placeholder,
@@ -141,22 +210,25 @@ input[type="password"]::placeholder {
   font-weight: 500;
   font-size: 0.875rem;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   border: none;
   letter-spacing: 0.01em;
+  min-height: 44px; /* touch-friendly minimum */
 }
 
 .btn-primary {
-  background: var(--accent);
-  color: #09090B;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%);
+  color: #111113;
 }
 
-.btn-primary:hover {
-  background: var(--accent-hover);
+.btn-primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, var(--accent-hover) 0%, #0E7490 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px var(--accent-glow);
 }
 
 .btn-primary:disabled {
@@ -170,9 +242,10 @@ input[type="password"]::placeholder {
   border: 1px solid var(--border-subtle);
 }
 
-.btn-secondary:hover {
+.btn-secondary:hover:not(:disabled) {
   background: var(--bg-elevated);
   border-color: var(--border-default);
+  transform: translateY(-1px);
 }
 
 .btn-over {
@@ -218,9 +291,9 @@ input[type="password"]::placeholder {
 }
 
 .pill-neutral {
-  background: rgba(201, 168, 124, 0.1);
+  background: var(--accent-muted);
   color: var(--accent);
-  border: 1px solid rgba(201, 168, 124, 0.15);
+  border: 1px solid var(--border-accent);
 }
 
 /* Table */
@@ -247,7 +320,7 @@ td {
 }
 
 tr:hover td {
-  background: rgba(255, 255, 255, 0.01);
+  background: var(--row-hover);
 }
 
 /* Spinner */
@@ -273,4 +346,37 @@ select {
   background-repeat: no-repeat;
   background-position: right 10px center;
   padding-right: 30px;
+}
+
+/* ── Typography Utilities ─────────────────────────────────────── */
+
+/* Replaces repeated `text-[11px] text-text-muted uppercase tracking-wider` */
+.label-xs {
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* Big JetBrains Mono stat display number */
+.stat-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  line-height: 1.1;
+}
+
+/* Section divider header */
+.section-header {
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  font-weight: 600;
+  padding-bottom: 0.625rem;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 0.75rem;
 }

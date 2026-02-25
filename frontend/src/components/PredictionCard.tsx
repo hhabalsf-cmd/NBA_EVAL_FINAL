@@ -20,14 +20,14 @@ export default function PredictionCard({ stat, prediction, onChartClick }: Predi
 
   const getConfidenceColor = () => {
     if (prediction.confidence >= 80) return 'bg-accent-success'
-    if (prediction.confidence >= 65) return 'bg-accent'
+    if (prediction.confidence >= 65) return 'bg-accent-warning'
     return 'bg-accent-danger'
   }
 
   const trendUp = prediction.recent_avg !== null && prediction.recent_avg !== undefined && prediction.prediction > prediction.recent_avg
 
   return (
-    <div onClick={onChartClick} className={`card p-5 ${onChartClick ? 'cursor-pointer card-hover group' : ''}`}>
+    <div onClick={onChartClick} className={`card card-accent p-5 ${onChartClick ? 'cursor-pointer card-hover group' : ''}`}>
       <div className="flex items-center justify-between mb-5">
         <span className="text-[11px] font-medium uppercase tracking-wider text-text-muted">{getStatLabel()}</span>
         <span className="font-mono font-semibold text-sm text-text-secondary">{stat}</span>

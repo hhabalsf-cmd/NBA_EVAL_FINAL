@@ -127,35 +127,35 @@ export default function HistoryPage() {
 
       {/* Profit Chart */}
       {profitData && profitData.length > 0 && (
-        <section className="card p-6">
+        <section className="card p-4 sm:p-6">
           <h2 className="text-base font-semibold text-text-primary mb-5 tracking-tight">Cumulative Profit</h2>
-          <div className="h-56">
+          <div className="h-44 sm:h-56">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={profitData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1E1E22" />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
                 <XAxis
                   dataKey="date"
-                  stroke="#5C5955"
+                  stroke="var(--text-muted)"
                   fontSize={11}
                   tickFormatter={(value) => {
                     const date = new Date(value)
                     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
                   }}
                 />
-                <YAxis stroke="#5C5955" fontSize={11} tickFormatter={(value) => `${value}u`} />
+                <YAxis stroke="var(--text-muted)" fontSize={11} tickFormatter={(value) => `${value}u`} />
                 <Tooltip
                   contentStyle={{
-                    backgroundColor: '#1A1A1F',
-                    border: '1px solid #1E1E22',
+                    background: 'var(--bg-elevated)',
+                    border: '1px solid var(--border-subtle)',
                     borderRadius: '8px',
                     fontSize: '12px',
                   }}
-                  labelStyle={{ color: '#8F8B87' }}
+                  labelStyle={{ color: 'var(--text-secondary)' }}
                 />
                 <Line
                   type="monotone"
                   dataKey="cumulative_profit"
-                  stroke="#C9A87C"
+                  stroke="#FFFFFF"
                   strokeWidth={2}
                   dot={false}
                   name="Profit (units)"
@@ -168,7 +168,7 @@ export default function HistoryPage() {
 
       {/* Performance by Stat */}
       {stats && Object.keys(stats.by_stat).length > 0 && (
-        <section className="card p-6">
+        <section className="card p-4 sm:p-6">
           <h2 className="text-base font-semibold text-text-primary mb-5 tracking-tight">Performance by Stat</h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
             {['PTS', 'REB', 'AST', 'PRA'].map(stat => {
@@ -190,9 +190,9 @@ export default function HistoryPage() {
         </section>
       )}
 
-      {/* Picks Table */}
+      {/* Picks */}
       <section className="card overflow-hidden">
-        <div className="p-5 border-b border-border-subtle flex items-center justify-between">
+        <div className="p-4 sm:p-5 border-b border-border-subtle flex items-center justify-between">
           <h2 className="text-base font-semibold text-text-primary tracking-tight">
             {showPending ? 'Pending Picks' : 'All Picks'}
           </h2>
@@ -217,98 +217,174 @@ export default function HistoryPage() {
             <Loader2 className="w-5 h-5 text-accent animate-spin" />
           </div>
         ) : !picks || picks.length === 0 ? (
-          <div className="text-center py-16">
+          <div className="text-center py-16 px-4">
             <p className="text-sm text-text-secondary">No picks yet. Save picks from the player page to track them here.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Player</th>
-                  <th>Stat</th>
-                  <th>Line</th>
-                  <th>Prediction</th>
-                  <th>Direction</th>
-                  <th>Edge</th>
-                  <th>Result</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {picks.map((pick: Pick) => (
-                  <tr key={pick.id}>
-                    <td className="text-xs text-text-muted whitespace-nowrap">{formatDate(pick.timestamp)}</td>
-                    <td className="font-medium text-text-primary text-sm">{pick.player}</td>
-                    <td className="font-mono text-sm">{pick.stat}</td>
-                    <td className="text-sm">{pick.line}</td>
-                    <td className="text-sm">{pick.prediction.toFixed(1)}</td>
-                    <td>
-                      <span className={`pill ${pick.direction === 'OVER' ? 'pill-over' : 'pill-under'}`}>
-                        {pick.direction}
-                      </span>
-                    </td>
-                    <td className={`font-mono text-sm ${Math.abs(pick.edge) >= 3 ? 'text-accent' : 'text-text-muted'}`}>
-                      {pick.edge > 0 ? '+' : ''}{pick.edge.toFixed(1)}
-                    </td>
-                    <td>
-                      {pick.voided ? (
-                        <span className="text-xs font-medium text-text-muted uppercase tracking-wider">
-                          {pick.void_reason || 'DNP'}
-                        </span>
-                      ) : pick.actual_result !== null && pick.actual_result !== undefined ? (
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm text-text-primary">{pick.actual_result}</span>
-                          <span className={`text-sm font-semibold ${pick.won ? 'text-accent-success' : 'text-accent-danger'}`}>
-                            {pick.won ? 'W' : 'L'}
-                          </span>
-                        </div>
-                      ) : gradePickId === pick.id ? (
-                        <div className="flex items-center gap-1.5">
-                          <input
-                            type="number"
-                            value={gradeValue}
-                            onChange={e => setGradeValue(e.target.value)}
-                            placeholder="Result"
-                            className="w-16 px-2 py-1 text-xs"
-                          />
-                          <button
-                            onClick={() => handleGradePick(pick)}
-                            disabled={gradePickMutation.isPending}
-                            className="text-accent-success hover:opacity-80 transition-opacity"
-                          >
-                            <Check className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => setGradePickId(null)}
-                            className="text-text-muted hover:text-text-primary transition-colors"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => setGradePickId(pick.id)}
-                          className="text-xs text-text-muted hover:text-text-primary transition-colors"
-                        >
-                          Grade
-                        </button>
-                      )}
-                    </td>
-                    <td>
-                      <button
-                        onClick={() => { if (confirm('Delete this pick?')) deletePickMutation.mutate(pick.id) }}
-                        className="text-text-muted hover:text-accent-danger transition-colors"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </td>
+          <>
+            {/* Desktop Table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Player</th>
+                    <th>Stat</th>
+                    <th>Line</th>
+                    <th>Prediction</th>
+                    <th>Direction</th>
+                    <th>Edge</th>
+                    <th>Result</th>
+                    <th></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {picks.map((pick: Pick) => (
+                    <tr key={pick.id}>
+                      <td className="text-xs text-text-muted whitespace-nowrap">{formatDate(pick.timestamp)}</td>
+                      <td className="font-medium text-text-primary text-sm">{pick.player}</td>
+                      <td className="font-mono text-sm">{pick.stat}</td>
+                      <td className="text-sm">{pick.line}</td>
+                      <td className="text-sm">{pick.prediction.toFixed(1)}</td>
+                      <td>
+                        <span className={`pill ${pick.direction === 'OVER' ? 'pill-over' : 'pill-under'}`}>
+                          {pick.direction}
+                        </span>
+                      </td>
+                      <td className={`font-mono text-sm ${Math.abs(pick.edge) >= 3 ? 'text-accent' : 'text-text-muted'}`}>
+                        {pick.edge > 0 ? '+' : ''}{pick.edge.toFixed(1)}
+                      </td>
+                      <td>
+                        {pick.voided ? (
+                          <span className="text-xs font-medium text-text-muted uppercase tracking-wider">
+                            {pick.void_reason || 'DNP'}
+                          </span>
+                        ) : pick.actual_result !== null && pick.actual_result !== undefined ? (
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm text-text-primary">{pick.actual_result}</span>
+                            <span className={`text-sm font-semibold ${pick.won ? 'text-accent-success' : 'text-accent-danger'}`}>
+                              {pick.won ? 'W' : 'L'}
+                            </span>
+                          </div>
+                        ) : gradePickId === pick.id ? (
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="number"
+                              value={gradeValue}
+                              onChange={e => setGradeValue(e.target.value)}
+                              placeholder="Result"
+                              className="w-16 px-2 py-1 text-xs"
+                            />
+                            <button
+                              onClick={() => handleGradePick(pick)}
+                              disabled={gradePickMutation.isPending}
+                              className="text-accent-success hover:opacity-80 transition-opacity"
+                            >
+                              <Check className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => setGradePickId(null)}
+                              className="text-text-muted hover:text-text-primary transition-colors"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setGradePickId(pick.id)}
+                            className="text-xs text-text-muted hover:text-text-primary transition-colors"
+                          >
+                            Grade
+                          </button>
+                        )}
+                      </td>
+                      <td>
+                        <button
+                          onClick={() => { if (confirm('Delete this pick?')) deletePickMutation.mutate(pick.id) }}
+                          className="text-text-muted hover:text-accent-danger transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile Card View */}
+            <div className="md:hidden divide-y divide-border-subtle">
+              {picks.map((pick: Pick) => {
+                const isOver = pick.direction === 'OVER'
+                return (
+                  <div key={pick.id} className={`p-4 border-l-2 ${isOver ? 'border-l-accent-success' : 'border-l-accent-danger'}`}>
+                    <div className="flex items-start justify-between mb-2">
+                      <div>
+                        <div className="font-medium text-text-primary text-sm">{pick.player}</div>
+                        <div className="text-[11px] text-text-muted mt-0.5">{formatDate(pick.timestamp)}</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {pick.voided ? (
+                          <span className="text-[10px] font-medium text-text-muted uppercase tracking-wider">
+                            {pick.void_reason || 'DNP'}
+                          </span>
+                        ) : pick.actual_result !== null && pick.actual_result !== undefined ? (
+                          <span className={`font-mono text-sm font-semibold ${pick.won ? 'text-accent-success' : 'text-accent-danger'}`}>
+                            {pick.actual_result} {pick.won ? 'W' : 'L'}
+                          </span>
+                        ) : gradePickId === pick.id ? (
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="number"
+                              value={gradeValue}
+                              onChange={e => setGradeValue(e.target.value)}
+                              placeholder="Result"
+                              className="w-16 px-2 py-1 text-xs"
+                            />
+                            <button
+                              onClick={() => handleGradePick(pick)}
+                              disabled={gradePickMutation.isPending}
+                              className="text-accent-success hover:opacity-80 transition-opacity p-1"
+                            >
+                              <Check className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => setGradePickId(null)}
+                              className="text-text-muted hover:text-text-primary transition-colors p-1"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setGradePickId(pick.id)}
+                            className="text-xs text-accent font-medium px-2 py-1"
+                          >
+                            Grade
+                          </button>
+                        )}
+                        <button
+                          onClick={() => { if (confirm('Delete this pick?')) deletePickMutation.mutate(pick.id) }}
+                          className="text-text-muted hover:text-accent-danger transition-colors p-1"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <span className={`pill ${isOver ? 'pill-over' : 'pill-under'}`}>{pick.direction}</span>
+                      <span className="font-mono text-sm text-text-primary">{pick.stat} {pick.line}</span>
+                      <span className="text-text-muted text-xs">&rarr;</span>
+                      <span className="font-mono text-sm text-text-secondary">{pick.prediction.toFixed(1)}</span>
+                      <span className={`font-mono text-xs ${Math.abs(pick.edge) >= 3 ? 'text-accent' : 'text-text-muted'}`}>
+                        {pick.edge > 0 ? '+' : ''}{pick.edge.toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </>
         )}
       </section>
     </div>

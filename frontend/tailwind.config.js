@@ -8,26 +8,29 @@ export default {
     extend: {
       colors: {
         bg: {
-          primary: '#09090B',
-          secondary: '#131316',
-          tertiary: '#1A1A1F',
-          elevated: '#232329',
+          primary: 'var(--bg-primary)',
+          secondary: 'var(--bg-secondary)',
+          tertiary: 'var(--bg-tertiary)',
+          elevated: 'var(--bg-elevated)',
         },
         accent: {
-          DEFAULT: '#C9A87C',
-          hover: '#B8956A',
-          muted: 'rgba(201, 168, 124, 0.12)',
-          success: '#6BBF8A',
-          danger: '#D4736E',
+          DEFAULT: 'var(--accent)',
+          hover: 'var(--accent-hover)',
+          muted: 'var(--accent-muted)',
+          glow: 'var(--accent-glow)',
+          success: 'var(--accent-success)',
+          warning: 'var(--accent-warning)',
+          danger: 'var(--accent-danger)',
         },
         text: {
-          primary: '#EDEDEC',
-          secondary: '#8F8B87',
-          muted: '#5C5955',
+          primary: 'var(--text-primary)',
+          secondary: 'var(--text-secondary)',
+          muted: 'var(--text-muted)',
         },
         border: {
-          subtle: '#1E1E22',
-          DEFAULT: '#2A2A30',
+          subtle: 'var(--border-subtle)',
+          DEFAULT: 'var(--border-default)',
+          accent: 'var(--border-accent)',
         },
       },
       fontFamily: {
@@ -69,6 +72,12 @@ export default {
       borderRadius: {
         'xl': '12px',
         '2xl': '16px',
+      },
+      boxShadow: {
+        'sm': 'var(--shadow-sm)',
+        'md': 'var(--shadow-md)',
+        'lg': 'var(--shadow-lg)',
+        'card': 'var(--shadow-card)',
       },
     },
   },

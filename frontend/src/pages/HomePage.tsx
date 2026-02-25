@@ -2,8 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, BarChart3, Search as SearchIcon, Target } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import PlayerSearch from '../components/PlayerSearch'
-import BetCard from '../components/BetCard'
-import { getPerformanceStats, getTodaysBestBets } from '../api/client'
+import { getPerformanceStats } from '../api/client'
 
 export default function HomePage() {
   const { data: stats } = useQuery({
@@ -12,12 +11,6 @@ export default function HomePage() {
     staleTime: 1000 * 60 * 5,
   })
 
-  const { data: bestBets, isLoading: betsLoading } = useQuery({
-    queryKey: ['best-bets'],
-    queryFn: () => getTodaysBestBets(5, 3),
-    enabled: false,
-    staleTime: 1000 * 60 * 30,
-  })
 
   return (
     <div className="space-y-12">
@@ -41,8 +34,8 @@ export default function HomePage() {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-5">
             <div className="flex flex-wrap items-center gap-6">
               <div>
-                <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Record</div>
-                <div className="font-mono text-lg font-semibold">
+                <div className="label-xs mb-1">Record</div>
+                <div className="font-mono text-xl font-semibold">
                   <span className="text-accent-success">{stats.wins}W</span>
                   <span className="text-text-muted mx-1">-</span>
                   <span className="text-accent-danger">{stats.losses}L</span>
@@ -50,8 +43,8 @@ export default function HomePage() {
               </div>
               <div className="h-8 w-px bg-border-subtle hidden sm:block" />
               <div>
-                <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Win Rate</div>
-                <div className={`font-mono text-lg font-semibold ${
+                <div className="label-xs mb-1">Win Rate</div>
+                <div className={`font-mono text-xl font-semibold ${
                   stats.win_rate >= 55 ? 'text-accent-success' : stats.win_rate >= 50 ? 'text-accent' : 'text-accent-danger'
                 }`}>
                   {stats.win_rate.toFixed(1)}%
@@ -59,8 +52,8 @@ export default function HomePage() {
               </div>
               <div className="h-8 w-px bg-border-subtle hidden sm:block" />
               <div>
-                <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">ROI</div>
-                <div className={`font-mono text-lg font-semibold ${stats.roi > 0 ? 'text-accent-success' : 'text-accent-danger'}`}>
+                <div className="label-xs mb-1">ROI</div>
+                <div className={`font-mono text-xl font-semibold ${stats.roi > 0 ? 'text-accent-success' : 'text-accent-danger'}`}>
                   {stats.roi > 0 ? '+' : ''}{stats.roi.toFixed(1)}%
                 </div>
               </div>
@@ -73,33 +66,18 @@ export default function HomePage() {
         </section>
       )}
 
-      {/* Top Picks */}
+      {/* Top Picks — temporarily unavailable */}
       <section>
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-xl font-semibold text-text-primary tracking-tight">Top Picks</h2>
           <span className="text-sm text-text-muted">Highest edge opportunities</span>
         </div>
-
-        {betsLoading ? (
-          <div className="flex items-center justify-center py-16">
-            <div className="spinner" />
-            <span className="ml-3 text-text-secondary text-sm">Analyzing today's props...</span>
-          </div>
-        ) : bestBets && bestBets.bets.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {bestBets.bets.map((bet, index) => (
-              <BetCard key={`${bet.player}-${bet.stat}`} bet={bet} rank={index + 1} />
-            ))}
-          </div>
-        ) : (
-          <div className="card p-10 text-center">
-            <h3 className="text-base font-medium text-text-primary mb-2">Search for Players</h3>
-            <p className="text-sm text-text-secondary max-w-md mx-auto leading-relaxed">
-              Use the search above to find a player and get ML-powered predictions.
-              Top picks will appear here when games are available.
-            </p>
-          </div>
-        )}
+        <div className="card p-10 text-center opacity-60">
+          <h3 className="text-base font-medium text-text-primary mb-2">Coming Soon</h3>
+          <p className="text-sm text-text-secondary max-w-md mx-auto leading-relaxed">
+            Auto-generated top picks will appear here. Use the search above to manually evaluate a player.
+          </p>
+        </div>
       </section>
 
       {/* Performance by Stat */}
@@ -111,16 +89,16 @@ export default function HomePage() {
               const statData = stats.by_stat[stat]
               if (!statData) {
                 return (
-                  <div key={stat} className="card p-5 text-center opacity-30">
-                    <div className="text-[11px] text-text-muted uppercase tracking-wider mb-2">{stat}</div>
+                  <div key={stat} className="card card-accent p-5 text-center opacity-30">
+                    <div className="label-xs mb-2">{stat}</div>
                     <div className="font-mono text-2xl font-bold text-text-muted">--</div>
                     <div className="text-xs text-text-muted mt-1">No data</div>
                   </div>
                 )
               }
               return (
-                <div key={stat} className="card p-5 text-center">
-                  <div className="text-[11px] text-text-muted uppercase tracking-wider mb-2">{stat}</div>
+                <div key={stat} className="card card-accent p-5 text-center">
+                  <div className="label-xs mb-2">{stat}</div>
                   <div className={`font-mono text-2xl font-bold ${
                     statData.win_rate >= 55 ? 'text-accent-success' : statData.win_rate >= 50 ? 'text-accent' : 'text-accent-danger'
                   }`}>

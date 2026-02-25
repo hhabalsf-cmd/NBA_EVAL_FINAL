@@ -47,11 +47,11 @@ export default function GameCard({ prediction }: GameCardProps) {
         </div>
         <div className="h-1.5 bg-bg-elevated rounded-full overflow-hidden flex">
           <div
-            className={`h-full transition-all duration-500 ${!homeIsWinner ? 'bg-accent' : 'bg-bg-secondary'}`}
+            className={`h-full transition-all duration-500 ${!homeIsWinner ? (confidence >= 65 ? 'bg-accent-success' : confidence >= 55 ? 'bg-accent-warning' : 'bg-text-muted') : 'bg-bg-secondary'}`}
             style={{ width: `${away_win_prob}%` }}
           />
           <div
-            className={`h-full transition-all duration-500 ${homeIsWinner ? 'bg-accent' : 'bg-bg-secondary'}`}
+            className={`h-full transition-all duration-500 ${homeIsWinner ? (confidence >= 65 ? 'bg-accent-success' : confidence >= 55 ? 'bg-accent-warning' : 'bg-text-muted') : 'bg-bg-secondary'}`}
             style={{ width: `${home_win_prob}%` }}
           />
         </div>
@@ -62,7 +62,7 @@ export default function GameCard({ prediction }: GameCardProps) {
         <div className="flex items-center gap-1.5">
           <span className="text-[11px] text-text-muted">Conf:</span>
           <span className={`font-mono font-semibold text-sm ${
-            confidence >= 65 ? 'text-accent-success' : confidence >= 55 ? 'text-accent' : 'text-text-secondary'
+            confidence >= 65 ? 'text-accent-success' : confidence >= 55 ? 'text-accent-warning' : 'text-text-muted'
           }`}>
             {confidence.toFixed(1)}%
           </span>
