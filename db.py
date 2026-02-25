@@ -177,6 +177,21 @@ def update_user_avatar(user_id: str, avatar_url: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+def clear_user_avatar(user_id: str) -> Optional[dict]:
+    """Set avatar_url to NULL for user. Returns updated user dict."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE users SET avatar_url = NULL WHERE id = ?",
+        (user_id,)
+    )
+    conn.commit()
+    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 def save_game_prediction(prediction_data: dict) -> int:
     """Save a game prediction to the database."""
     conn = get_connection()
