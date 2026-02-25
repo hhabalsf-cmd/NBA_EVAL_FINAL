@@ -158,6 +158,79 @@ export interface ProgressEvent {
   data?: PredictionResult
 }
 
+// ── Auth helpers ────────────────────────────────────────────
+
+const TOKEN_KEY = 'nba_eval_token'
+
+export function getAuthToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY)
+}
+
+export function setAuthToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token)
+}
+
+export function clearAuthToken(): void {
+  localStorage.removeItem(TOKEN_KEY)
+}
+
+function authHeaders(): HeadersInit {
+  const token = getAuthToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+// ── Auth API functions ─────────────────────────────────────
+
+export interface AuthUser {
+  id: string
+  email: string
+  username: string
+  created_at: string
+}
+
+export interface AuthResponse {
+  token: string
+  user: AuthUser
+}
+
+export async function authRegister(
+  email: string,
+  username: string,
+  password: string
+): Promise<AuthResponse> {
+  const r = await fetch(`${API_BASE}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, username, password }),
+  })
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}))
+    throw new Error((err as { detail?: string }).detail || 'Registration failed')
+  }
+  return r.json()
+}
+
+export async function authLogin(email: string, password: string): Promise<AuthResponse> {
+  const r = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  })
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}))
+    throw new Error((err as { detail?: string }).detail || 'Invalid credentials')
+  }
+  return r.json()
+}
+
+export async function authGetMe(): Promise<AuthUser> {
+  const r = await fetch(`${API_BASE}/auth/me`, {
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+  })
+  if (!r.ok) throw new Error('Not authenticated')
+  return r.json()
+}
+
 // API Functions
 
 export async function getPlayerOdds(playerName: string): Promise<PlayerOdds> {
@@ -285,7 +358,9 @@ export async function getPicks(days = 30, pendingOnly = false): Promise<Pick[]> 
     days: days.toString(),
     pending_only: pendingOnly.toString(),
   })
-  const response = await fetch(`${API_BASE}/picks?${params}`)
+  const response = await fetch(`${API_BASE}/picks?${params}`, {
+    headers: { ...authHeaders() },
+  })
   if (!response.ok) throw new Error('Failed to fetch picks')
   return response.json()
 }
@@ -293,7 +368,7 @@ export async function getPicks(days = 30, pendingOnly = false): Promise<Pick[]> 
 export async function createPick(pick: Omit<Pick, 'id' | 'timestamp' | 'actual_result' | 'won'>): Promise<Pick> {
   const response = await fetch(`${API_BASE}/picks`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(pick),
   })
 
@@ -304,7 +379,7 @@ export async function createPick(pick: Omit<Pick, 'id' | 'timestamp' | 'actual_r
 export async function gradePick(pickId: number, actualResult: number): Promise<Pick> {
   const response = await fetch(`${API_BASE}/picks/${pickId}/grade`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ actual_result: actualResult }),
   })
 
@@ -315,6 +390,7 @@ export async function gradePick(pickId: number, actualResult: number): Promise<P
 export async function deletePick(pickId: number): Promise<void> {
   const response = await fetch(`${API_BASE}/picks/${pickId}`, {
     method: 'DELETE',
+    headers: { ...authHeaders() },
   })
 
   if (!response.ok) throw new Error('Failed to delete pick')
@@ -323,6 +399,7 @@ export async function deletePick(pickId: number): Promise<void> {
 export async function autoGradePicks(): Promise<{ graded_count: number; errors: string[]; results: unknown[] }> {
   const response = await fetch(`${API_BASE}/picks/auto-grade`, {
     method: 'POST',
+    headers: { ...authHeaders() },
   })
 
   if (!response.ok) throw new Error('Failed to auto-grade picks')
@@ -330,13 +407,17 @@ export async function autoGradePicks(): Promise<{ graded_count: number; errors: 
 }
 
 export async function getPerformanceStats(): Promise<PerformanceStats> {
-  const response = await fetch(`${API_BASE}/picks/stats/performance`)
+  const response = await fetch(`${API_BASE}/picks/stats/performance`, {
+    headers: { ...authHeaders() },
+  })
   if (!response.ok) throw new Error('Failed to fetch performance stats')
   return response.json()
 }
 
 export async function getCumulativeProfit(): Promise<CumulativeProfitPoint[]> {
-  const response = await fetch(`${API_BASE}/picks/stats/profit`)
+  const response = await fetch(`${API_BASE}/picks/stats/profit`, {
+    headers: { ...authHeaders() },
+  })
   if (!response.ok) throw new Error('Failed to fetch profit data')
   return response.json()
 }
