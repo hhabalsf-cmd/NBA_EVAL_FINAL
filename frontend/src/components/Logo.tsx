@@ -1,4 +1,3 @@
-import React from 'react'
 
 /* ─── Shared SVG defs (glow filter + text arcs) ─── */
 const BadgeDefs = () => (

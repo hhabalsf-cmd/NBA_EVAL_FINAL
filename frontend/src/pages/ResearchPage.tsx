@@ -806,7 +806,7 @@ export default function ResearchPage() {
                 />
               )}
               <Bar dataKey="value" radius={[3, 3, 0, 0]} maxBarSize={28}>
-                {chartData.map((entry, index) => (
+                {chartData.map((_entry, index) => (
                   <Cell
                     key={index}
                     fill="rgba(107,191,138,0.75)"

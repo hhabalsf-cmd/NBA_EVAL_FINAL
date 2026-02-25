@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
 import { Home, Gamepad2, History, Dice5, FlaskConical, Sun, Moon } from 'lucide-react'
 import { useThemeStore } from './store/themeStore'
@@ -18,12 +19,19 @@ import { useQuery } from '@tanstack/react-query'
 import { getPicks } from './api/client'
 
 function App() {
-  const { isAuthenticated } = useAuthStore()
+  const { isAuthenticated, checkAuth } = useAuthStore()
   const { theme, toggleTheme } = useThemeStore()
+
+  // Rehydrate session on app load
+  useEffect(() => {
+    checkAuth()
+  }, [checkAuth])
+
   const { data: pendingPicks = [] } = useQuery({
     queryKey: ['pending-picks'],
     queryFn: () => getPicks(30, true),
     staleTime: 1000 * 30,
+    enabled: isAuthenticated,
   })
 
   const navItems = [
