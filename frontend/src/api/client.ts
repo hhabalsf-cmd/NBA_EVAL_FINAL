@@ -246,6 +246,18 @@ export async function uploadAvatar(file: File): Promise<AuthUser> {
   }
   return r.json()
 }
+export async function deleteAvatar(): Promise<AuthUser> {
+  const r = await fetch(`${API_BASE}/auth/avatar`, {
+    method: 'DELETE',
+    headers: { ...authHeaders() },
+  })
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}))
+    throw new Error((err as { detail?: string }).detail || 'Failed to remove avatar')
+  }
+  return r.json()
+}
+
 
 
 // API Functions
