@@ -27,16 +27,38 @@ export default function UserMenu() {
     <div ref={menuRef} className="relative">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="w-8 h-8 rounded-full bg-accent/15 text-accent text-sm font-semibold flex items-center justify-center hover:bg-accent/25 transition-colors"
+        className="w-8 h-8 rounded-full overflow-hidden hover:ring-2 hover:ring-accent/40 transition-all"
+        aria-label="User menu"
       >
-        {initial}
+        {user.avatar_url ? (
+          <img
+            src={user.avatar_url}
+            alt={user.username}
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <span className="w-full h-full bg-accent/15 text-accent text-sm font-semibold flex items-center justify-center">
+            {initial}
+          </span>
+        )}
       </button>
 
       {isOpen && (
         <div className="absolute right-0 mt-2 w-56 bg-bg-tertiary border border-border-subtle rounded-xl shadow-xl shadow-black/30 overflow-hidden animate-slide-up z-50">
-          <div className="p-4 border-b border-border-subtle">
-            <div className="text-sm font-medium text-text-primary">{user.username}</div>
-            <div className="text-xs text-text-muted mt-0.5">{user.email}</div>
+          <div className="p-4 border-b border-border-subtle flex items-center gap-3">
+            <div className="w-9 h-9 rounded-full overflow-hidden flex-shrink-0">
+              {user.avatar_url ? (
+                <img src={user.avatar_url} alt={user.username} className="w-full h-full object-cover" />
+              ) : (
+                <span className="w-full h-full bg-accent/15 text-accent text-sm font-semibold flex items-center justify-center">
+                  {initial}
+                </span>
+              )}
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-text-primary truncate">{user.username}</div>
+              <div className="text-xs text-text-muted truncate">{user.email}</div>
+            </div>
           </div>
           <div className="py-1">
             <button
