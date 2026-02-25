@@ -123,3 +123,14 @@ def test_create_and_retrieve_pick_scoped_to_user():
     picks2 = client.get("/api/picks", headers={"Authorization": f"Bearer {token2}"}).json()
     assert len(picks1) == 1
     assert len(picks2) == 0
+
+
+def test_update_user_avatar_stores_url():
+    from db import create_user, update_user_avatar, get_user_by_id
+    import uuid
+    uid = str(uuid.uuid4())
+    create_user(uid, "av@test.com", "hashed", "avuser")
+    updated = update_user_avatar(uid, "/uploads/avatars/test.jpg")
+    assert updated["avatar_url"] == "/uploads/avatars/test.jpg"
+    fetched = get_user_by_id(uid)
+    assert fetched["avatar_url"] == "/uploads/avatars/test.jpg"

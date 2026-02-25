@@ -111,6 +111,8 @@ def init_db():
     users_columns = {row[1] for row in cursor.fetchall()}
     if "role" not in users_columns:
         cursor.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+    if "avatar_url" not in users_columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT")
 
     # Add user_id to picks if not present
     cursor.execute("PRAGMA table_info(picks)")
@@ -158,6 +160,21 @@ def get_user_by_id(user_id: str) -> Optional[dict]:
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def update_user_avatar(user_id: str, avatar_url: str) -> dict:
+    """Set avatar_url for user. Returns updated user dict."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE users SET avatar_url = ? WHERE id = ?",
+        (avatar_url, user_id)
+    )
+    conn.commit()
+    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row)
 
 
 def save_game_prediction(prediction_data: dict) -> int:
