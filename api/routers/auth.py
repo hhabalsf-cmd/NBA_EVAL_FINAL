@@ -165,13 +165,13 @@ async def upload_avatar(
 async def delete_avatar(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
 
-    # Delete all avatar files for this user from disk
-    for old in _AVATAR_DIR.glob(f"{user_id}.*"):
-        old.unlink(missing_ok=True)
-
     updated = db.clear_user_avatar(user_id)
     if not updated:
         raise HTTPException(status_code=500, detail="Failed to update user")
+
+    # Delete avatar files from disk only after DB write succeeds
+    for old in _AVATAR_DIR.glob(f"{user_id}.*"):
+        old.unlink(missing_ok=True)
 
     return {
         "id": updated["id"],
