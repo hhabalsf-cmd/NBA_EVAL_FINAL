@@ -116,6 +116,44 @@ def init_db():
     conn.close()
 
 
+# ── User functions ────────────────────────────────────────────
+
+def create_user(user_id: str, email: str, hashed_password: str, username: str) -> dict:
+    """Insert a new user row. Returns the created user dict."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    now = datetime.utcnow().isoformat()
+    cursor.execute(
+        "INSERT INTO users (id, email, hashed_password, username, created_at) VALUES (?, ?, ?, ?, ?)",
+        (user_id, email, hashed_password, username, now)
+    )
+    conn.commit()
+    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row)
+
+
+def get_user_by_email(email: str) -> Optional[dict]:
+    """Return user dict for given email, or None if not found."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_user_by_id(user_id: str) -> Optional[dict]:
+    """Return user dict for given id, or None if not found."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 def save_game_prediction(prediction_data: dict) -> int:
     """Save a game prediction to the database."""
     conn = get_connection()
