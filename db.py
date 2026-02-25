@@ -106,6 +106,12 @@ def init_db():
         )
     """)
 
+    # Add role to users if not present
+    cursor.execute("PRAGMA table_info(users)")
+    users_columns = {row[1] for row in cursor.fetchall()}
+    if "role" not in users_columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+
     # Add user_id to picks if not present
     cursor.execute("PRAGMA table_info(picks)")
     picks_columns = {row[1] for row in cursor.fetchall()}

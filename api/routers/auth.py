@@ -77,7 +77,7 @@ async def register(req: RegisterRequest):
     return AuthResponse(
         token=token,
         user={"id": user["id"], "email": user["email"], "username": user["username"],
-              "created_at": user["created_at"]},
+              "created_at": user["created_at"], "role": user.get("role", "user")},
     )
 
 
@@ -94,7 +94,7 @@ async def login(req: LoginRequest):
     return AuthResponse(
         token=token,
         user={"id": user["id"], "email": user["email"], "username": user["username"],
-              "created_at": user["created_at"]},
+              "created_at": user["created_at"], "role": user.get("role", "user")},
     )
 
 
@@ -105,4 +105,5 @@ async def me(current_user: dict = Depends(get_current_user)):
         "email": current_user["email"],
         "username": current_user["username"],
         "created_at": current_user["created_at"],
+        "role": current_user.get("role", "user"),
     }
