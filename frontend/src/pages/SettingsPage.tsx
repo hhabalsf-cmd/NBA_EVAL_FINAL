@@ -36,7 +36,11 @@ export default function SettingsPage() {
       return
     }
 
-    await updateAvatar(file)
+    try {
+      await updateAvatar(file)
+    } catch (err) {
+      setUploadError((err as Error).message)
+    }
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 

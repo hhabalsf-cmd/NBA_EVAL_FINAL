@@ -82,6 +82,7 @@ export const useAuthStore = create<AuthStore>((set) => ({
       }))
     } catch (err) {
       set({ error: (err as Error).message, isUploadingAvatar: false })
+      throw err
     }
   },
 }))
