@@ -3,7 +3,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
 from pydantic import BaseModel, EmailStr
@@ -19,6 +19,12 @@ from ..auth_utils import (
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 _bearer = HTTPBearer()
+
+# Avatar upload constants
+_AVATAR_DIR = Path(__file__).parent.parent.parent / "uploads" / "avatars"
+_ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
+_EXT_MAP = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
+_MAX_BYTES = 2 * 1024 * 1024  # 2 MB
 
 
 # ── Schemas ────────────────────────────────────────────────────
@@ -77,7 +83,8 @@ async def register(req: RegisterRequest):
     return AuthResponse(
         token=token,
         user={"id": user["id"], "email": user["email"], "username": user["username"],
-              "created_at": user["created_at"], "role": user.get("role", "user")},
+              "created_at": user["created_at"], "role": user.get("role", "user"),
+              "avatar_url": user.get("avatar_url")},
     )
 
 
@@ -94,7 +101,8 @@ async def login(req: LoginRequest):
     return AuthResponse(
         token=token,
         user={"id": user["id"], "email": user["email"], "username": user["username"],
-              "created_at": user["created_at"], "role": user.get("role", "user")},
+              "created_at": user["created_at"], "role": user.get("role", "user"),
+              "avatar_url": user.get("avatar_url")},
     )
 
 
@@ -106,4 +114,39 @@ async def me(current_user: dict = Depends(get_current_user)):
         "username": current_user["username"],
         "created_at": current_user["created_at"],
         "role": current_user.get("role", "user"),
+        "avatar_url": current_user.get("avatar_url"),
+    }
+
+
+@router.post("/avatar")
+async def upload_avatar(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+):
+    if file.content_type not in _ALLOWED_TYPES:
+        raise HTTPException(status_code=400, detail="Only JPEG, PNG, and WebP images are allowed")
+
+    contents = await file.read()
+    if len(contents) > _MAX_BYTES:
+        raise HTTPException(status_code=413, detail="File too large — maximum 2MB")
+
+    ext = _EXT_MAP[file.content_type]
+    filename = f"{current_user['id']}.{ext}"
+    # Remove any old avatar files for this user (different extension)
+    for old in _AVATAR_DIR.glob(f"{current_user['id']}.*"):
+        old.unlink(missing_ok=True)
+
+    dest = _AVATAR_DIR / filename
+    dest.write_bytes(contents)
+
+    avatar_url = f"/uploads/avatars/{filename}"
+    updated = db.update_user_avatar(current_user["id"], avatar_url)
+
+    return {
+        "id": updated["id"],
+        "email": updated["email"],
+        "username": updated["username"],
+        "created_at": updated["created_at"],
+        "role": updated.get("role", "user"),
+        "avatar_url": updated.get("avatar_url"),
     }

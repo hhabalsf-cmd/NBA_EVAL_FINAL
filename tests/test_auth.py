@@ -140,3 +140,60 @@ def test_update_user_avatar_unknown_user_returns_none():
     from db import update_user_avatar
     result = update_user_avatar("nonexistent-id", "/uploads/avatars/x.jpg")
     assert result is None
+
+import io
+
+def _get_token(email="av2@test.com", username="avuser2", password="pw"):
+    r = client.post("/api/auth/register", json={
+        "email": email, "username": username, "password": password
+    })
+    return r.json()["token"]
+
+
+def test_avatar_upload_returns_avatar_url():
+    token = _get_token()
+    img_bytes = (
+        b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+        b"\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t"
+        b"\x08\n\x0c\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a"
+        b"\x1f\x1e\x1d\x1a\x1c\x1c $.' \",#\x1c\x1c(7),01444\x1f'9=82<.342\x1e"
+        b"\xff\xd9"
+    )
+    r = client.post(
+        "/api/auth/avatar",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("photo.jpg", io.BytesIO(img_bytes), "image/jpeg")},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert "avatar_url" in data
+    assert data["avatar_url"].startswith("/uploads/avatars/")
+
+
+def test_avatar_upload_rejects_non_image():
+    token = _get_token("av3@test.com", "avuser3")
+    r = client.post(
+        "/api/auth/avatar",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("hack.exe", io.BytesIO(b"MZ\x90\x00"), "application/octet-stream")},
+    )
+    assert r.status_code == 400
+
+
+def test_avatar_upload_rejects_oversized_file():
+    token = _get_token("av4@test.com", "avuser4")
+    big = io.BytesIO(b"\xff\xd8\xff" + b"\x00" * (2 * 1024 * 1024 + 1))
+    r = client.post(
+        "/api/auth/avatar",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("big.jpg", big, "image/jpeg")},
+    )
+    assert r.status_code == 413
+
+
+def test_avatar_upload_requires_auth():
+    r = client.post(
+        "/api/auth/avatar",
+        files={"file": ("x.jpg", io.BytesIO(b"\xff\xd8\xff"), "image/jpeg")},
+    )
+    assert r.status_code in (401, 403)

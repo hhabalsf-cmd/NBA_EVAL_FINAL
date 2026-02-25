@@ -2,8 +2,11 @@
 NBA Prop Evaluator API
 FastAPI backend for player prop analysis.
 """
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from .routers import players_router, bets_router, picks_router, games_router, auth_router
 
@@ -30,6 +33,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serve uploaded avatars
+_UPLOADS_DIR = Path(__file__).parent.parent / "uploads" / "avatars"
+_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads/avatars", StaticFiles(directory=str(_UPLOADS_DIR)), name="avatars")
 
 # Include routers
 app.include_router(players_router)
