@@ -197,3 +197,19 @@ def test_avatar_upload_requires_auth():
         files={"file": ("x.jpg", io.BytesIO(b"\xff\xd8\xff"), "image/jpeg")},
     )
     assert r.status_code in (401, 403)
+
+
+def test_me_returns_avatar_url_after_upload():
+    """End-to-end: avatar_url is persisted and returned by /me after upload."""
+    import io
+    token = _get_token("av5@test.com", "avuser5")
+    img_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xff\xd9"
+    client.post(
+        "/api/auth/avatar",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("photo.jpg", io.BytesIO(img_bytes), "image/jpeg")},
+    )
+    me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"}).json()
+    assert "avatar_url" in me
+    assert me["avatar_url"] is not None
+    assert me["avatar_url"].startswith("/uploads/avatars/")

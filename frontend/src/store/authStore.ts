@@ -81,7 +81,7 @@ export const useAuthStore = create<AuthStore>((set) => ({
         isUploadingAvatar: false,
       }))
     } catch (err) {
-      set({ error: (err as Error).message, isUploadingAvatar: false })
+      set({ isUploadingAvatar: false })
       throw err
     }
   },
