@@ -5,6 +5,7 @@ import {
   authRegister,
   authGetMe,
   uploadAvatar,
+  deleteAvatar,
   setAuthToken,
   clearAuthToken,
   getAuthToken,
@@ -22,6 +23,7 @@ interface AuthStore {
   checkAuth: () => Promise<void>
   clearError: () => void
   updateAvatar: (file: File) => Promise<void>
+  removeAvatar: () => Promise<void>
 }
 
 export const useAuthStore = create<AuthStore>((set) => ({
@@ -76,6 +78,20 @@ export const useAuthStore = create<AuthStore>((set) => ({
     set({ isUploadingAvatar: true, error: null })
     try {
       const updated = await uploadAvatar(file)
+      set((state) => ({
+        user: state.user ? { ...state.user, avatar_url: updated.avatar_url } : null,
+        isUploadingAvatar: false,
+      }))
+    } catch (err) {
+      set({ isUploadingAvatar: false })
+      throw err
+    }
+  },
+
+  removeAvatar: async () => {
+    set({ isUploadingAvatar: true, error: null })
+    try {
+      const updated = await deleteAvatar()
       set((state) => ({
         user: state.user ? { ...state.user, avatar_url: updated.avatar_url } : null,
         isUploadingAvatar: false,
