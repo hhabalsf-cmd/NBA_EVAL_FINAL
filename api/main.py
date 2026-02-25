@@ -5,7 +5,7 @@ FastAPI backend for player prop analysis.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import players_router, bets_router, picks_router, games_router
+from .routers import players_router, bets_router, picks_router, games_router, auth_router
 
 # Create app
 app = FastAPI(
@@ -36,6 +36,7 @@ app.include_router(players_router)
 app.include_router(bets_router)
 app.include_router(picks_router)
 app.include_router(games_router)
+app.include_router(auth_router)
 
 
 @app.get("/api/health")
