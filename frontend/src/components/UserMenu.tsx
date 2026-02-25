@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Settings, LogOut } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
-import SubscriptionBadge from './SubscriptionBadge'
 
 export default function UserMenu() {
   const [isOpen, setIsOpen] = useState(false)
@@ -38,9 +37,6 @@ export default function UserMenu() {
           <div className="p-4 border-b border-border-subtle">
             <div className="text-sm font-medium text-text-primary">{user.username}</div>
             <div className="text-xs text-text-muted mt-0.5">{user.email}</div>
-            <div className="mt-2">
-              <SubscriptionBadge tier={user.subscription_tier} />
-            </div>
           </div>
           <div className="py-1">
             <button

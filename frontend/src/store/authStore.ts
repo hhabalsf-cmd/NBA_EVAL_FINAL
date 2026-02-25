@@ -1,5 +1,13 @@
 import { create } from 'zustand'
 import { User } from '../types/auth'
+import {
+  authLogin,
+  authRegister,
+  authGetMe,
+  setAuthToken,
+  clearAuthToken,
+  getAuthToken,
+} from '../api/client'
 
 interface AuthStore {
   user: User | null
@@ -9,6 +17,7 @@ interface AuthStore {
   login: (email: string, password: string) => Promise<void>
   signup: (email: string, username: string, password: string) => Promise<void>
   logout: () => void
+  checkAuth: () => Promise<void>
   clearError: () => void
 }
 
@@ -18,45 +27,44 @@ export const useAuthStore = create<AuthStore>((set) => ({
   isLoading: false,
   error: null,
 
-  login: async (email: string, _password: string) => {
+  login: async (email, password) => {
     set({ isLoading: true, error: null })
-    // TODO: Replace with real API call
-    await new Promise(resolve => setTimeout(resolve, 500))
-    set({
-      user: {
-        id: 'mock-user-1',
-        email,
-        username: email.split('@')[0],
-        subscription_tier: 'free',
-        created_at: new Date().toISOString(),
-      },
-      isAuthenticated: true,
-      isLoading: false,
-    })
+    try {
+      const { token, user } = await authLogin(email, password)
+      setAuthToken(token)
+      set({ user, isAuthenticated: true, isLoading: false })
+    } catch (err) {
+      set({ error: (err as Error).message, isLoading: false })
+    }
   },
 
-  signup: async (email: string, username: string, _password: string) => {
+  signup: async (email, username, password) => {
     set({ isLoading: true, error: null })
-    // TODO: Replace with real API call
-    await new Promise(resolve => setTimeout(resolve, 500))
-    set({
-      user: {
-        id: 'mock-user-1',
-        email,
-        username,
-        subscription_tier: 'free',
-        created_at: new Date().toISOString(),
-      },
-      isAuthenticated: true,
-      isLoading: false,
-    })
+    try {
+      const { token, user } = await authRegister(email, username, password)
+      setAuthToken(token)
+      set({ user, isAuthenticated: true, isLoading: false })
+    } catch (err) {
+      set({ error: (err as Error).message, isLoading: false })
+    }
   },
 
   logout: () => {
+    clearAuthToken()
     set({ user: null, isAuthenticated: false, error: null })
   },
 
-  clearError: () => {
-    set({ error: null })
+  checkAuth: async () => {
+    if (!getAuthToken()) return
+    set({ isLoading: true })
+    try {
+      const user = await authGetMe()
+      set({ user, isAuthenticated: true, isLoading: false })
+    } catch {
+      clearAuthToken()
+      set({ user: null, isAuthenticated: false, isLoading: false })
+    }
   },
+
+  clearError: () => set({ error: null }),
 }))
