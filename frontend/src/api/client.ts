@@ -187,6 +187,7 @@ export interface AuthUser {
   username: string
   created_at: string
   role: 'user' | 'admin'
+  avatar_url?: string
 }
 
 export interface AuthResponse {
@@ -231,6 +232,21 @@ export async function authGetMe(): Promise<AuthUser> {
   if (!r.ok) throw new Error('Not authenticated')
   return r.json()
 }
+export async function uploadAvatar(file: File): Promise<AuthUser> {
+  const form = new FormData()
+  form.append('file', file)
+  const r = await fetch(`${API_BASE}/auth/avatar`, {
+    method: 'POST',
+    headers: { ...authHeaders() },
+    body: form,
+  })
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}))
+    throw new Error((err as { detail?: string }).detail || 'Upload failed')
+  }
+  return r.json()
+}
+
 
 // API Functions
 

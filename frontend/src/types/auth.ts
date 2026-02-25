@@ -4,6 +4,7 @@ export interface User {
   username: string
   created_at: string
   role: 'user' | 'admin'
+  avatar_url?: string
 }
 
 export interface AuthState {

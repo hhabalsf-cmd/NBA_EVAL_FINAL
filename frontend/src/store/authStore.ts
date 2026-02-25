@@ -4,6 +4,7 @@ import {
   authLogin,
   authRegister,
   authGetMe,
+  uploadAvatar,
   setAuthToken,
   clearAuthToken,
   getAuthToken,
@@ -13,18 +14,21 @@ interface AuthStore {
   user: User | null
   isAuthenticated: boolean
   isLoading: boolean
+  isUploadingAvatar: boolean
   error: string | null
   login: (email: string, password: string) => Promise<void>
   signup: (email: string, username: string, password: string) => Promise<void>
   logout: () => void
   checkAuth: () => Promise<void>
   clearError: () => void
+  updateAvatar: (file: File) => Promise<void>
 }
 
 export const useAuthStore = create<AuthStore>((set) => ({
   user: null,
   isAuthenticated: false,
   isLoading: false,
+  isUploadingAvatar: false,
   error: null,
 
   login: async (email, password) => {
@@ -67,4 +71,17 @@ export const useAuthStore = create<AuthStore>((set) => ({
   },
 
   clearError: () => set({ error: null }),
+
+  updateAvatar: async (file) => {
+    set({ isUploadingAvatar: true, error: null })
+    try {
+      const updated = await uploadAvatar(file)
+      set((state) => ({
+        user: state.user ? { ...state.user, avatar_url: updated.avatar_url } : null,
+        isUploadingAvatar: false,
+      }))
+    } catch (err) {
+      set({ error: (err as Error).message, isUploadingAvatar: false })
+    }
+  },
 }))
