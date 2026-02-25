@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { User, SlidersHorizontal, Camera } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
+import { useThemeStore } from '../store/themeStore'
 
 type Tab = 'profile' | 'preferences'
 
@@ -12,6 +13,7 @@ export default function SettingsPage() {
   const [uploadError, setUploadError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { user, updateAvatar, removeAvatar, isUploadingAvatar } = useAuthStore()
+  const { theme, toggleTheme } = useThemeStore()
 
   if (!user) return null
 
@@ -158,8 +160,26 @@ export default function SettingsPage() {
 
       {/* Preferences Tab */}
       {activeTab === 'preferences' && (
-        <div className="card p-6">
-          <p className="text-sm text-text-secondary">Preferences and notifications settings coming soon.</p>
+        <div className="card p-6 space-y-6">
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-1 uppercase tracking-wider">Appearance</label>
+            <p className="text-xs text-text-muted mb-3">Choose your preferred color theme</p>
+            <div className="flex gap-1 bg-bg-secondary rounded-lg p-1 w-fit">
+              {(['dark', 'light'] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => { if (theme !== t) toggleTheme() }}
+                  className={`px-4 py-2 text-sm font-medium rounded-md transition-all capitalize ${
+                    theme === t
+                      ? 'bg-bg-tertiary text-text-primary shadow-sm'
+                      : 'text-text-muted hover:text-text-secondary'
+                  }`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </div>
