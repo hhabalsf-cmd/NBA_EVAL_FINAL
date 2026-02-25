@@ -1,7 +1,7 @@
 """Pick tracking CRUD endpoints."""
 import sys
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import Optional, List
 
 # Add parent directory to path to import db module
@@ -16,6 +16,7 @@ from ..schemas.prediction import (
     PerformanceStats,
     CumulativeProfitPoint,
 )
+from ..routers.auth import get_current_user
 
 router = APIRouter(prefix="/api/picks", tags=["picks"])
 
@@ -49,19 +50,21 @@ def _pick_to_response(p: dict) -> PickResponse:
 @router.get("", response_model=List[PickResponse])
 async def get_picks(
     days: int = Query(default=30, ge=1, le=365, description="Number of days to look back"),
-    pending_only: bool = Query(default=False, description="Only return ungraded picks")
+    pending_only: bool = Query(default=False, description="Only return ungraded picks"),
+    current_user: dict = Depends(get_current_user),
 ):
     """Get pick history."""
+    user_id = current_user["id"]
     if pending_only:
-        picks = db.get_pending_picks()
+        picks = db.get_pending_picks(user_id=user_id)
     else:
-        picks = db.get_picks_history(days=days)
+        picks = db.get_picks_history(days=days, user_id=user_id)
 
     return [_pick_to_response(p) for p in picks]
 
 
 @router.post("", response_model=PickResponse)
-async def create_pick(pick: PickCreate):
+async def create_pick(pick: PickCreate, current_user: dict = Depends(get_current_user)):
     """Save a new pick."""
     pick_data = {
         'player': pick.player,
@@ -78,6 +81,7 @@ async def create_pick(pick: PickCreate):
         'model_type': pick.model_type,
         'game_date': pick.game_date,
         'prob_over': pick.prob_over,
+        'user_id': current_user["id"],
     }
 
     pick_id = db.save_pick(pick_data)
@@ -93,7 +97,7 @@ async def create_pick(pick: PickCreate):
 
 
 @router.get("/{pick_id}", response_model=PickResponse)
-async def get_pick(pick_id: int):
+async def get_pick(pick_id: int, current_user: dict = Depends(get_current_user)):
     """Get a specific pick by ID."""
     all_picks = db.get_all_picks()
     pick = next((p for p in all_picks if p['id'] == pick_id), None)
@@ -101,17 +105,23 @@ async def get_pick(pick_id: int):
     if not pick:
         raise HTTPException(status_code=404, detail="Pick not found")
 
+    if pick.get('user_id') and pick['user_id'] != current_user['id']:
+        raise HTTPException(status_code=403, detail="Not your pick")
+
     return _pick_to_response(pick)
 
 
 @router.put("/{pick_id}/grade", response_model=PickResponse)
-async def grade_pick(pick_id: int, grade: PickGradeRequest):
+async def grade_pick(pick_id: int, grade: PickGradeRequest, current_user: dict = Depends(get_current_user)):
     """Grade a pick with the actual result."""
     all_picks = db.get_all_picks()
     pick = next((p for p in all_picks if p['id'] == pick_id), None)
 
     if not pick:
         raise HTTPException(status_code=404, detail="Pick not found")
+
+    if pick.get('user_id') and pick['user_id'] != current_user['id']:
+        raise HTTPException(status_code=403, detail="Not your pick")
 
     db.update_pick_result(pick_id, grade.actual_result, pick['line'], pick['direction'])
 
@@ -123,7 +133,7 @@ async def grade_pick(pick_id: int, grade: PickGradeRequest):
 
 
 @router.delete("/{pick_id}")
-async def delete_pick(pick_id: int):
+async def delete_pick(pick_id: int, current_user: dict = Depends(get_current_user)):
     """Delete a pick."""
     all_picks = db.get_all_picks()
     pick = next((p for p in all_picks if p['id'] == pick_id), None)
@@ -131,12 +141,15 @@ async def delete_pick(pick_id: int):
     if not pick:
         raise HTTPException(status_code=404, detail="Pick not found")
 
+    if pick.get('user_id') and pick['user_id'] != current_user['id']:
+        raise HTTPException(status_code=403, detail="Not your pick")
+
     db.delete_pick(pick_id)
     return {"message": "Pick deleted", "id": pick_id}
 
 
 @router.post("/auto-grade")
-async def auto_grade_picks():
+async def auto_grade_picks(current_user: dict = Depends(get_current_user)):
     """
     Automatically grade pending picks by fetching actual results.
 
@@ -152,9 +165,9 @@ async def auto_grade_picks():
 
 
 @router.get("/stats/performance", response_model=PerformanceStats)
-async def get_performance_stats():
+async def get_performance_stats(current_user: dict = Depends(get_current_user)):
     """Get overall performance statistics."""
-    stats = db.get_performance_stats()
+    stats = db.get_performance_stats(user_id=current_user["id"])
     return PerformanceStats(
         total_picks=stats['total_picks'],
         graded_picks=stats['graded_picks'],
@@ -170,9 +183,9 @@ async def get_performance_stats():
 
 
 @router.get("/stats/profit", response_model=List[CumulativeProfitPoint])
-async def get_cumulative_profit():
+async def get_cumulative_profit(current_user: dict = Depends(get_current_user)):
     """Get cumulative profit over time for charting."""
-    profit_data = db.get_cumulative_profit()
+    profit_data = db.get_cumulative_profit(user_id=current_user["id"])
     return [
         CumulativeProfitPoint(
             date=p['date'],

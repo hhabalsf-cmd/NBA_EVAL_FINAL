@@ -530,8 +530,8 @@ def save_pick(pick_data: dict) -> int:
     cursor.execute("""
         INSERT INTO picks (timestamp, player, stat, line, prediction, direction,
                           edge, confidence, opponent, is_home, model_type,
-                          game_date, player_id, team_abbrev, prob_over)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          game_date, player_id, team_abbrev, prob_over, user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         datetime.now().isoformat(),
         pick_data.get('player'),
@@ -548,6 +548,7 @@ def save_pick(pick_data: dict) -> int:
         pick_data.get('player_id'),
         pick_data.get('team_abbrev'),
         pick_data.get('prob_over'),
+        pick_data.get('user_id'),
     ))
 
     pick_id = cursor.lastrowid
@@ -557,12 +558,13 @@ def save_pick(pick_data: dict) -> int:
     return pick_id
 
 
-def get_picks_history(days: int = 30) -> list:
+def get_picks_history(days: int = 30, user_id: str = None) -> list:
     """
     Get picks history for the last N days.
 
     Args:
         days: Number of days to look back (default 30)
+        user_id: If provided, only return picks for this user
 
     Returns:
         List of pick dicts
@@ -572,11 +574,18 @@ def get_picks_history(days: int = 30) -> list:
 
     cutoff = (datetime.now() - timedelta(days=days)).isoformat()
 
-    cursor.execute("""
-        SELECT * FROM picks
-        WHERE timestamp >= ?
-        ORDER BY timestamp DESC
-    """, (cutoff,))
+    if user_id:
+        cursor.execute("""
+            SELECT * FROM picks
+            WHERE timestamp >= ? AND (voided IS NULL OR voided = 0) AND user_id = ?
+            ORDER BY timestamp DESC
+        """, (cutoff, user_id))
+    else:
+        cursor.execute("""
+            SELECT * FROM picks
+            WHERE timestamp >= ?
+            ORDER BY timestamp DESC
+        """, (cutoff,))
 
     rows = cursor.fetchall()
     conn.close()
@@ -741,7 +750,7 @@ def reset_all_graded_for_date(game_date: str) -> int:
     return count
 
 
-def get_performance_stats() -> dict:
+def get_performance_stats(user_id: str = None) -> dict:
     """
     Calculate performance statistics (excludes voided picks).
 
@@ -753,13 +762,21 @@ def get_performance_stats() -> dict:
     cursor = conn.cursor()
 
     # Get all graded picks (where won is not null, excludes voided)
-    cursor.execute("""
-        SELECT * FROM picks WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0)
-    """)
+    if user_id:
+        cursor.execute("""
+            SELECT * FROM picks WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0) AND user_id = ?
+        """, (user_id,))
+    else:
+        cursor.execute("""
+            SELECT * FROM picks WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0)
+        """)
     graded = [dict(row) for row in cursor.fetchall()]
 
     # Get total non-voided picks
-    cursor.execute("SELECT COUNT(*) FROM picks WHERE voided IS NULL OR voided = 0")
+    if user_id:
+        cursor.execute("SELECT COUNT(*) FROM picks WHERE (voided IS NULL OR voided = 0) AND user_id = ?", (user_id,))
+    else:
+        cursor.execute("SELECT COUNT(*) FROM picks WHERE voided IS NULL OR voided = 0")
     total_picks = cursor.fetchone()[0]
 
     conn.close()
@@ -838,7 +855,7 @@ def get_performance_stats() -> dict:
     }
 
 
-def get_cumulative_profit() -> list:
+def get_cumulative_profit(user_id: str = None) -> list:
     """
     Get cumulative profit over time for charting.
 
@@ -848,11 +865,18 @@ def get_cumulative_profit() -> list:
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
-        SELECT timestamp, won FROM picks
-        WHERE won IS NOT NULL
-        ORDER BY timestamp ASC
-    """)
+    if user_id:
+        cursor.execute("""
+            SELECT timestamp, won FROM picks
+            WHERE won IS NOT NULL AND user_id = ?
+            ORDER BY timestamp ASC
+        """, (user_id,))
+    else:
+        cursor.execute("""
+            SELECT timestamp, won FROM picks
+            WHERE won IS NOT NULL
+            ORDER BY timestamp ASC
+        """)
 
     rows = cursor.fetchall()
     conn.close()
@@ -878,16 +902,23 @@ def get_cumulative_profit() -> list:
     return results
 
 
-def get_pending_picks() -> List[Dict]:
+def get_pending_picks(user_id: str = None) -> List[Dict]:
     """Get all picks that haven't been graded yet (excludes voided picks)."""
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
-        SELECT * FROM picks
-        WHERE won IS NULL AND (voided IS NULL OR voided = 0)
-        ORDER BY timestamp DESC
-    """)
+    if user_id:
+        cursor.execute("""
+            SELECT * FROM picks
+            WHERE won IS NULL AND (voided IS NULL OR voided = 0) AND user_id = ?
+            ORDER BY timestamp DESC
+        """, (user_id,))
+    else:
+        cursor.execute("""
+            SELECT * FROM picks
+            WHERE won IS NULL AND (voided IS NULL OR voided = 0)
+            ORDER BY timestamp DESC
+        """)
 
     rows = cursor.fetchall()
     conn.close()
