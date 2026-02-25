@@ -1,3 +1,4 @@
 {
-    "odds_api_key": "bb7a0653975f4cc9291c959423636703"
+    "odds_api_key": "bb7a0653975f4cc9291c959423636703",
+    "auth_secret_key": "CHANGE_ME_use_a_long_random_string_in_production"
 }
