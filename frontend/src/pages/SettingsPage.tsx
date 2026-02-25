@@ -104,7 +104,7 @@ export default function SettingsPage() {
                 disabled={isUploadingAvatar}
                 className="text-xs text-accent hover:text-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isUploadingAvatar ? 'Uploading…' : 'Change photo'}
+                Change photo
               </button>
               {user.avatar_url && (
                 <button
