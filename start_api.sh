@@ -2,6 +2,15 @@
 # Start the FastAPI backend server
 
 cd "$(dirname "$0")"
+
+# Required env var: DATABASE_URL (Supabase connection string)
+# Get from: Supabase dashboard → Project Settings → Database → URI
+# export DATABASE_URL="postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres"
+if [ -z "$DATABASE_URL" ]; then
+    echo "ERROR: DATABASE_URL is not set. See start_api.sh for instructions."
+    exit 1
+fi
+
 echo "Starting NBA Prop Evaluator API..."
 echo "API docs will be available at http://localhost:8000/api/docs"
 echo ""
@@ -14,4 +23,4 @@ fi
 
 # Start the server
 cd api
-python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn main:app --workers 4 --host 0.0.0.0 --port 8000
