@@ -13,7 +13,13 @@ export default function SettingsPage() {
   const [uploadError, setUploadError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [cropImageSrc, setCropImageSrc] = useState<string | null>(null)
-  const { user, updateAvatar, removeAvatar, isUploadingAvatar } = useAuthStore()
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [pwError, setPwError] = useState<string | null>(null)
+  const [pwSuccess, setPwSuccess] = useState(false)
+  const [isChangingPw, setIsChangingPw] = useState(false)
+  const { user, updateAvatar, removeAvatar, isUploadingAvatar, changePassword } = useAuthStore()
   const { theme, toggleTheme } = useThemeStore()
 
   if (!user) return null
@@ -56,6 +62,30 @@ export default function SettingsPage() {
     if (cropImageSrc) URL.revokeObjectURL(cropImageSrc)
     setCropImageSrc(null)
     if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  async function handleChangePassword(e: React.FormEvent) {
+    e.preventDefault()
+    setPwError(null)
+    setPwSuccess(false)
+
+    if (!newPassword) { setPwError("New password can't be empty."); return }
+    if (newPassword !== confirmPassword) { setPwError("Passwords don't match."); return }
+    if (newPassword.length < 8) { setPwError('Password must be at least 8 characters.'); return }
+
+    setIsChangingPw(true)
+    try {
+      await changePassword(currentPassword, newPassword)
+      setCurrentPassword('')
+      setNewPassword('')
+      setConfirmPassword('')
+      setPwSuccess(true)
+      setTimeout(() => setPwSuccess(false), 3000)
+    } catch (err) {
+      setPwError((err as Error).message)
+    } finally {
+      setIsChangingPw(false)
+    }
   }
 
   return (
@@ -166,6 +196,55 @@ export default function SettingsPage() {
             <p className="text-sm text-text-secondary">
               {new Date(user.created_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
             </p>
+          </div>
+
+          <hr className="border-border-subtle" />
+
+          <div>
+            <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-4">Change Password</p>
+            <form onSubmit={handleChangePassword} className="space-y-3">
+              <div>
+                <label className="block text-xs text-text-muted mb-1">Current password</label>
+                <input
+                  type="password"
+                  value={currentPassword}
+                  onChange={e => setCurrentPassword(e.target.value)}
+                  autoComplete="current-password"
+                  className="w-full"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-text-muted mb-1">New password</label>
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={e => setNewPassword(e.target.value)}
+                  autoComplete="new-password"
+                  className="w-full"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-text-muted mb-1">Confirm new password</label>
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={e => setConfirmPassword(e.target.value)}
+                  autoComplete="new-password"
+                  className="w-full"
+                />
+              </div>
+
+              {pwError && <p className="text-xs text-accent-danger">{pwError}</p>}
+              {pwSuccess && <p className="text-xs text-accent-success">Password updated.</p>}
+
+              <button
+                type="submit"
+                disabled={isChangingPw}
+                className="btn-primary text-sm px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isChangingPw ? 'Updating…' : 'Update Password'}
+              </button>
+            </form>
           </div>
         </div>
       )}
