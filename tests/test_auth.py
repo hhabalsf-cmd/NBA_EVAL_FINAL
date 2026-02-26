@@ -213,3 +213,14 @@ def test_me_returns_avatar_url_after_upload():
     assert "avatar_url" in me
     assert me["avatar_url"] is not None
     assert me["avatar_url"].startswith("/uploads/avatars/")
+
+
+def test_update_user_password_changes_hash():
+    import db as _db
+    from api.auth_utils import hash_password, verify_password
+    # create a user directly
+    user = _db.create_user("uid-pw", "pw@test.com", hash_password("old"), "pwuser")
+    _db.update_user_password("uid-pw", hash_password("new"))
+    refreshed = _db.get_user_by_id("uid-pw")
+    assert verify_password("new", refreshed["hashed_password"])
+    assert not verify_password("old", refreshed["hashed_password"])

@@ -177,6 +177,16 @@ def update_user_avatar(user_id: str, avatar_url: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+def update_user_password(user_id: str, hashed_password: str) -> None:
+    conn = get_connection()
+    conn.execute(
+        "UPDATE users SET hashed_password = ? WHERE id = ?",
+        (hashed_password, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 def clear_user_avatar(user_id: str) -> Optional[dict]:
     """Set avatar_url to NULL for user. Returns updated user dict."""
     conn = get_connection()
