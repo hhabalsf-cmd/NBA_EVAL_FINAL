@@ -24,7 +24,7 @@ _bearer = HTTPBearer()
 _AVATAR_DIR = Path(__file__).parent.parent.parent / "uploads" / "avatars"
 _ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
 _EXT_MAP = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
-_MAX_BYTES = 2 * 1024 * 1024  # 2 MB
+_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
 
 
 # ── Schemas ────────────────────────────────────────────────────
@@ -128,7 +128,7 @@ async def upload_avatar(
 
     contents = await file.read()
     if len(contents) > _MAX_BYTES:
-        raise HTTPException(status_code=413, detail="File too large — maximum 2MB")
+        raise HTTPException(status_code=413, detail="File too large — maximum 5MB")
 
     ext = _EXT_MAP[file.content_type]
     filename = f"{current_user['id']}.{ext}"
