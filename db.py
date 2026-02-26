@@ -1,15 +1,18 @@
 """
-SQLite database helper for tracking picks history and performance metrics.
+Postgres (Supabase) database helper for tracking picks history and performance metrics.
 """
 import json
-import sqlite3
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict
 import time
 import pandas as pd
 
-DB_PATH = Path(__file__).parent / "picks_history.db"
+import psycopg2
+import psycopg2.extras
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 # Cache for team schedule lookups (date_str -> set of team abbreviations that played)
 _team_schedule_cache = {}
@@ -17,111 +20,14 @@ EXCEL_PATH = Path(__file__).parent / "nba_picks_tracker.xlsx"
 
 
 def get_connection():
-    """Get database connection with row factory."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    """Get database connection with dict cursor factory."""
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
     return conn
 
 
 def init_db():
-    """Initialize the database schema."""
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    # Original picks table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS picks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            player TEXT NOT NULL,
-            stat TEXT NOT NULL,
-            line REAL NOT NULL,
-            prediction REAL NOT NULL,
-            direction TEXT NOT NULL,
-            edge REAL NOT NULL,
-            confidence REAL,
-            opponent TEXT,
-            is_home INTEGER,
-            actual_result REAL,
-            won INTEGER
-        )
-    """)
-
-    # Add new columns if they don't exist (for migration)
-    columns_to_add = [
-        ("model_type", "TEXT DEFAULT 'unknown'"),
-        ("game_date", "TEXT"),
-        ("player_id", "INTEGER"),
-        ("team_abbrev", "TEXT"),
-        ("graded_at", "TEXT"),
-        ("voided", "INTEGER DEFAULT 0"),  # 1 = DNP/voided, not counted in performance
-        ("void_reason", "TEXT"),  # Reason for void (DNP, postponed, etc.)
-        ("prob_over", "REAL"),  # ML probability of going OVER the line (0-100)
-    ]
-
-    # Get existing columns
-    cursor.execute("PRAGMA table_info(picks)")
-    existing_columns = {row[1] for row in cursor.fetchall()}
-
-    for col_name, col_def in columns_to_add:
-        if col_name not in existing_columns:
-            cursor.execute(f"ALTER TABLE picks ADD COLUMN {col_name} {col_def}")
-
-    # Game predictions table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS game_predictions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            game_date TEXT NOT NULL,
-            home_team TEXT NOT NULL,
-            away_team TEXT NOT NULL,
-            home_team_id INTEGER,
-            away_team_id INTEGER,
-            predicted_winner TEXT NOT NULL,
-            home_win_prob REAL NOT NULL,
-            away_win_prob REAL NOT NULL,
-            confidence REAL,
-            actual_winner TEXT,
-            correct INTEGER,
-            key_factors TEXT,
-            model_version TEXT DEFAULT 'v1.0',
-            graded_at TEXT
-        )
-    """)
-
-    # Add extended_data column if missing (stores full prediction JSON for GET /today)
-    cursor.execute("PRAGMA table_info(game_predictions)")
-    gp_columns = {row[1] for row in cursor.fetchall()}
-    if 'extended_data' not in gp_columns:
-        cursor.execute("ALTER TABLE game_predictions ADD COLUMN extended_data TEXT")
-
-    # Users table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id         TEXT PRIMARY KEY,
-            email      TEXT UNIQUE NOT NULL,
-            hashed_password TEXT NOT NULL,
-            username   TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    """)
-
-    # Add role to users if not present
-    cursor.execute("PRAGMA table_info(users)")
-    users_columns = {row[1] for row in cursor.fetchall()}
-    if "role" not in users_columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
-    if "avatar_url" not in users_columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT")
-
-    # Add user_id to picks if not present
-    cursor.execute("PRAGMA table_info(picks)")
-    picks_columns = {row[1] for row in cursor.fetchall()}
-    if "user_id" not in picks_columns:
-        cursor.execute("ALTER TABLE picks ADD COLUMN user_id TEXT")
-
-    conn.commit()
-    conn.close()
+    """Schema is managed via Supabase SQL Editor. This is a no-op kept for compatibility."""
+    pass
 
 
 # ── User functions ────────────────────────────────────────────
