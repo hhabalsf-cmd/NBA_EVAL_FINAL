@@ -487,7 +487,8 @@ def save_pick(pick_data: dict) -> int:
         INSERT INTO picks (timestamp, player, stat, line, prediction, direction,
                           edge, confidence, opponent, is_home, model_type,
                           game_date, player_id, team_abbrev, prob_over, user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
     """, (
         datetime.now().isoformat(),
         pick_data.get('player'),
@@ -507,7 +508,7 @@ def save_pick(pick_data: dict) -> int:
         pick_data.get('user_id'),
     ))
 
-    pick_id = cursor.lastrowid
+    pick_id = cursor.fetchone()['id']
     conn.commit()
     conn.close()
 
@@ -533,13 +534,13 @@ def get_picks_history(days: int = 30, user_id: str = None) -> list:
     if user_id:
         cursor.execute("""
             SELECT * FROM picks
-            WHERE timestamp >= ? AND (voided IS NULL OR voided = 0) AND user_id = ?
+            WHERE timestamp >= %s AND (voided IS NULL OR voided = 0) AND user_id = %s
             ORDER BY timestamp DESC
         """, (cutoff, user_id))
     else:
         cursor.execute("""
             SELECT * FROM picks
-            WHERE timestamp >= ?
+            WHERE timestamp >= %s
             ORDER BY timestamp DESC
         """, (cutoff,))
 
@@ -587,8 +588,8 @@ def update_pick_result(pick_id: int, actual_result: float, line: float, directio
 
     cursor.execute("""
         UPDATE picks
-        SET actual_result = ?, won = ?
-        WHERE id = ?
+        SET actual_result = %s, won = %s
+        WHERE id = %s
     """, (actual_result, won, pick_id))
 
     conn.commit()
@@ -600,7 +601,7 @@ def delete_pick(pick_id: int):
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("DELETE FROM picks WHERE id = ?", (pick_id,))
+    cursor.execute("DELETE FROM picks WHERE id = %s", (pick_id,))
 
     conn.commit()
     conn.close()
@@ -619,8 +620,8 @@ def void_pick(pick_id: int, reason: str = "DNP"):
 
     cursor.execute("""
         UPDATE picks
-        SET voided = 1, void_reason = ?, won = NULL, actual_result = NULL
-        WHERE id = ?
+        SET voided = 1, void_reason = %s, won = NULL, actual_result = NULL
+        WHERE id = %s
     """, (reason, pick_id))
 
     conn.commit()
@@ -652,7 +653,7 @@ def unvoid_pick(pick_id: int):
     cursor.execute("""
         UPDATE picks
         SET voided = 0, void_reason = NULL
-        WHERE id = ?
+        WHERE id = %s
     """, (pick_id,))
 
     conn.commit()
@@ -667,7 +668,7 @@ def reset_pick_to_pending(pick_id: int):
     cursor.execute("""
         UPDATE picks
         SET won = NULL, actual_result = NULL, graded_at = NULL
-        WHERE id = ?
+        WHERE id = %s
     """, (pick_id,))
 
     conn.commit()
@@ -689,15 +690,15 @@ def reset_all_graded_for_date(game_date: str) -> int:
     # Count how many will be affected
     cursor.execute("""
         SELECT COUNT(*) FROM picks
-        WHERE game_date LIKE ? AND won IS NOT NULL AND (voided IS NULL OR voided = 0)
+        WHERE game_date LIKE %s AND won IS NOT NULL AND (voided IS NULL OR voided = 0)
     """, (f"{game_date}%",))
-    count = cursor.fetchone()[0]
+    count = cursor.fetchone()['count']
 
     # Reset them
     cursor.execute("""
         UPDATE picks
         SET won = NULL, actual_result = NULL, graded_at = NULL
-        WHERE game_date LIKE ? AND won IS NOT NULL AND (voided IS NULL OR voided = 0)
+        WHERE game_date LIKE %s AND won IS NOT NULL AND (voided IS NULL OR voided = 0)
     """, (f"{game_date}%",))
 
     conn.commit()
@@ -866,7 +867,7 @@ def get_pending_picks(user_id: str = None) -> List[Dict]:
     if user_id:
         cursor.execute("""
             SELECT * FROM picks
-            WHERE won IS NULL AND (voided IS NULL OR voided = 0) AND user_id = ?
+            WHERE won IS NULL AND (voided IS NULL OR voided = 0) AND user_id = %s
             ORDER BY timestamp DESC
         """, (user_id,))
     else:
@@ -889,7 +890,7 @@ def get_picks_for_date(game_date: str) -> List[Dict]:
 
     cursor.execute("""
         SELECT * FROM picks
-        WHERE game_date = ?
+        WHERE game_date = %s
         ORDER BY timestamp DESC
     """, (game_date,))
 
@@ -963,7 +964,7 @@ def auto_void_stale_picks(days_threshold: int = 3) -> int:
     cursor.execute("""
         SELECT id, player, stat, game_date FROM picks
         WHERE won IS NULL AND (voided IS NULL OR voided = 0)
-        AND game_date IS NOT NULL AND game_date < ?
+        AND game_date IS NOT NULL AND game_date < %s
     """, (cutoff_date,))
 
     stale_picks = cursor.fetchall()
@@ -995,7 +996,7 @@ def get_stale_pending_picks(days_threshold: int = 2) -> List[Dict]:
     cursor.execute("""
         SELECT * FROM picks
         WHERE won IS NULL AND (voided IS NULL OR voided = 0)
-        AND game_date IS NOT NULL AND game_date < ?
+        AND game_date IS NOT NULL AND game_date < %s
         ORDER BY game_date ASC
     """, (cutoff_date,))
 
@@ -1174,7 +1175,7 @@ def auto_grade_picks(scraper=None) -> Dict:
             # Mark as graded
             conn = get_connection()
             cursor = conn.cursor()
-            cursor.execute("UPDATE picks SET graded_at = ? WHERE id = ?",
+            cursor.execute("UPDATE picks SET graded_at = %s WHERE id = %s",
                           (datetime.now().isoformat(), pick['id']))
             conn.commit()
             conn.close()
