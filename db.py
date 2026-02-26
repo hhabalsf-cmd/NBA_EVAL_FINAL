@@ -38,11 +38,11 @@ def create_user(user_id: str, email: str, hashed_password: str, username: str) -
     cursor = conn.cursor()
     now = datetime.utcnow().isoformat()
     cursor.execute(
-        "INSERT INTO users (id, email, hashed_password, username, created_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO users (id, email, hashed_password, username, created_at) VALUES (%s, %s, %s, %s, %s)",
         (user_id, email, hashed_password, username, now)
     )
     conn.commit()
-    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
     row = cursor.fetchone()
     conn.close()
     return dict(row)
@@ -52,7 +52,7 @@ def get_user_by_email(email: str) -> Optional[dict]:
     """Return user dict for given email, or None if not found."""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
+    cursor.execute("SELECT * FROM users WHERE email = %s", (email,))
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
@@ -62,7 +62,7 @@ def get_user_by_id(user_id: str) -> Optional[dict]:
     """Return user dict for given id, or None if not found."""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
@@ -73,11 +73,11 @@ def update_user_avatar(user_id: str, avatar_url: str) -> Optional[dict]:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE users SET avatar_url = ? WHERE id = ?",
+        "UPDATE users SET avatar_url = %s WHERE id = %s",
         (avatar_url, user_id)
     )
     conn.commit()
-    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
@@ -85,8 +85,9 @@ def update_user_avatar(user_id: str, avatar_url: str) -> Optional[dict]:
 
 def update_user_password(user_id: str, hashed_password: str) -> None:
     conn = get_connection()
-    conn.execute(
-        "UPDATE users SET hashed_password = ? WHERE id = ?",
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE users SET hashed_password = %s WHERE id = %s",
         (hashed_password, user_id),
     )
     conn.commit()
@@ -98,11 +99,11 @@ def clear_user_avatar(user_id: str) -> Optional[dict]:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE users SET avatar_url = NULL WHERE id = ?",
+        "UPDATE users SET avatar_url = NULL WHERE id = %s",
         (user_id,)
     )
     conn.commit()
-    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
