@@ -1,7 +1,6 @@
 import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
-import { Home, Gamepad2, History, Dice5, FlaskConical, Sun, Moon } from 'lucide-react'
-import { useThemeStore } from './store/themeStore'
+import { Home, Gamepad2, History, Dice5, FlaskConical } from 'lucide-react'
 import HomePage from './pages/HomePage'
 import LandingPage from './pages/LandingPage'
 import PlayerPage from './pages/PlayerPage'
@@ -20,7 +19,6 @@ import { getPicks } from './api/client'
 
 function App() {
   const { isAuthenticated, checkAuth } = useAuthStore()
-  const { theme, toggleTheme } = useThemeStore()
 
   // Rehydrate session on app load
   useEffect(() => {
@@ -84,19 +82,8 @@ function App() {
                 ))}
               </div>
 
-              {/* Auth + Theme toggle */}
+              {/* Auth */}
               <div className="flex items-center gap-1">
-                <button
-                  onClick={toggleTheme}
-                  aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-                  className="w-9 h-9 flex items-center justify-center rounded-lg transition-all duration-150 text-text-muted hover:text-text-secondary hover:bg-bg-tertiary"
-                >
-                  {theme === 'dark' ? (
-                    <Sun className="w-4 h-4" />
-                  ) : (
-                    <Moon className="w-4 h-4" />
-                  )}
-                </button>
                 {isAuthenticated ? (
                   <UserMenu />
                 ) : (
