@@ -6,6 +6,7 @@ import {
   authGetMe,
   uploadAvatar,
   deleteAvatar,
+  changePassword,
   setAuthToken,
   clearAuthToken,
   getAuthToken,
@@ -24,6 +25,7 @@ interface AuthStore {
   clearError: () => void
   updateAvatar: (file: File) => Promise<void>
   removeAvatar: () => Promise<void>
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>
 }
 
 export const useAuthStore = create<AuthStore>((set) => ({
@@ -100,5 +102,9 @@ export const useAuthStore = create<AuthStore>((set) => ({
       set({ isUploadingAvatar: false })
       throw err
     }
+  },
+
+  changePassword: async (currentPassword, newPassword) => {
+    await changePassword(currentPassword, newPassword)
   },
 }))
