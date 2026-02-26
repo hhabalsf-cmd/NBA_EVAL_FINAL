@@ -40,6 +40,11 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
 class AuthResponse(BaseModel):
     token: str
     user: dict
@@ -159,6 +164,16 @@ async def upload_avatar(
         "role": updated.get("role", "user"),
         "avatar_url": updated.get("avatar_url"),
     }
+
+
+@router.post("/change-password", status_code=204)
+async def change_password(
+    req: ChangePasswordRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    if not verify_password(req.current_password, current_user["hashed_password"]):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    db.update_user_password(current_user["id"], hash_password(req.new_password))
 
 
 @router.delete("/avatar", status_code=200)

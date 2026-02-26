@@ -215,6 +215,44 @@ def test_me_returns_avatar_url_after_upload():
     assert me["avatar_url"].startswith("/uploads/avatars/")
 
 
+def _register_and_token(email="cp@test.com", pw="oldpass"):
+    r = client.post("/api/auth/register", json={
+        "email": email, "username": "cpuser", "password": pw
+    })
+    return r.json()["token"]
+
+
+def test_change_password_success():
+    token = _register_and_token()
+    r = client.post(
+        "/api/auth/change-password",
+        json={"current_password": "oldpass", "new_password": "newpass123"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 204
+    # Old token still valid (we don't invalidate), but new password works for login
+    r2 = client.post("/api/auth/login", json={"email": "cp@test.com", "password": "newpass123"})
+    assert r2.status_code == 200
+
+
+def test_change_password_wrong_current_returns_401():
+    token = _register_and_token("cp2@test.com", "correct")
+    r = client.post(
+        "/api/auth/change-password",
+        json={"current_password": "wrong", "new_password": "anything"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 401
+
+
+def test_change_password_unauthenticated_returns_403():
+    r = client.post(
+        "/api/auth/change-password",
+        json={"current_password": "x", "new_password": "y"},
+    )
+    assert r.status_code in (401, 403)
+
+
 def test_update_user_password_changes_hash():
     import db as _db
     from api.auth_utils import hash_password, verify_password
