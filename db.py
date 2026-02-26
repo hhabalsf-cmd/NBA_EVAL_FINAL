@@ -721,7 +721,7 @@ def get_performance_stats(user_id: str = None) -> dict:
     # Get all graded picks (where won is not null, excludes voided)
     if user_id:
         cursor.execute("""
-            SELECT * FROM picks WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0) AND user_id = ?
+            SELECT * FROM picks WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0) AND user_id = %s
         """, (user_id,))
     else:
         cursor.execute("""
@@ -731,10 +731,10 @@ def get_performance_stats(user_id: str = None) -> dict:
 
     # Get total non-voided picks
     if user_id:
-        cursor.execute("SELECT COUNT(*) FROM picks WHERE (voided IS NULL OR voided = 0) AND user_id = ?", (user_id,))
+        cursor.execute("SELECT COUNT(*) FROM picks WHERE (voided IS NULL OR voided = 0) AND user_id = %s", (user_id,))
     else:
         cursor.execute("SELECT COUNT(*) FROM picks WHERE voided IS NULL OR voided = 0")
-    total_picks = cursor.fetchone()[0]
+    total_picks = cursor.fetchone()['count']
 
     conn.close()
 
@@ -825,7 +825,7 @@ def get_cumulative_profit(user_id: str = None) -> list:
     if user_id:
         cursor.execute("""
             SELECT timestamp, won FROM picks
-            WHERE won IS NOT NULL AND user_id = ?
+            WHERE won IS NOT NULL AND user_id = %s
             ORDER BY timestamp ASC
         """, (user_id,))
     else:
