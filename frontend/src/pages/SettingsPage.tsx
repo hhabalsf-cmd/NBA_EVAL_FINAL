@@ -2,16 +2,17 @@ import { useRef, useState } from 'react'
 import { User, SlidersHorizontal, Camera } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
 import { useThemeStore } from '../store/themeStore'
+import AvatarCropModal from '../components/AvatarCropModal'
 
 type Tab = 'profile' | 'preferences'
 
-const MAX_BYTES = 2 * 1024 * 1024
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<Tab>('profile')
   const [uploadError, setUploadError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [cropImageSrc, setCropImageSrc] = useState<string | null>(null)
   const { user, updateAvatar, removeAvatar, isUploadingAvatar } = useAuthStore()
   const { theme, toggleTheme } = useThemeStore()
 
@@ -33,16 +34,27 @@ export default function SettingsPage() {
       setUploadError('Only JPEG, PNG, and WebP images are allowed.')
       return
     }
-    if (file.size > MAX_BYTES) {
-      setUploadError('Image must be 2MB or smaller.')
-      return
-    }
 
+    const src = URL.createObjectURL(file)
+    setCropImageSrc(src)
+  }
+
+  async function handleCropApply(file: File) {
+    setUploadError(null)
     try {
       await updateAvatar(file)
     } catch (err) {
       setUploadError((err as Error).message)
+    } finally {
+      if (cropImageSrc) URL.revokeObjectURL(cropImageSrc)
+      setCropImageSrc(null)
+      if (fileInputRef.current) fileInputRef.current.value = ''
     }
+  }
+
+  function handleCropCancel() {
+    if (cropImageSrc) URL.revokeObjectURL(cropImageSrc)
+    setCropImageSrc(null)
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
@@ -119,12 +131,12 @@ export default function SettingsPage() {
                     }
                   }}
                   disabled={isUploadingAvatar}
-                  className="text-xs text-text-muted hover:text-accent-danger transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="text-xs text-text-muted hover:text-accent-danger transition-colors disabled:opacity-50 disabled:cursor-not-allowed ml-2"
                 >
                   {isUploadingAvatar ? 'Removing…' : 'Remove photo'}
                 </button>
               )}
-              <p className="text-xs text-text-muted">JPEG, PNG, or WebP · max 2MB</p>
+              <p className="text-xs text-text-muted">JPEG, PNG, or WebP</p>
             </div>
 
             <input
@@ -181,6 +193,14 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
+      )}
+      {cropImageSrc && (
+        <AvatarCropModal
+          imageSrc={cropImageSrc}
+          onApply={handleCropApply}
+          onCancel={handleCropCancel}
+          isUploading={isUploadingAvatar}
+        />
       )}
     </div>
   )
