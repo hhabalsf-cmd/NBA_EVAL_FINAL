@@ -130,7 +130,8 @@ def save_game_prediction(prediction_data: dict) -> int:
             home_win_prob, away_win_prob, confidence,
             key_factors, model_version, extended_data
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
     """, (
         datetime.now().isoformat(),
         prediction_data.get('game_date'),
@@ -147,7 +148,7 @@ def save_game_prediction(prediction_data: dict) -> int:
         extended_data,
     ))
 
-    pred_id = cursor.lastrowid
+    pred_id = cursor.fetchone()['id']
     conn.commit()
     conn.close()
     return pred_id
@@ -162,7 +163,7 @@ def get_todays_stored_predictions() -> list:
     # Fetch most recent prediction per matchup for today
     cursor.execute("""
         SELECT * FROM game_predictions
-        WHERE game_date = ?
+        WHERE game_date = %s
         ORDER BY timestamp DESC
     """, (today,))
 
@@ -241,7 +242,7 @@ def get_game_predictions(days: int = 7) -> list:
 
     cursor.execute("""
         SELECT * FROM game_predictions
-        WHERE timestamp >= ?
+        WHERE timestamp >= %s
         ORDER BY timestamp DESC
     """, (cutoff,))
 
@@ -297,7 +298,7 @@ def grade_game_prediction(prediction_id: int, actual_winner: str):
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT predicted_winner FROM game_predictions WHERE id = ?", (prediction_id,))
+    cursor.execute("SELECT predicted_winner FROM game_predictions WHERE id = %s", (prediction_id,))
     row = cursor.fetchone()
     if not row:
         conn.close()
@@ -307,8 +308,8 @@ def grade_game_prediction(prediction_id: int, actual_winner: str):
 
     cursor.execute("""
         UPDATE game_predictions
-        SET actual_winner = ?, correct = ?, graded_at = ?
-        WHERE id = ?
+        SET actual_winner = %s, correct = %s, graded_at = %s
+        WHERE id = %s
     """, (actual_winner, correct, datetime.now().isoformat(), prediction_id))
 
     conn.commit()
@@ -416,7 +417,7 @@ def get_game_accuracy_stats() -> dict:
     graded = [dict(row) for row in cursor.fetchall()]
 
     cursor.execute("SELECT COUNT(*) FROM game_predictions")
-    total = cursor.fetchone()[0]
+    total = cursor.fetchone()['count']
 
     conn.close()
 
