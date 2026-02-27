@@ -178,7 +178,7 @@ export const PickSlide: React.FC<{ pick: Pick }> = ({ pick }) => {
                 letterSpacing: 2,
               }}
             >
-              {pick.direction}
+              {pick.direction === "OVER" ? "↑" : "↓"}
             </span>
           </div>
           <span
@@ -212,7 +212,7 @@ export const PickSlide: React.FC<{ pick: Pick }> = ({ pick }) => {
                 fontWeight: 400,
               }}
             >
-              Hit Probability
+              Confidence
             </span>
             <span
               style={{

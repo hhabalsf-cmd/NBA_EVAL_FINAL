@@ -82,7 +82,7 @@ export const Intro: React.FC = () => {
           lineHeight: 1,
         }}
       >
-        TOP 5 PLAYS
+        TOP 5 PREDICTIONS
       </div>
 
       {/* Gold divider */}
