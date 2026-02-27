@@ -2094,6 +2094,24 @@ class MLPredictor:
                 correction = rolling_bias * 0.5  # Apply 50% of detected bias
                 pred = pred - correction
 
+            # --- Hard Deviation Cap ---
+            # Prevents runaway EMA-driven predictions when one outlier game dominates
+            # recent features (e.g., EMA_5_AST at 52%+ importance). Cap only fires
+            # when prediction is far above recent average; has zero effect on normal cases.
+            if hasattr(self, 'recent_averages') and stat in self.recent_averages:
+                recent_avg = self.recent_averages[stat]
+                if recent_avg > 0:
+                    stat_upside_caps = {
+                        'AST': 1.40,  # max 40% above recent L10 avg
+                        'REB': 1.55,  # max 55% above
+                        'PTS': 1.60,  # max 60% above
+                        'PRA': 1.50,  # max 50% above
+                    }
+                    upside_mult = stat_upside_caps.get(stat, 1.50)
+                    upper_cap = recent_avg * upside_mult
+                    if pred > upper_cap:
+                        pred = upper_cap
+
             predictions[stat] = pred
 
         # Reconcile PRA with component predictions to avoid inconsistency.

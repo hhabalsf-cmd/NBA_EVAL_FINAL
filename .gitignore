@@ -7,3 +7,6 @@ cache/
 .env
 node_modules/
 frontend/dist/
+
+# User-uploaded files (runtime data, not source code)
+uploads/
