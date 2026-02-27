@@ -1,10 +1,7 @@
 import {
   AbsoluteFill,
-  Audio,
   interpolate,
-  Sequence,
   spring,
-  staticFile,
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
@@ -43,7 +40,6 @@ export const Outro: React.FC = () => {
         gap: 16,
       }}
     >
-      <Sequence from={15}><Audio src={staticFile("audio/outro.mp3")} /></Sequence>
       <div
         style={{
           transform: `scale(${scale})`,
