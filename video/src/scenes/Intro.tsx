@@ -1,7 +1,9 @@
 import {
   AbsoluteFill,
+  Audio,
   interpolate,
   spring,
+  staticFile,
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
@@ -56,6 +58,7 @@ export const Intro: React.FC = () => {
         gap: 16,
       }}
     >
+      <Audio src={staticFile("audio/intro.mp3")} />
       {/* Basketball emoji */}
       <div
         style={{
