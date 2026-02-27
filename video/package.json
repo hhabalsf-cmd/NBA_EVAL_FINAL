@@ -1,0 +1,23 @@
+{
+  "name": "nba-picks-video",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "npx remotion studio",
+    "render": "npx remotion render Top5Picks out/top5-picks.mp4",
+    "render:still": "npx remotion still Top5Picks out/still.png --frame=90"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.290",
+    "@remotion/google-fonts": "4.0.290",
+    "@remotion/transitions": "4.0.290",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "remotion": "4.0.290"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.1",
+    "@types/react-dom": "^18.3.1",
+    "typescript": "^5.4.5"
+  }
+}
