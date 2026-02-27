@@ -2,6 +2,7 @@ import {
   AbsoluteFill,
   Audio,
   interpolate,
+  Sequence,
   spring,
   staticFile,
   useCurrentFrame,
@@ -42,7 +43,7 @@ export const Outro: React.FC = () => {
         gap: 16,
       }}
     >
-      <Audio src={staticFile("audio/outro.mp3")} />
+      <Sequence from={15}><Audio src={staticFile("audio/outro.mp3")} /></Sequence>
       <div
         style={{
           transform: `scale(${scale})`,

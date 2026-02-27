@@ -2,6 +2,7 @@ import {
   AbsoluteFill,
   Audio,
   interpolate,
+  Sequence,
   spring,
   staticFile,
   useCurrentFrame,
@@ -71,7 +72,7 @@ export const PickSlide: React.FC<{ pick: Pick }> = ({ pick }) => {
         gap: 32,
       }}
     >
-      <Audio src={staticFile(`audio/pick-${pick.rank}.mp3`)} />
+      <Sequence from={15}><Audio src={staticFile(`audio/pick-${pick.rank}.mp3`)} /></Sequence>
       {/* Rank badge */}
       <div
         style={{
