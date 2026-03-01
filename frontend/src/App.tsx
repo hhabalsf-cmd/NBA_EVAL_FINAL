@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
-import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom'
 import { Home, Gamepad2, History, Dice5, FlaskConical } from 'lucide-react'
+import { AnimatePresence, motion } from 'framer-motion'
 import HomePage from './pages/HomePage'
 import LandingPage from './pages/LandingPage'
 import PlayerPage from './pages/PlayerPage'
@@ -17,10 +18,53 @@ import { useAuthStore } from './store/authStore'
 import { useQuery } from '@tanstack/react-query'
 import { getPicks } from './api/client'
 
+const pageVariants = {
+  initial: { opacity: 0, y: 8 },
+  animate: { opacity: 1, y: 0 },
+  exit:    { opacity: 0, y: -6 },
+}
+
+function AppRoutes() {
+  const location = useLocation()
+
+  return (
+    <AnimatePresence mode="wait" initial={false}>
+      <motion.div
+        key={location.key}
+        variants={pageVariants}
+        initial="initial"
+        animate="animate"
+        exit="exit"
+        transition={{ duration: 0.2, ease: 'easeOut' }}
+      >
+        <Routes location={location}>
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/app" element={<HomePage />} />
+          <Route path="/player/:playerName" element={<PlayerPage />} />
+          <Route path="/research" element={<ResearchPage />} />
+          <Route path="/research/:playerName" element={<ResearchPage />} />
+          <Route path="/games" element={<GamesPage />} />
+          <Route path="/history" element={<HistoryPage />} />
+          <Route path="/parlay" element={<ParlayPage />} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/signup" element={<SignupPage />} />
+          <Route
+            path="/settings"
+            element={
+              <ProtectedRoute>
+                <SettingsPage />
+              </ProtectedRoute>
+            }
+          />
+        </Routes>
+      </motion.div>
+    </AnimatePresence>
+  )
+}
+
 function App() {
   const { isAuthenticated, checkAuth } = useAuthStore()
 
-  // Rehydrate session on app load
   useEffect(() => {
     checkAuth()
   }, [checkAuth])
@@ -101,29 +145,10 @@ function App() {
 
         {/* Main Content */}
         <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-8 py-6 sm:py-10 pb-24 sm:pb-10">
-          <Routes>
-            <Route path="/" element={<LandingPage />} />
-            <Route path="/app" element={<HomePage />} />
-            <Route path="/player/:playerName" element={<PlayerPage />} />
-            <Route path="/research" element={<ResearchPage />} />
-            <Route path="/research/:playerName" element={<ResearchPage />} />
-            <Route path="/games" element={<GamesPage />} />
-            <Route path="/history" element={<HistoryPage />} />
-            <Route path="/parlay" element={<ParlayPage />} />
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/signup" element={<SignupPage />} />
-            <Route
-              path="/settings"
-              element={
-                <ProtectedRoute>
-                  <SettingsPage />
-                </ProtectedRoute>
-              }
-            />
-          </Routes>
+          <AppRoutes />
         </main>
 
-        {/* Footer - hidden on mobile since bottom nav is there */}
+        {/* Footer */}
         <footer className="hidden sm:block border-t border-border-subtle py-8 mt-auto">
           <div className="max-w-5xl mx-auto px-5 sm:px-8 flex items-center justify-between">
             <span className="text-text-muted text-xs tracking-wide">ML-Powered Analysis</span>
@@ -139,22 +164,28 @@ function App() {
                 key={to}
                 to={to}
                 className={({ isActive }) =>
-                  `flex flex-col items-center gap-1 px-3 py-1.5 rounded-lg transition-all duration-150 min-w-[60px] ${
-                    isActive
-                      ? 'text-accent'
-                      : 'text-text-muted'
+                  `flex flex-col items-center gap-1 px-3 py-1.5 rounded-lg transition-all duration-150 min-w-[60px] ripple ${
+                    isActive ? 'text-accent' : 'text-text-muted'
                   }`
                 }
               >
-                <div className="relative">
-                  <Icon className="w-5 h-5" />
-                  {badge != null && badge > 0 && (
-                    <span className="absolute -top-1.5 -right-2 flex items-center justify-center w-4 h-4 rounded-full bg-accent text-white text-[9px] font-bold">
-                      {badge}
-                    </span>
-                  )}
-                </div>
-                <span className="text-[10px] font-medium">{label}</span>
+                {({ isActive }) => (
+                  <>
+                    <motion.div
+                      className="relative"
+                      whileTap={{ scale: 0.82 }}
+                      transition={{ duration: 0.1 }}
+                    >
+                      <Icon className="w-5 h-5" />
+                      {badge != null && badge > 0 && (
+                        <span className="absolute -top-1.5 -right-2 flex items-center justify-center w-4 h-4 rounded-full bg-accent text-white text-[9px] font-bold">
+                          {badge}
+                        </span>
+                      )}
+                    </motion.div>
+                    <span className={`text-[10px] font-medium ${isActive ? 'text-accent' : 'text-text-muted'}`}>{label}</span>
+                  </>
+                )}
               </NavLink>
             ))}
           </div>
