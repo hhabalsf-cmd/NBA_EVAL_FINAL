@@ -197,12 +197,12 @@ async def get_cumulative_profit(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/stats/by-model")
-async def get_performance_by_model():
+async def get_performance_by_model(current_user: dict = Depends(get_current_user)):
     """Get performance statistics broken down by model type."""
     return db.get_performance_by_model()
 
 
 @router.get("/stats/by-model-stat")
-async def get_performance_by_model_and_stat():
+async def get_performance_by_model_and_stat(current_user: dict = Depends(get_current_user)):
     """Get detailed performance breakdown by model type AND stat type."""
     return db.get_performance_by_model_and_stat()

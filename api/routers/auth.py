@@ -3,10 +3,12 @@ import sys
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
+
+from ..limiter import limiter
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 import db
@@ -31,18 +33,18 @@ _MAX_BYTES = 5 * 1024 * 1024  # 5 MB
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    username: str
-    password: str
+    username: str = Field(..., min_length=3, max_length=50, pattern=r'^[a-zA-Z0-9_-]+$')
+    password: str = Field(..., min_length=8, max_length=128)
 
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(..., min_length=1, max_length=128)
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 class AuthResponse(BaseModel):
@@ -76,7 +78,8 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(_bearer
 # ── Endpoints ──────────────────────────────────────────────────
 
 @router.post("/register", response_model=AuthResponse, status_code=201)
-async def register(req: RegisterRequest):
+@limiter.limit("5/minute")
+async def register(request: Request, req: RegisterRequest):
     if db.get_user_by_email(req.email):
         raise HTTPException(status_code=409, detail="Email already in use")
 
@@ -94,7 +97,8 @@ async def register(req: RegisterRequest):
 
 
 @router.post("/login", response_model=AuthResponse)
-async def login(req: LoginRequest):
+@limiter.limit("10/minute")
+async def login(request: Request, req: LoginRequest):
     invalid = HTTPException(status_code=401, detail="Invalid credentials")
     user = db.get_user_by_email(req.email)
     if not user:

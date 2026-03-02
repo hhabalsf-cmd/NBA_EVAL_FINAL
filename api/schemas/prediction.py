@@ -1,6 +1,6 @@
 """Pydantic models for API request/response validation."""
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
+from typing import Literal, Optional, List, Dict, Any
 from datetime import datetime
 
 
@@ -21,8 +21,10 @@ class PlayerSearchResult(BaseModel):
 # === Prediction Schemas ===
 
 class PredictionRequest(BaseModel):
-    player_name: str = Field(..., description="Full player name")
-    model_type: str = Field(default="gradient_boost", description="Model type: random_forest, gradient_boost, or neural")
+    player_name: str = Field(..., min_length=2, max_length=100, description="Full player name")
+    model_type: Literal["random_forest", "gradient_boost", "neural"] = Field(
+        default="gradient_boost", description="Model type"
+    )
     use_ensemble: bool = Field(default=False, description="Use ensemble of models")
     retrain: bool = Field(default=False, description="Force retrain even if model exists")
 
@@ -85,9 +87,9 @@ class PredictionResponse(BaseModel):
 # === Line Evaluation Schemas ===
 
 class LineEvaluationRequest(BaseModel):
-    player_name: str
-    stat: str = Field(..., description="Stat type: PTS, REB, AST, or PRA")
-    line: float = Field(..., description="The betting line to evaluate")
+    player_name: str = Field(..., min_length=2, max_length=100)
+    stat: Literal["PTS", "REB", "AST", "PRA"] = Field(..., description="Stat type: PTS, REB, AST, or PRA")
+    line: float = Field(..., ge=0, le=200, description="The betting line to evaluate")
     prediction: Optional[float] = Field(None, description="Pre-computed prediction (if available)")
 
 
@@ -109,20 +111,20 @@ class LineEvaluation(BaseModel):
 # === Picks Schemas ===
 
 class PickCreate(BaseModel):
-    player: str
+    player: str = Field(..., min_length=2, max_length=100)
     player_id: Optional[int] = None
-    team_abbrev: Optional[str] = None
-    stat: str
-    line: float
-    prediction: float
-    direction: str  # "OVER" or "UNDER"
-    edge: float
-    confidence: Optional[float] = None
-    opponent: Optional[str] = None
+    team_abbrev: Optional[str] = Field(None, max_length=5)
+    stat: Literal["PTS", "REB", "AST", "PRA"]
+    line: float = Field(..., ge=0, le=200)
+    prediction: float = Field(..., ge=0, le=200)
+    direction: Literal["OVER", "UNDER"]
+    edge: float = Field(..., ge=-100, le=100)
+    confidence: Optional[float] = Field(None, ge=0, le=100)
+    opponent: Optional[str] = Field(None, max_length=5)
     is_home: Optional[bool] = None
-    model_type: str = "unknown"
-    game_date: Optional[str] = None
-    prob_over: Optional[float] = None
+    model_type: str = Field(default="unknown", max_length=50)
+    game_date: Optional[str] = Field(None, max_length=20)
+    prob_over: Optional[float] = Field(None, ge=0, le=100)
 
 
 class PickResponse(BaseModel):

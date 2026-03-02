@@ -1,8 +1,11 @@
 """Game prediction endpoints."""
 import json
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from typing import Optional, List
+
+from ..routers.auth import get_current_user
 
 from ..schemas.prediction import (
     TodaysGamesResponse,
@@ -10,6 +13,10 @@ from ..schemas.prediction import (
     GameAccuracyStats,
 )
 from ..services.game_service import GamePredictionService
+
+
+class GradeBody(BaseModel):
+    actual_winner: str = Field(..., min_length=2, max_length=10)
 
 router = APIRouter(prefix="/api/games", tags=["games"])
 
@@ -62,10 +69,21 @@ def get_prediction_history(days: int = Query(default=7, ge=1, le=90)):
 
 
 @router.post("/auto-grade")
-def auto_grade_predictions():
+def auto_grade_predictions(current_user: dict = Depends(get_current_user)):
     """Auto-grade pending game predictions using final scores."""
     service = get_game_service()
     return service.auto_grade()
+
+
+@router.put("/{prediction_id}/grade")
+def grade_prediction(
+    prediction_id: int,
+    body: GradeBody,
+    current_user: dict = Depends(get_current_user),
+):
+    """Manually grade a game prediction with the actual winner."""
+    service = get_game_service()
+    return service.grade_prediction(prediction_id, body.actual_winner)
 
 
 @router.get("/stats/accuracy", response_model=GameAccuracyStats)

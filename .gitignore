@@ -10,3 +10,6 @@ frontend/dist/
 
 # User-uploaded files (runtime data, not source code)
 uploads/
+
+# Local secrets — never commit (use env vars in production)
+config.json
