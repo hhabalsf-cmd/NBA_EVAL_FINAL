@@ -4,6 +4,16 @@
 
 const API_BASE = '/api'
 
+/** Throw a user-friendly error, with special handling for 429 rate limits. */
+async function throwResponseError(response: Response, fallback: string): Promise<never> {
+  if (response.status === 429) {
+    const body = await response.json().catch(() => ({}))
+    throw new Error((body as { detail?: string }).detail ?? 'Too many requests — please wait a moment and try again.')
+  }
+  const body = await response.json().catch(() => ({}))
+  throw new Error((body as { detail?: string }).detail ?? fallback)
+}
+
 // Types
 export interface PlayerInfo {
   player_id: number
@@ -284,7 +294,7 @@ export async function getPlayerOdds(playerName: string): Promise<PlayerOdds> {
 
 export async function searchPlayers(query: string): Promise<PlayerInfo[]> {
   const response = await fetch(`${API_BASE}/players/search?q=${encodeURIComponent(query)}`)
-  if (!response.ok) throw new Error('Search failed')
+  if (!response.ok) await throwResponseError(response, 'Search failed')
   const data = await response.json()
   return data.players
 }
@@ -309,7 +319,7 @@ export async function predictPlayer(
     }),
   })
 
-  if (!response.ok) throw new Error('Prediction failed')
+  if (!response.ok) await throwResponseError(response, 'Prediction failed')
   if (!response.body) throw new Error('No response body')
 
   const reader = response.body.getReader()
@@ -386,7 +396,7 @@ export async function evaluateLine(
     }),
   })
 
-  if (!response.ok) throw new Error('Evaluation failed')
+  if (!response.ok) await throwResponseError(response, 'Evaluation failed')
   return response.json()
 }
 
@@ -543,7 +553,7 @@ export interface GameAccuracyStats {
 
 export async function getTodaysGamePredictions(): Promise<TodaysGamesResponse> {
   const response = await fetch(`${API_BASE}/games/today`)
-  if (!response.ok) throw new Error('Failed to fetch game predictions')
+  if (!response.ok) await throwResponseError(response, 'Failed to fetch game predictions')
   return response.json()
 }
 
@@ -599,7 +609,10 @@ export async function autoGradeGamePredictions(): Promise<{
   errors: string[]
   results: unknown[]
 }> {
-  const response = await fetch(`${API_BASE}/games/auto-grade`, { method: 'POST' })
+  const response = await fetch(`${API_BASE}/games/auto-grade`, {
+    method: 'POST',
+    headers: { ...authHeaders() },
+  })
   if (!response.ok) throw new Error('Failed to auto-grade game predictions')
   return response.json()
 }

@@ -17,6 +17,7 @@ from nba_evaluator import (
     MLPredictor,
     LineEvaluator,
     OddsAPI,
+    should_retrain,
 )
 
 
@@ -244,12 +245,20 @@ class PredictionService:
 
         predictor = MLPredictor(model_type=model_type, use_ensemble=use_ensemble)
 
+        # Enforce once-per-night retrain policy: only allow a retrain after
+        # 11:30pm ET when all NBA games are complete. If the model was already
+        # retrained in that window, skip and use the fresh model.
+        retrain_skipped = False
+        if retrain and not should_retrain(player_info['player_name']):
+            retrain = False
+            retrain_skipped = True
+
         # Try to load existing model
         if not retrain and predictor.load(player_info['player_name']):
             yield {
                 "stage": "training_model",
                 "progress": 70,
-                "message": "Updating model with recent games..."
+                "message": "Model already retrained tonight — using latest data..." if retrain_skipped else "Updating model with recent games..."
             }
             predictor.update(df_features)
         else:

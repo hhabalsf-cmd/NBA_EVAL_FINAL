@@ -93,6 +93,36 @@ CACHE_DIR = Path("./cache")
 for d in [DATA_DIR, MODEL_DIR, HISTORY_DIR, CACHE_DIR]:
     d.mkdir(exist_ok=True)
 
+# Timezone for NBA game completion check
+_ET = ZoneInfo('America/New_York')
+# Games are reliably done by 11:30pm ET
+_GAMES_DONE_HOUR = 23
+_GAMES_DONE_MINUTE = 30
+
+
+def should_retrain(player_name: str) -> bool:
+    """Return True if a retrain is permitted for this player.
+
+    Only the first retrain after 11:30pm ET each night is allowed — once all
+    NBA games are complete. Subsequent retrain requests that same night are
+    blocked so no one can overwrite a fresh model with stale mid-day data.
+    """
+    model_path = MODEL_DIR / f"{player_name.replace(' ', '_')}_model.pkl"
+    if not model_path.exists():
+        return True
+
+    now = datetime.now(_ET)
+    cutoff_today = now.replace(
+        hour=_GAMES_DONE_HOUR, minute=_GAMES_DONE_MINUTE,
+        second=0, microsecond=0
+    )
+    # Before tonight's cutoff → the valid window opened at 11:30pm last night
+    cutoff = cutoff_today if now >= cutoff_today else cutoff_today - timedelta(days=1)
+
+    last_modified = datetime.fromtimestamp(model_path.stat().st_mtime, tz=_ET)
+    return last_modified < cutoff
+
+
 CURRENT_SEASON = '2025-26'
 HISTORICAL_SEASONS = ['2024-25', '2023-24']
 
