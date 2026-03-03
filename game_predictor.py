@@ -268,6 +268,7 @@ class GamePredictor:
                 return []
 
             games = []
+            seen_games = set()
             for _, row in games_header.iterrows():
                 status = row.get('GAME_STATUS_ID', 1)
                 if status == 3:  # Final — skip
@@ -277,9 +278,15 @@ class GamePredictor:
                 away_id = row['VISITOR_TEAM_ID']
                 home_abbrev = self.team_id_to_abbrev.get(home_id, '')
                 away_abbrev = self.team_id_to_abbrev.get(away_id, '')
+                game_id = row.get('GAME_ID', '')
+
+                dedup_key = game_id if game_id else (home_abbrev, away_abbrev)
+                if dedup_key in seen_games:
+                    continue
+                seen_games.add(dedup_key)
 
                 games.append({
-                    'game_id': row.get('GAME_ID', ''),
+                    'game_id': game_id,
                     'home_team_id': home_id,
                     'away_team_id': away_id,
                     'home_team': home_abbrev,

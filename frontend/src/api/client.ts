@@ -519,7 +519,7 @@ export interface GamePredictionHistoryItem {
   away_win_prob: number
   confidence?: number
   actual_winner?: string
-  correct?: boolean
+  correct?: boolean | number
   key_factors: KeyFactor[]
 }
 
@@ -602,6 +602,15 @@ export async function autoGradeGamePredictions(): Promise<{
   const response = await fetch(`${API_BASE}/games/auto-grade`, { method: 'POST' })
   if (!response.ok) throw new Error('Failed to auto-grade game predictions')
   return response.json()
+}
+
+export async function gradeGamePrediction(id: number, actualWinner: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/games/${id}/grade`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ actual_winner: actualWinner }),
+  })
+  if (!response.ok) throw new Error('Failed to grade game prediction')
 }
 
 export async function getGameAccuracyStats(): Promise<GameAccuracyStats> {

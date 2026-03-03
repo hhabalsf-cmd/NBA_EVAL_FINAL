@@ -15,13 +15,12 @@ MODEL_ID = "eleven_multilingual_v2"
 OUTPUT_DIR = Path(__file__).parent / "public" / "audio"
 
 SCRIPTS = {
-    "intro": "Tonight's top 5 NBA prop picks.",
-    "pick-1": "Number one. Cason Wallace, over 14.5 PRA.",
-    "pick-2": "Number two. Jaylen Brown, over 6.5 rebounds.",
-    "pick-3": "Number three. Jamal Murray, over 3.5 rebounds.",
-    "pick-4": "Number four. Derrick White, over 3.5 rebounds.",
-    "pick-5": "Number five. Tobias Harris, over 5.5 rebounds.",
-    "outro": "Follow for daily picks.",
+    "intro": "Are these hitting tonight? Let's find out.",
+    "pick-1": "Number one. Kevin Durant, above 30.5 points plus assists.",
+    "pick-2": "Number two. Bilal Coulibaly, above 15.5 P.R.A.",
+    "pick-3": "Number three. Kawhi Leonard, above 34.5 points plus rebounds.",
+    "pick-4": "Number four. Brandin Podziemski, above 10.5 points plus assists.",
+    "outro": "Follow for daily predictions.",
 }
 
 

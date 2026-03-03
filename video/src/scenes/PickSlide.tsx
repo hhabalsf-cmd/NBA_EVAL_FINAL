@@ -1,3 +1,4 @@
+import React from "react";
 import {
   AbsoluteFill,
   interpolate,
@@ -52,6 +53,16 @@ export const PickSlide: React.FC<{ pick: Pick }> = ({ pick }) => {
 
   // Player name fades in with slight delay
   const nameOpacity = interpolate(frame, [8, 22], [0, 1], {
+    extrapolateRight: "clamp",
+    extrapolateLeft: "clamp",
+  });
+
+  // Suspense reveal: direction + line blur in after frame 30
+  const revealOpacity = interpolate(frame, [30, 50], [0, 1], {
+    extrapolateRight: "clamp",
+    extrapolateLeft: "clamp",
+  });
+  const revealBlur = interpolate(frame, [30, 50], [8, 0], {
     extrapolateRight: "clamp",
     extrapolateLeft: "clamp",
   });
@@ -159,8 +170,32 @@ export const PickSlide: React.FC<{ pick: Pick }> = ({ pick }) => {
           </span>
         </div>
 
-        {/* OVER / UNDER pill + line */}
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+        {/* Opponent context (optional) */}
+        {pick.opponent && (
+          <div
+            style={{
+              fontFamily,
+              fontWeight: 400,
+              fontSize: 22,
+              color: MUTED,
+              letterSpacing: 1,
+              opacity: nameOpacity,
+            }}
+          >
+            {pick.opponent}
+          </div>
+        )}
+
+        {/* OVER / UNDER pill + line — suspense reveal */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 16,
+            opacity: revealOpacity,
+            filter: `blur(${revealBlur}px)`,
+          }}
+        >
           <div
             style={{
               backgroundColor: GREEN,

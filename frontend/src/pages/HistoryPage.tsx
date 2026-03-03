@@ -52,12 +52,29 @@ export default function HistoryPage() {
 
   const gradePickMutation = useMutation({
     mutationFn: ({ pickId, result }: { pickId: number; result: number }) => gradePick(pickId, result),
-    onSuccess: () => {
+    onMutate: async ({ pickId, result }) => {
+      await queryClient.cancelQueries({ queryKey: ['picks', showPending] })
+      const previous = queryClient.getQueryData<Pick[]>(['picks', showPending])
+      queryClient.setQueryData<Pick[]>(['picks', showPending], old =>
+        old?.map(p =>
+          p.id === pickId
+            ? { ...p, actual_result: result, won: result > p.line }
+            : p
+        )
+      )
+      setGradePickId(null)
+      setGradeValue('')
+      return { previous }
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(['picks', showPending], context.previous)
+      }
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['picks'] })
       queryClient.invalidateQueries({ queryKey: ['performance-stats'] })
       queryClient.invalidateQueries({ queryKey: ['cumulative-profit'] })
-      setGradePickId(null)
-      setGradeValue('')
     },
   })
 
@@ -239,7 +256,7 @@ export default function HistoryPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {picks.map((pick: Pick) => (
+                  {picks.slice(0, 30).map((pick: Pick) => (
                     <tr key={pick.id}>
                       <td className="text-xs text-text-muted whitespace-nowrap">{formatDate(pick.timestamp)}</td>
                       <td className="font-medium text-text-primary text-sm">{pick.player}</td>
@@ -314,7 +331,7 @@ export default function HistoryPage() {
 
             {/* Mobile Card View */}
             <div className="md:hidden divide-y divide-border-subtle">
-              {picks.map((pick: Pick) => {
+              {picks.slice(0, 30).map((pick: Pick) => {
                 const isOver = pick.direction === 'OVER'
                 return (
                   <div key={pick.id} className={`p-4 border-l-2 ${isOver ? 'border-l-accent-success' : 'border-l-accent-danger'}`}>

@@ -1,3 +1,4 @@
+import React from "react";
 import {
   AbsoluteFill,
   interpolate,
@@ -63,8 +64,8 @@ export const Outro: React.FC = () => {
             textAlign: "center",
           }}
         >
-          FOLLOW FOR MORE
-          {"\n"}PICKS
+          DROP A 🔥 IF
+          {"\n"}YOU'RE RIDING
         </div>
         <div
           style={{
@@ -76,9 +77,10 @@ export const Outro: React.FC = () => {
             marginTop: 8,
           }}
         >
-          DAILY NBA PROPS
+          FOLLOW FOR DAILY PREDICTIONS
         </div>
       </div>
+
     </AbsoluteFill>
   );
 };

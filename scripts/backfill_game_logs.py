@@ -37,7 +37,7 @@ def get_trained_player_names() -> list:
 def name_to_player_id(scraper: NBADataScraper, name: str):
     try:
         info = scraper.get_player_info(name)
-        return str(info["id"]) if info else None
+        return str(info["player_id"]) if info else None
     except Exception:
         return None
 

@@ -1,3 +1,4 @@
+import React from "react";
 import {
   AbsoluteFill,
   interpolate,
@@ -6,6 +7,7 @@ import {
   useVideoConfig,
 } from "remotion";
 import { loadFont } from "@remotion/google-fonts/Inter";
+import { DATE_LABEL, PICKS } from "../data/picks";
 
 const { fontFamily } = loadFont("normal", {
   weights: ["700", "900"],
@@ -68,21 +70,22 @@ export const Intro: React.FC = () => {
         🏀
       </div>
 
-      {/* TOP 5 PLAYS */}
+      {/* Curiosity-gap hook */}
       <div
         style={{
           fontFamily,
           fontWeight: 900,
-          fontSize: 88,
+          fontSize: 76,
           color: WHITE,
           letterSpacing: -2,
           opacity: titleOpacity,
           transform: `translateY(${titleY}px)`,
           textAlign: "center",
-          lineHeight: 1,
+          lineHeight: 1.05,
+          padding: "0 40px",
         }}
       >
-        TOP 5 PREDICTIONS
+        ARE THESE{"\n"}HITTING?
       </div>
 
       {/* Gold divider */}
@@ -96,21 +99,21 @@ export const Intro: React.FC = () => {
         }}
       />
 
-      {/* TONIGHT subtitle */}
+      {/* TOP PREDICTIONS subtitle */}
       <div
         style={{
           fontFamily,
           fontWeight: 700,
-          fontSize: 36,
+          fontSize: 32,
           color: GOLD,
           letterSpacing: 8,
           opacity: subtitleOpacity,
         }}
       >
-        TONIGHT
+        TOP PREDICTIONS
       </div>
 
-      {/* Date */}
+      {/* Pick count · Date */}
       <div
         style={{
           fontFamily,
@@ -121,7 +124,7 @@ export const Intro: React.FC = () => {
           opacity: subtitleOpacity,
         }}
       >
-        FEB 27, 2026
+        {PICKS.length} PICKS · {DATE_LABEL}
       </div>
     </AbsoluteFill>
   );

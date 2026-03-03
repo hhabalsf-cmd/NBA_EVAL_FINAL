@@ -8,12 +8,14 @@ interface PlayerSearchProps {
   onSelect?: (player: PlayerInfo) => void
   autoFocus?: boolean
   placeholder?: string
+  replace?: boolean
 }
 
 export default function PlayerSearch({
   onSelect,
   autoFocus = false,
   placeholder = 'Search players...',
+  replace = false,
 }: PlayerSearchProps) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<PlayerInfo[]>([])
@@ -53,6 +55,8 @@ export default function PlayerSearch({
         inputRef.current && !inputRef.current.contains(e.target as Node)
       ) {
         setIsOpen(false)
+        setQuery('')
+        setResults([])
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -65,7 +69,7 @@ export default function PlayerSearch({
     if (onSelect) {
       onSelect(player)
     } else {
-      navigate(`/player/${encodeURIComponent(player.player_name)}`)
+      navigate(`/player/${encodeURIComponent(player.player_name)}`, { replace })
     }
   }, [onSelect, navigate])
 

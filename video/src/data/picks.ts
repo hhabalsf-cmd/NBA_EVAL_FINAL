@@ -6,54 +6,53 @@ export type Pick = {
   direction: "OVER" | "UNDER";
   line: number;
   hitProb: number; // 0–100
+  opponent?: string; // e.g. "vs. WAS · Weak DEF"
 };
 
 export const PICKS: Pick[] = [
   {
     rank: 1,
-    player: "Cason Wallace",
-    team: "OKC",
-    stat: "PRA",
+    player: "Kevin Durant",
+    team: "PHX",
+    stat: "PA",
     direction: "OVER",
-    line: 14.5,
-    hitProb: 85,
+    line: 30.5,
+    hitProb: 80,
+    opponent: "vs. MEM · Weak DEF",
   },
   {
     rank: 2,
-    player: "Jaylen Brown",
-    team: "BOS",
-    stat: "REB",
+    player: "Bilal Coulibaly",
+    team: "WAS",
+    stat: "PRA",
     direction: "OVER",
-    line: 6.5,
-    hitProb: 80,
+    line: 15.5,
+    hitProb: 78,
+    opponent: "vs. CHI · Average DEF",
   },
   {
     rank: 3,
-    player: "Jamal Murray",
-    team: "DEN",
-    stat: "REB",
+    player: "Kawhi Leonard",
+    team: "LAC",
+    stat: "PR",
     direction: "OVER",
-    line: 3.5,
-    hitProb: 74,
+    line: 34.5,
+    hitProb: 76,
+    opponent: "vs. ORL · Average DEF",
   },
   {
     rank: 4,
-    player: "Derrick White",
-    team: "BOS",
-    stat: "REB",
+    player: "Brandin Podziemski",
+    team: "GSW",
+    stat: "PA",
     direction: "OVER",
-    line: 3.5,
-    hitProb: 73,
-  },
-  {
-    rank: 5,
-    player: "Tobias Harris",
-    team: "DET",
-    stat: "REB",
-    direction: "OVER",
-    line: 5.5,
-    hitProb: 73,
+    line: 10.5,
+    hitProb: 74,
+    opponent: "vs. NOP · Weak DEF",
   },
 ];
 
-export const DATE_LABEL = "FEB 27, 2026";
+export const DATE_LABEL = new Date()
+  .toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" })
+  .toUpperCase()
+  .replace(",", "");

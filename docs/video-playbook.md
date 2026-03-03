@@ -30,10 +30,13 @@ video/
 | Scene | Frames | Seconds |
 |-------|--------|---------|
 | Intro | 60 | 2s |
-| Pick × 5 | 90 each = 450 | 15s |
+| Pick × N | 120 each | 4s each |
 | Outro | 30 | 1s |
-| 6 slide transitions × 15 frames | −90 | −3s |
-| **Total** | **450** | **15s** |
+| (N+1) slide transitions × 15 | −15×(N+1) | varies |
+| **Total (4 picks)** | **495** | **~16.5s** |
+| **Total (5 picks)** | **600** | **~20s** |
+
+**Duration is auto-computed** — `TOTAL_FRAMES` in `Top5Picks.tsx` recalculates whenever you change the number of picks in `picks.ts`. Never update `Root.tsx` manually.
 
 FPS: 30 · Format: 1080×1920 (9:16 TikTok vertical) · Codec: H.264
 
@@ -46,18 +49,19 @@ Edit `video/src/data/picks.ts`:
 ```ts
 export const PICKS: Pick[] = [
   {
-    rank: 1,           // 1–5, shown as #N badge
-    player: "Name",   // Full name — large headline text
-    team: "OKC",      // 3-letter abbreviation
-    stat: "PRA",      // PTS / REB / AST / PRA
-    direction: "OVER", // "OVER" or "UNDER" — renders as ↑ or ↓
-    line: 14.5,       // The stat line
-    hitProb: 85,      // 0–100, drives the confidence bar
+    rank: 1,              // 1–N, shown as #N badge
+    player: "Name",      // Full name — large headline text
+    team: "OKC",         // 3-letter abbreviation
+    stat: "PRA",         // PTS / REB / AST / PRA / PA / PR
+    direction: "OVER",   // "OVER" or "UNDER" — renders as ↑ or ↓
+    line: 14.5,          // The stat line
+    hitProb: 85,         // 0–100, drives the confidence bar + count-up
+    opponent: "vs. WAS · Weak DEF", // optional — shown below team row
   },
   // ...
 ];
 
-export const DATE_LABEL = "FEB 27, 2026"; // Shown on Intro scene
+// DATE_LABEL is now auto-computed from new Date() — no manual update needed
 ```
 
 Then render:
@@ -130,18 +134,55 @@ TikTok flags explicit gambling/betting language. Always use neutral framing:
 
 ## Caption Template
 
+### Structure: Hook → Picks → CTA → Hashtags
+
+**Hook (pick one — curiosity gap drives retention):**
 ```
-My model just locked in tonight's top 5 NBA predictions 🏀📊
+The numbers are too clean on this one 👀
+{N} predictions. Can the model go {N}/{N}? 🤖
+This matchup screams ↑ — here's why
+AI locked in on these tonight. Let's see 📊
+```
 
-Drop a ✅ if you want tomorrow's too
+**Body (list picks):**
+```
+{Player} {stat} ↑ {line}
+{Player} {stat} ↑ {line}
+...
+```
 
-#NBA #NBATwitter #NBApicks #basketball #sportspredictions #nbahighlights #hoops #nba2025 #sportsbrain #nbadaily
+**CTA (active — comment CTAs 3× more valuable than follows):**
+```
+Drop a 🔥 if you're riding · Follow for daily predictions
+Comment your lock below 👇
+✅ if you're fading or 🔥 if you're riding
+```
+
+**Hashtags (5–8 max):**
+```
+#NBA #NBATonight #SportsTikTok #NBAStats #basketball
++ 1–2 player-specific: e.g. #KevindDurant #Suns
+```
+
+**Full example:**
+```
+The numbers are too clean on this one 👀
+
+Kevin Durant PA ↑ 30.5
+Bilal Coulibaly PRA ↑ 15.5
+Kawhi Leonard PR ↑ 34.5
+Brandin Podziemski PA ↑ 10.5
+
+Drop a 🔥 if you're riding · Follow for daily predictions
+
+#NBA #NBATonight #SportsTikTok #NBAStats #basketball #KevinDurant
 ```
 
 **Caption rules:**
-- Open with a hook about the model/algorithm (credibility)
-- Ask for a comment reaction (drives TikTok distribution)
-- 8–10 hashtags: mix broad (`#NBA`, `#basketball`) + niche (`#sportspredictions`, `#nbadaily`)
+- Open with curiosity gap (not a generic statement) — first line is the hook
+- Use ↑/↓ symbols in the body (never OVER/UNDER)
+- Ask for a comment reaction (comments signal engagement to TikTok algorithm)
+- 5–8 hashtags only — more than 10 hurts reach
 - Never use: `#betting`, `#sportsbetting`, `#props`, `#prizepicks`, `#gambling`
 
 ---
@@ -164,7 +205,9 @@ Font: **Inter** (Google Fonts via `@remotion/google-fonts/Inter`)
 
 ## Full Update Workflow (New Night)
 
-1. Update `video/src/data/picks.ts` — new players, lines, hitProbs, DATE_LABEL
+1. Update `video/src/data/picks.ts` — new players, lines, hitProbs, opponent context
+   - `DATE_LABEL` is auto-computed, skip it
+   - `TOTAL_FRAMES` in Root.tsx is auto-computed from pick count, skip it
 2. Update `SCRIPTS` in `video/generate_audio.py` — match new picks
 3. `ELEVENLABS_API_KEY=your_key python3 video/generate_audio.py`
 4. `cd video && npm run render`

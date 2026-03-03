@@ -137,6 +137,11 @@ class GamePredictionService:
         """Auto-grade pending predictions."""
         return db.auto_grade_game_predictions()
 
+    def grade_prediction(self, prediction_id: int, actual_winner: str) -> dict:
+        """Manually grade a game prediction."""
+        db.grade_game_prediction(prediction_id, actual_winner)
+        return {"success": True}
+
     def get_accuracy_stats(self) -> dict:
         """Get accuracy statistics."""
         return db.get_game_accuracy_stats()

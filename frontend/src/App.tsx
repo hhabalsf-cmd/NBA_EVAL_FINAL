@@ -26,7 +26,7 @@ function App() {
   }, [checkAuth])
 
   const { data: pendingPicks = [] } = useQuery({
-    queryKey: ['pending-picks'],
+    queryKey: ['picks', true],
     queryFn: () => getPicks(30, true),
     staleTime: 1000 * 30,
     enabled: isAuthenticated,

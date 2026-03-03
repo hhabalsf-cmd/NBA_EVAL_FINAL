@@ -145,7 +145,7 @@ export default function PlayerPage() {
             Back
           </button>
           <div className="flex-1 max-w-sm hidden sm:block">
-            <PlayerSearch placeholder="Search another player…" />
+            <PlayerSearch placeholder="Search another player…" replace />
           </div>
           <Link
             to={`/research/${encodeURIComponent(result.player_name)}`}
@@ -189,7 +189,7 @@ export default function PlayerPage() {
         </div>
         {/* Mobile search */}
         <div className="sm:hidden mt-4">
-          <PlayerSearch placeholder="Search another player…" />
+          <PlayerSearch placeholder="Search another player…" replace />
         </div>
       </section>
 
