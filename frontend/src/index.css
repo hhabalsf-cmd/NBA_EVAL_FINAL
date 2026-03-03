@@ -380,3 +380,118 @@ select {
   border-bottom: 1px solid var(--border-subtle);
   margin-bottom: 0.75rem;
 }
+
+/* ── Glassmorphism ──────────────────────────────────────────────────────────── */
+
+.glass {
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  background: rgba(9, 9, 11, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+:root.light .glass {
+  background: rgba(248, 248, 250, 0.82);
+  border: 1px solid rgba(0, 0, 0, 0.055);
+}
+
+/* ── Skeleton / Loading Shimmer ─────────────────────────────────────────────── */
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-elevated) 0%,
+    var(--bg-tertiary) 50%,
+    var(--bg-elevated) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
+  border-radius: 6px;
+}
+
+@keyframes skeleton-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ── Confidence-based card borders (replace .card-accent) ───────────────────── */
+
+.confidence-high {
+  border-top: 2px solid var(--accent-success);
+  box-shadow: 0 0 24px rgba(107, 191, 138, 0.10), var(--shadow-sm);
+}
+
+.confidence-medium {
+  border-top: 2px solid var(--accent-warning);
+  box-shadow: 0 0 24px rgba(232, 164, 48, 0.10), var(--shadow-sm);
+}
+
+.confidence-low {
+  border-top: 2px solid var(--accent-danger);
+  box-shadow: 0 0 24px rgba(212, 115, 110, 0.10), var(--shadow-sm);
+}
+
+/* ── Mobile ripple touch feedback ───────────────────────────────────────────── */
+
+.ripple {
+  position: relative;
+  overflow: hidden;
+}
+
+.ripple::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.14) 0%, transparent 65%);
+  opacity: 0;
+  transform: scale(0.8);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  pointer-events: none;
+}
+
+.ripple:active::after {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* ── Basketball bounce loader ────────────────────────────────────────────────── */
+
+@keyframes basketball-bounce {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  40%       { transform: translateY(-18px) rotate(160deg); }
+  60%       { transform: translateY(-12px) rotate(200deg); }
+}
+
+.basketball-bounce {
+  display: inline-block;
+  animation: basketball-bounce 0.8s cubic-bezier(0.36, 0.07, 0.19, 0.97) infinite;
+}
+
+/* ── Mobile horizontal snap scroll for stat cards ───────────────────────────── */
+
+.snap-container {
+  display: flex;
+  gap: 1rem;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 8px;
+}
+
+.snap-container::-webkit-scrollbar {
+  display: none;
+}
+
+.snap-item {
+  scroll-snap-align: start;
+  flex-shrink: 0;
+}
+
+@media (min-width: 640px) {
+  .snap-container {
+    display: grid;
+    overflow-x: visible;
+    scroll-snap-type: none;
+    padding-bottom: 0;
+  }
+}

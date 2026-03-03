@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { ArrowLeft, Check, Loader2, Zap, PlaySquare, FlaskConical } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
+import { motion, AnimatePresence, type Variants } from 'framer-motion'
 import { usePrediction } from '../hooks/usePrediction'
 import PredictionCard from '../components/PredictionCard'
 import StatChartModal from '../components/StatChartModal'
@@ -10,6 +11,21 @@ import { evaluateLine, createPick, LineEvaluation, getPlayerOdds, getTeamInjurie
 import { getNbaHeadshotUrl } from '../utils/nba'
 
 const STATS = ['PTS', 'REB', 'AST', 'PRA'] as const
+
+const cardContainer: Variants = {
+  hidden: {},
+  show:   { transition: { staggerChildren: 0.08, delayChildren: 0.05 } },
+}
+
+const cardItem: Variants = {
+  hidden: { opacity: 0, y: 18 },
+  show:   { opacity: 1, y: 0 },
+}
+
+const sectionFade: Variants = {
+  hidden: { opacity: 0, y: 10 },
+  show:   { opacity: 1, y: 0 },
+}
 
 export default function PlayerPage() {
   const { playerName } = useParams<{ playerName: string }>()
@@ -29,7 +45,6 @@ export default function PlayerPage() {
     }
   }, [playerName, predict])
 
-  // Fetch team injury report once prediction resolves
   const { data: injuries } = useQuery({
     queryKey: ['team-injuries', playerName],
     queryFn: () => getTeamInjuries(decodeURIComponent(playerName!)),
@@ -37,7 +52,6 @@ export default function PlayerPage() {
     staleTime: 1000 * 60 * 30,
   })
 
-  // Fetch live odds once we have the player name
   const { data: odds, isLoading: oddsLoading } = useQuery({
     queryKey: ['player-odds', playerName],
     queryFn: () => getPlayerOdds(decodeURIComponent(playerName!)),
@@ -45,7 +59,6 @@ export default function PlayerPage() {
     staleTime: 1000 * 60 * 30,
   })
 
-  // Auto-populate line inputs when odds load
   useEffect(() => {
     if (!odds || !odds.found) return
     setLineInputs(prev => {
@@ -104,15 +117,41 @@ export default function PlayerPage() {
     })
   }
 
+  // ── Skeleton loading state ───────────────────────────────────────────────────
   if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center py-24">
-        <Loader2 className="w-8 h-8 text-accent animate-spin mb-5" />
-        <div className="text-sm text-text-primary mb-3">{message}</div>
-        <div className="w-48 progress-bar">
-          <div className="progress-bar-fill" style={{ width: `${progress}%` }} />
+      <div className="space-y-8">
+        {/* Skeleton header */}
+        <div className="flex items-center gap-4">
+          <div className="skeleton w-24 h-24 rounded-2xl flex-shrink-0" />
+          <div className="flex-1 space-y-3">
+            <div className="skeleton h-7 w-44 rounded-lg" />
+            <div className="skeleton h-4 w-20 rounded" />
+            <div className="skeleton h-4 w-36 rounded" />
+          </div>
         </div>
-        <div className="text-xs text-text-muted mt-2">{progress}% complete</div>
+
+        {/* Progress indicator */}
+        <div className="flex flex-col items-center gap-3 py-6">
+          <span className="text-3xl basketball-bounce">🏀</span>
+          <div className="text-sm text-text-secondary font-medium">{message}</div>
+          <div className="w-64 progress-bar">
+            <div className="progress-bar-fill" style={{ width: `${progress}%` }} />
+          </div>
+          <div className="text-xs text-text-muted font-mono">{progress}% complete</div>
+        </div>
+
+        {/* Skeleton prediction cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {[...Array(4)].map((_, i) => (
+            <div key={i} className="card p-5 space-y-4">
+              <div className="skeleton h-3 w-16 rounded" />
+              <div className="skeleton h-10 w-20 rounded-lg" />
+              <div className="skeleton h-3 w-20 rounded" />
+              <div className="skeleton h-2 w-full rounded-full" />
+            </div>
+          ))}
+        </div>
       </div>
     )
   }
@@ -135,7 +174,12 @@ export default function PlayerPage() {
   return (
     <div className="space-y-8">
       {/* Header */}
-      <section>
+      <motion.section
+        variants={sectionFade}
+        initial="hidden"
+        animate="show"
+        transition={{ duration: 0.35, ease: 'easeOut' }}
+      >
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate('/app')}
@@ -191,11 +235,17 @@ export default function PlayerPage() {
         <div className="sm:hidden mt-4">
           <PlayerSearch placeholder="Search another player…" replace />
         </div>
-      </section>
+      </motion.section>
 
       {/* Game Info */}
       {result.game_info && (
-        <section className="card p-4 sm:p-5">
+        <motion.section
+          className="card p-4 sm:p-5"
+          variants={sectionFade}
+          initial="hidden"
+          animate="show"
+          transition={{ duration: 0.35, ease: 'easeOut', delay: 0.08 }}
+        >
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
             <div>
               <span className="text-text-muted">Matchup: </span>
@@ -236,17 +286,22 @@ export default function PlayerPage() {
               </div>
             </div>
           )}
-
-        </section>
+        </motion.section>
       )}
 
-      {/* Injury Report — standalone card, shows even without a game today */}
+      {/* Injury Report */}
       {injuries && (injuries.team || injuries.opponent) &&
         ((injuries.team?.out.length ?? 0) > 0 ||
           (injuries.team?.questionable.length ?? 0) > 0 ||
           (injuries.opponent?.out.length ?? 0) > 0 ||
           (injuries.opponent?.questionable.length ?? 0) > 0) && (
-        <section className="card p-5">
+        <motion.section
+          className="card p-5"
+          variants={sectionFade}
+          initial="hidden"
+          animate="show"
+          transition={{ duration: 0.35, ease: 'easeOut', delay: 0.14 }}
+        >
           <div className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">
             Injury Report
           </div>
@@ -254,26 +309,36 @@ export default function PlayerPage() {
             {injuries.team && <InjuryColumn info={injuries.team} label="Your Team" />}
             {injuries.opponent && <InjuryColumn info={injuries.opponent} label="Opponent" />}
           </div>
-        </section>
+        </motion.section>
       )}
 
       {/* Predictions Grid */}
       <section>
         <h2 className="text-lg font-semibold text-text-primary mb-5 tracking-tight">ML Predictions</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <motion.div
+          className="grid grid-cols-2 md:grid-cols-4 gap-4"
+          variants={cardContainer}
+          initial="hidden"
+          animate="show"
+        >
           {STATS.map(stat => {
             const prediction = result.predictions[stat]
             if (!prediction) return null
             return (
-              <PredictionCard
+              <motion.div
                 key={stat}
-                stat={stat}
-                prediction={prediction}
-                onChartClick={() => setChartStat(stat)}
-              />
+                variants={cardItem}
+                transition={{ duration: 0.32, ease: 'easeOut' }}
+              >
+                <PredictionCard
+                  stat={stat}
+                  prediction={prediction}
+                  onChartClick={() => setChartStat(stat)}
+                />
+              </motion.div>
             )
           })}
-        </div>
+        </motion.div>
       </section>
 
       {/* Stat Chart Modal */}
@@ -286,7 +351,13 @@ export default function PlayerPage() {
       )}
 
       {/* Line Evaluation */}
-      <section className="card p-4 sm:p-6">
+      <motion.section
+        className="card p-4 sm:p-6"
+        variants={sectionFade}
+        initial="hidden"
+        animate="show"
+        transition={{ duration: 0.35, ease: 'easeOut', delay: 0.28 }}
+      >
         <div className="flex items-center justify-between mb-5 gap-2">
           <h2 className="text-lg font-semibold text-text-primary tracking-tight">Evaluate Lines</h2>
           {hasOdds && !oddsLoading && (
@@ -319,10 +390,12 @@ export default function PlayerPage() {
           })}
         </div>
 
-        <button
+        <motion.button
           onClick={handleEvaluateAll}
           disabled={!hasAnyLine || isEvaluatingAll}
-          className="btn btn-primary w-full"
+          className="btn btn-primary w-full ripple"
+          whileTap={{ scale: 0.98 }}
+          transition={{ duration: 0.1 }}
         >
           {isEvaluatingAll ? (
             <>
@@ -335,21 +408,34 @@ export default function PlayerPage() {
               Evaluate All Lines
             </>
           )}
-        </button>
+        </motion.button>
 
-        {allEvaluations.length > 0 && (
-          <div className="mt-6 space-y-4">
-            {allEvaluations.map(ev => (
-              <EvalResult
-                key={ev.stat}
-                evaluation={ev}
-                playerName={result.player_name}
-                onSave={buildSavePick(ev)}
-              />
-            ))}
-          </div>
-        )}
-      </section>
+        <AnimatePresence>
+          {allEvaluations.length > 0 && (
+            <motion.div
+              className="mt-6 space-y-4"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3, ease: 'easeOut' }}
+            >
+              {allEvaluations.map((ev, i) => (
+                <motion.div
+                  key={ev.stat}
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i * 0.08, duration: 0.28, ease: 'easeOut' }}
+                >
+                  <EvalResult
+                    evaluation={ev}
+                    playerName={result.player_name}
+                    onSave={buildSavePick(ev)}
+                  />
+                </motion.div>
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </motion.section>
     </div>
   )
 }
@@ -415,7 +501,7 @@ function EvalResult({
   }
 
   return (
-    <div className={`mt-6 p-4 sm:p-5 rounded-xl border-y border-r ${isOver ? 'border-accent-success/20 bg-accent-success/[0.04] border-l-4 border-l-accent-success' : 'border-accent-danger/20 bg-accent-danger/[0.04] border-l-4 border-l-accent-danger'}`}>
+    <div className={`p-4 sm:p-5 rounded-xl border-y border-r ${isOver ? 'border-accent-success/20 bg-accent-success/[0.04] border-l-4 border-l-accent-success' : 'border-accent-danger/20 bg-accent-danger/[0.04] border-l-4 border-l-accent-danger'}`}>
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 sm:gap-5">
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-3 sm:mb-4 flex-wrap">
@@ -454,9 +540,11 @@ function EvalResult({
                 <span className="text-accent-success">Over</span>
               </div>
               <div className="h-1.5 bg-accent-danger/15 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-accent-success transition-all duration-500 rounded-full"
-                  style={{ width: `${evaluation.prob_over}%` }}
+                <motion.div
+                  className="h-full bg-accent-success rounded-full"
+                  initial={{ width: 0 }}
+                  animate={{ width: `${evaluation.prob_over}%` }}
+                  transition={{ duration: 0.6, ease: 'easeOut', delay: 0.2 }}
                 />
               </div>
             </div>
@@ -464,10 +552,12 @@ function EvalResult({
         </div>
 
         <div className="flex flex-col sm:items-end gap-2">
-          <button
+          <motion.button
             onClick={handleSave}
             disabled={isSaving}
-            className={`btn ${isOver ? 'btn-over' : 'btn-under'} w-full sm:w-auto`}
+            className={`btn ${isOver ? 'btn-over' : 'btn-under'} w-full sm:w-auto ripple`}
+            whileTap={{ scale: 0.97 }}
+            transition={{ duration: 0.1 }}
           >
             {isSaving ? (
               <>
@@ -480,7 +570,7 @@ function EvalResult({
                 Save Pick
               </>
             )}
-          </button>
+          </motion.button>
           {saveMessage && (
             <span className={`text-xs text-right max-w-[160px] leading-snug ${saveMessage.includes('Saved') ? 'text-accent-success' : 'text-accent-danger'}`}>
               {saveMessage}
