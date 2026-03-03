@@ -501,12 +501,26 @@ class NBADataScraper:
             return None
 
     def get_team_defensive_stats(self, season='2025-26'):
-        """Get team defensive ratings and pace for all teams"""
-        cache_key = f"team_def_stats_{season}"
+        """Get team defensive ratings and pace for all teams.
+        Cache hierarchy: local file (1h) → Supabase (24h) → NBA API.
+        Two NBA API calls are fetched in parallel to halve network wait time.
+        """
+        import db as _db
+        import concurrent.futures
+
+        # 1. Local file cache (fastest, 1h TTL)
         cached = CacheManager.get('team_stats', season, expiry_type='team_stats')
         if cached is not None:
             return cached
 
+        # 2. Supabase cache (shared across restarts, 24h TTL)
+        supabase_data = _db.get_team_stats_from_supabase(season)
+        if supabase_data:
+            print(f"📦 Loaded team stats from Supabase ({len(supabase_data)} teams)")
+            CacheManager.set('team_stats', supabase_data, season)
+            return supabase_data
+
+        # 3. Fetch from NBA API — two calls in parallel
         print("🛡️ Fetching team defensive statistics...")
         try:
             def fetch_team_stats():
@@ -518,9 +532,6 @@ class NBADataScraper:
                 time.sleep(0.6)
                 return team_stats.get_data_frames()[0]
 
-            df = retry_api_call(fetch_team_stats)
-
-            # Also get pace data
             def fetch_pace_stats():
                 pace_stats = leaguedashteamstats.LeagueDashTeamStats(
                     season=season,
@@ -530,7 +541,11 @@ class NBADataScraper:
                 time.sleep(0.6)
                 return pace_stats.get_data_frames()[0]
 
-            pace_df = retry_api_call(fetch_pace_stats)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                f_advanced = pool.submit(retry_api_call, fetch_team_stats)
+                f_base = pool.submit(retry_api_call, fetch_pace_stats)
+                df = f_advanced.result()
+                pace_df = f_base.result()
 
             team_data = {}
             for _, row in df.iterrows():
@@ -555,18 +570,17 @@ class NBADataScraper:
                     team_name = row.get('TEAM_NAME', '')
                     team_abbrev = TEAM_NAME_TO_ABBREV.get(team_name)
                 if team_abbrev and team_abbrev in team_data:
-                    # Update pace if not already set
                     if team_data[team_abbrev].get('pace', 100) == 100:
                         team_data[team_abbrev]['pace'] = row.get('PACE', 100)
                     team_data[team_abbrev]['pts_rank'] = row.get('PTS_RANK', 15)
                     team_data[team_abbrev]['opp_ast'] = row.get('OPP_AST', 25)
 
+            _db.upsert_team_stats_to_supabase(team_data, season)
             CacheManager.set('team_stats', team_data, season)
             return team_data
 
         except Exception as e:
             print(f"⚠️ Error fetching team defensive stats: {e}")
-            # Return default values
             return {abbrev: {'def_rating': 110, 'pace': 100, 'opp_pts': 110, 'pts_rank': 15, 'opp_ast': 25}
                     for abbrev in TEAM_ABBREV_TO_NAME}
 

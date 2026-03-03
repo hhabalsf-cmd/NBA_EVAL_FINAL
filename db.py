@@ -30,6 +30,177 @@ def init_db():
     pass
 
 
+# ── Game log cache (Supabase) ─────────────────────────────────
+
+# NBA API returns these mixed/upper-case column names; DB stores lowercase.
+# On read we rename back so the rest of the codebase is unchanged.
+_DB_TO_NBA_COLS = {
+    "season_id": "SEASON_ID",
+    "player_id": "Player_ID",
+    "game_id": "Game_ID",
+    "game_date": "GAME_DATE",
+    "matchup": "MATCHUP",
+    "wl": "WL",
+    "min": "MIN",
+    "fgm": "FGM", "fga": "FGA", "fg_pct": "FG_PCT",
+    "fg3m": "FG3M", "fg3a": "FG3A", "fg3_pct": "FG3_PCT",
+    "ftm": "FTM", "fta": "FTA", "ft_pct": "FT_PCT",
+    "oreb": "OREB", "dreb": "DREB", "reb": "REB",
+    "ast": "AST", "stl": "STL", "blk": "BLK",
+    "tov": "TOV", "pf": "PF", "pts": "PTS",
+    "plus_minus": "PLUS_MINUS", "video_available": "VIDEO_AVAILABLE",
+    "season": "SEASON",
+}
+
+
+def get_game_logs_from_supabase(player_id: str, season: str):
+    """
+    Return a DataFrame of game logs for (player_id, season) from Supabase,
+    or None if no rows exist. Column names match NBA API format.
+    """
+    conn = get_connection()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM player_game_logs WHERE player_id = %s AND season = %s",
+            (player_id, season),
+        )
+        rows = cur.fetchall()
+    conn.close()
+
+    if not rows:
+        return None
+
+    df = pd.DataFrame([dict(r) for r in rows])
+    df = df.rename(columns=_DB_TO_NBA_COLS)
+    return df
+
+
+def insert_game_logs_to_supabase(df: pd.DataFrame, player_id: str, season: str) -> None:
+    """
+    Bulk-insert game log rows into Supabase. Safe to re-run — uses ON CONFLICT DO NOTHING.
+    df must be a raw NBA API PlayerGameLog DataFrame (uppercase column names).
+    """
+    if df.empty:
+        return
+
+    _NBA_TO_DB_COLS = {v: k for k, v in _DB_TO_NBA_COLS.items()}
+    db_df = df.rename(columns=_NBA_TO_DB_COLS).copy()
+
+    # Ensure player_id and season are set from function params (source of truth)
+    db_df["player_id"] = player_id
+    db_df["season"] = season
+
+    # Parse MIN: NBA API returns "35:22" strings; store as float minutes
+    if "min" in db_df.columns:
+        def _parse_min(val):
+            try:
+                parts = str(val).split(":")
+                return float(parts[0]) + float(parts[1]) / 60 if len(parts) == 2 else float(parts[0])
+            except Exception:
+                return None
+        db_df["min"] = db_df["min"].apply(_parse_min)
+
+    # Parse game_date to a plain date string for Postgres DATE column
+    if "game_date" in db_df.columns:
+        db_df["game_date"] = pd.to_datetime(db_df["game_date"], format="mixed").dt.strftime("%Y-%m-%d")
+
+    cols = list(_DB_TO_NBA_COLS.keys())  # canonical DB column order
+    cols_present = [c for c in cols if c in db_df.columns]
+
+    insert_sql = (
+        f"INSERT INTO player_game_logs ({', '.join(cols_present)}) "
+        f"VALUES ({', '.join(['%s'] * len(cols_present))}) "
+        f"ON CONFLICT (player_id, game_id) DO NOTHING"
+    )
+
+    rows = [tuple(row[c] for c in cols_present) for _, row in db_df.iterrows()]
+
+    conn = get_connection()
+    with conn.cursor() as cur:
+        cur.executemany(insert_sql, rows)
+    conn.commit()
+    conn.close()
+
+
+# ── Team defensive stats cache (Supabase) ────────────────────
+
+_TEAM_STATS_TTL_HOURS = 24
+
+
+def get_team_stats_from_supabase(season: str):
+    """
+    Return team defensive stats dict for the given season, or None if stale/missing.
+    TTL: 24 hours. Dict keyed by team abbreviation with lowercase stat keys.
+    """
+    conn = get_connection()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM team_defensive_stats WHERE season = %s",
+            (season,),
+        )
+        rows = cur.fetchall()
+    conn.close()
+
+    if not rows:
+        return None
+
+    fetched_at = rows[0]["fetched_at"]
+    if fetched_at.tzinfo is not None:
+        from datetime import timezone
+        age_hours = (datetime.now(timezone.utc) - fetched_at).total_seconds() / 3600
+    else:
+        age_hours = (datetime.now() - fetched_at.replace(tzinfo=None)).total_seconds() / 3600
+
+    if age_hours > _TEAM_STATS_TTL_HOURS:
+        return None
+
+    return {
+        row["team_abbrev"]: {
+            "def_rating": row["def_rating"],
+            "pace":       row["pace"],
+            "opp_pts":    row["opp_pts"],
+            "pts_rank":   row["pts_rank"],
+            "opp_ast":    row["opp_ast"],
+        }
+        for row in rows
+    }
+
+
+def upsert_team_stats_to_supabase(team_data: dict, season: str) -> None:
+    """
+    Upsert all team defensive stats for the given season into Supabase.
+    team_data: dict keyed by team_abbrev with lowercase stat keys.
+    """
+    if not team_data:
+        return
+
+    rows = [
+        (abbrev, season,
+         stats.get("def_rating"), stats.get("pace"), stats.get("opp_pts"),
+         stats.get("pts_rank"), stats.get("opp_ast"))
+        for abbrev, stats in team_data.items()
+    ]
+
+    sql = """
+        INSERT INTO team_defensive_stats
+            (team_abbrev, season, def_rating, pace, opp_pts, pts_rank, opp_ast, fetched_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+        ON CONFLICT (team_abbrev, season) DO UPDATE SET
+            def_rating = EXCLUDED.def_rating,
+            pace       = EXCLUDED.pace,
+            opp_pts    = EXCLUDED.opp_pts,
+            pts_rank   = EXCLUDED.pts_rank,
+            opp_ast    = EXCLUDED.opp_ast,
+            fetched_at = NOW()
+    """
+
+    conn = get_connection()
+    with conn.cursor() as cur:
+        cur.executemany(sql, rows)
+    conn.commit()
+    conn.close()
+
+
 # ── User functions ────────────────────────────────────────────
 
 def create_user(user_id: str, email: str, hashed_password: str, username: str) -> dict:
@@ -249,9 +420,14 @@ def get_game_predictions(days: int = 7) -> list:
     rows = cursor.fetchall()
     conn.close()
 
+    seen = set()
     results = []
     for row in rows:
         d = dict(row)
+        key = (d['game_date'], d['home_team'], d['away_team'])
+        if key in seen:
+            continue
+        seen.add(key)
         if d.get('key_factors'):
             try:
                 d['key_factors'] = json.loads(d['key_factors'])

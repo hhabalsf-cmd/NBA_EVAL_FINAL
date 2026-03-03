@@ -208,9 +208,12 @@ class PredictionService:
             "message": "Fetching team stats and injuries..."
         }
 
-        # Get context data
-        team_stats = self.get_team_stats()
-        injuries = self.get_injuries()
+        # Get context data — fetch in parallel (independent calls)
+        loop = asyncio.get_event_loop()
+        team_stats, injuries = await asyncio.gather(
+            loop.run_in_executor(None, self.get_team_stats),
+            loop.run_in_executor(None, self.get_injuries),
+        )
 
         await asyncio.sleep(0.1)
 
