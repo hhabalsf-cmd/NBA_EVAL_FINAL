@@ -93,6 +93,9 @@ CACHE_DIR = Path("./cache")
 for d in [DATA_DIR, MODEL_DIR, HISTORY_DIR, CACHE_DIR]:
     d.mkdir(exist_ok=True)
 
+CURRENT_SEASON = '2025-26'
+HISTORICAL_SEASONS = ['2024-25', '2023-24']
+
 # Cache expiration times (in seconds)
 CACHE_EXPIRY = {
     'player_info': 86400,      # 24 hours
@@ -322,25 +325,64 @@ class NBADataScraper:
             return None
     
     def get_player_game_log(self, player_id, seasons=None):
-        """Get player's game log for specified seasons"""
+        """Get player's game log for specified seasons.
+        Historical seasons are fetched from Supabase (permanent cache).
+        Current season uses local file cache + live NBA API.
+        """
+        import db as _db
+
         if seasons is None:
-            seasons = ['2025-26', '2024-25', '2023-24']
-        
+            seasons = [CURRENT_SEASON, '2024-25', '2023-24']
+
         all_games = []
+
         for season in seasons:
-            try:
+            if season != CURRENT_SEASON:
+                # Historical: check Supabase first
+                cached_df = _db.get_game_logs_from_supabase(str(player_id), season)
+                if cached_df is not None and not cached_df.empty:
+                    print(f"📦 Loaded {season} from Supabase ({len(cached_df)} games)")
+                    all_games.append(cached_df)
+                    continue
+
+                # Miss: fetch from NBA API and store permanently
+                print(f"📊 Fetching {season} game log (first time)...")
+                try:
+                    log = playergamelog.PlayerGameLog(
+                        player_id=player_id,
+                        season=season
+                    )
+                    time.sleep(0.6)
+                    df = log.get_data_frames()[0]
+                    df['SEASON'] = season
+                    _db.insert_game_logs_to_supabase(df, str(player_id), season)
+                    print(f"  ✅ Stored {len(df)} rows to Supabase")
+                    all_games.append(df)
+                except Exception as e:
+                    print(f"⚠️ Could not fetch {season}: {e}")
+
+            else:
+                # Current season: existing local cache + live API (unchanged behaviour)
+                cached = CacheManager.get('game_log', player_id, season, expiry_type='game_log')
+                if cached is not None:
+                    print(f"📦 Loaded {season} from local cache")
+                    all_games.append(cached)
+                    continue
+
                 print(f"📊 Fetching {season} game log...")
-                log = playergamelog.PlayerGameLog(
-                    player_id=player_id,
-                    season=season
-                )
-                time.sleep(0.6)
-                df = log.get_data_frames()[0]
-                df['SEASON'] = season
-                all_games.append(df)
-            except Exception as e:
-                print(f"⚠️ Could not fetch {season}: {e}")
-        
+                try:
+                    log = playergamelog.PlayerGameLog(
+                        player_id=player_id,
+                        season=season
+                    )
+                    time.sleep(0.6)
+                    df = log.get_data_frames()[0]
+                    df['SEASON'] = season
+                    CacheManager.set('game_log', df, player_id, season)
+                    all_games.append(df)
+                except Exception as e:
+                    print(f"⚠️ Could not fetch {season}: {e}")
+
         if all_games:
             combined = pd.concat(all_games, ignore_index=True)
             # NBA API returns each season descending; sort ascending so tail() = most recent games
