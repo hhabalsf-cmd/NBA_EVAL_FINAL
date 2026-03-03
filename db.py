@@ -203,6 +203,13 @@ def upsert_team_stats_to_supabase(team_data: dict, season: str) -> None:
 
 # ── User functions ────────────────────────────────────────────
 
+def _safe_user(row) -> dict:
+    """Return a user dict with hashed_password stripped out."""
+    d = dict(row)
+    d.pop("hashed_password", None)
+    return d
+
+
 def create_user(user_id: str, email: str, hashed_password: str, username: str) -> dict:
     """Insert a new user row. Returns the created user dict."""
     conn = get_connection()
@@ -216,7 +223,7 @@ def create_user(user_id: str, email: str, hashed_password: str, username: str) -
     cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
     row = cursor.fetchone()
     conn.close()
-    return dict(row)
+    return _safe_user(row)
 
 
 def get_user_by_email(email: str) -> Optional[dict]:
@@ -251,7 +258,7 @@ def update_user_avatar(user_id: str, avatar_url: str) -> Optional[dict]:
     cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
     row = cursor.fetchone()
     conn.close()
-    return dict(row) if row else None
+    return _safe_user(row) if row else None
 
 
 def update_user_password(user_id: str, hashed_password: str) -> None:
@@ -277,7 +284,7 @@ def clear_user_avatar(user_id: str) -> Optional[dict]:
     cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
     row = cursor.fetchone()
     conn.close()
-    return dict(row) if row else None
+    return _safe_user(row) if row else None
 
 
 def save_game_prediction(prediction_data: dict) -> int:
@@ -696,13 +703,14 @@ def save_pick(pick_data: dict) -> int:
     return pick_id
 
 
-def get_picks_history(days: int = 30, user_id: str = None) -> list:
+def get_picks_history(days: int = 30, user_id: str = None, limit: int = None) -> list:
     """
-    Get picks history for the last N days.
+    Get picks history for the last N days or by row limit.
 
     Args:
-        days: Number of days to look back (default 30)
+        days: Number of days to look back (default 30, ignored when limit is set)
         user_id: If provided, only return picks for this user
+        limit: If provided, return the most recent N picks regardless of date
 
     Returns:
         List of pick dicts
@@ -710,20 +718,35 @@ def get_picks_history(days: int = 30, user_id: str = None) -> list:
     conn = get_connection()
     cursor = conn.cursor()
 
-    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-
-    if user_id:
-        cursor.execute("""
-            SELECT * FROM picks
-            WHERE timestamp >= %s AND (voided IS NULL OR voided = 0) AND user_id = %s
-            ORDER BY timestamp DESC
-        """, (cutoff, user_id))
+    if limit is not None:
+        if user_id:
+            cursor.execute("""
+                SELECT * FROM picks
+                WHERE (voided IS NULL OR voided = 0) AND user_id = %s
+                ORDER BY timestamp DESC
+                LIMIT %s
+            """, (user_id, limit))
+        else:
+            cursor.execute("""
+                SELECT * FROM picks
+                WHERE (voided IS NULL OR voided = 0)
+                ORDER BY timestamp DESC
+                LIMIT %s
+            """, (limit,))
     else:
-        cursor.execute("""
-            SELECT * FROM picks
-            WHERE timestamp >= %s AND (voided IS NULL OR voided = 0)
-            ORDER BY timestamp DESC
-        """, (cutoff,))
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        if user_id:
+            cursor.execute("""
+                SELECT * FROM picks
+                WHERE timestamp >= %s AND (voided IS NULL OR voided = 0) AND user_id = %s
+                ORDER BY timestamp DESC
+            """, (cutoff, user_id))
+        else:
+            cursor.execute("""
+                SELECT * FROM picks
+                WHERE timestamp >= %s AND (voided IS NULL OR voided = 0)
+                ORDER BY timestamp DESC
+            """, (cutoff,))
 
     rows = cursor.fetchall()
     conn.close()

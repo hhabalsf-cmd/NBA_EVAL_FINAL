@@ -50,6 +50,7 @@ def _pick_to_response(p: dict) -> PickResponse:
 @router.get("", response_model=List[PickResponse])
 async def get_picks(
     days: int = Query(default=30, ge=1, le=365, description="Number of days to look back"),
+    limit: Optional[int] = Query(default=None, ge=1, le=100, description="Return most recent N picks (overrides days)"),
     pending_only: bool = Query(default=False, description="Only return ungraded picks"),
     current_user: dict = Depends(get_current_user),
 ):
@@ -58,7 +59,7 @@ async def get_picks(
     if pending_only:
         picks = db.get_pending_picks(user_id=user_id)
     else:
-        picks = db.get_picks_history(days=days, user_id=user_id)
+        picks = db.get_picks_history(days=days, user_id=user_id, limit=limit)
 
     return [_pick_to_response(p) for p in picks]
 

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { RefreshCw, Trash2, Check, X, Loader2 } from 'lucide-react'
 import {
@@ -21,16 +21,29 @@ import {
   Legend,
 } from 'recharts'
 
+type PageLimit = 30 | 60 | 100
+type ResultFilter = 'all' | 'wins' | 'losses'
+
 export default function HistoryPage() {
   const queryClient = useQueryClient()
   const [showPending, setShowPending] = useState(false)
   const [gradePickId, setGradePickId] = useState<number | null>(null)
   const [gradeValue, setGradeValue] = useState('')
+  const [pageLimit, setPageLimit] = useState<PageLimit>(30)
+  const [resultFilter, setResultFilter] = useState<ResultFilter>('all')
 
   const { data: picks, isLoading: picksLoading } = useQuery({
     queryKey: ['picks', showPending],
-    queryFn: () => getPicks(30, showPending),
+    queryFn: () => getPicks(100, showPending),
   })
+
+  const displayedPicks = useMemo(() => {
+    if (!picks) return []
+    let filtered = picks
+    if (resultFilter === 'wins') filtered = picks.filter(p => p.won === true)
+    else if (resultFilter === 'losses') filtered = picks.filter(p => p.won === false)
+    return filtered.slice(0, pageLimit)
+  }, [picks, resultFilter, pageLimit])
 
   const { data: stats } = useQuery({
     queryKey: ['performance-stats'],
@@ -252,23 +265,49 @@ export default function HistoryPage() {
 
       {/* Picks */}
       <section className="card overflow-hidden">
-        <div className="p-4 sm:p-5 border-b border-border-subtle flex items-center justify-between">
-          <h2 className="text-base font-semibold text-text-primary tracking-tight">
-            {showPending ? 'Pending Picks' : 'All Picks'}
-          </h2>
-          <div className="flex items-center gap-1 bg-bg-secondary rounded-lg p-0.5">
-            <button
-              onClick={() => setShowPending(false)}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                !showPending ? 'bg-bg-elevated text-text-primary' : 'text-text-muted hover:text-text-secondary'
-              }`}
-            >All</button>
-            <button
-              onClick={() => setShowPending(true)}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                showPending ? 'bg-bg-elevated text-text-primary' : 'text-text-muted hover:text-text-secondary'
-              }`}
-            >Pending</button>
+        <div className="p-4 sm:p-5 border-b border-border-subtle space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold text-text-primary tracking-tight">
+              {showPending ? 'Pending Picks' : 'Pick History'}
+            </h2>
+            <div className="flex items-center gap-1 bg-bg-secondary rounded-lg p-0.5">
+              <button
+                onClick={() => setShowPending(false)}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  !showPending ? 'bg-bg-elevated text-text-primary' : 'text-text-muted hover:text-text-secondary'
+                }`}
+              >All</button>
+              <button
+                onClick={() => setShowPending(true)}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  showPending ? 'bg-bg-elevated text-text-primary' : 'text-text-muted hover:text-text-secondary'
+                }`}
+              >Pending</button>
+            </div>
+          </div>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1 bg-bg-secondary rounded-lg p-0.5">
+              {(['all', 'wins', 'losses'] as ResultFilter[]).map(f => (
+                <button
+                  key={f}
+                  onClick={() => setResultFilter(f)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-medium capitalize transition-colors ${
+                    resultFilter === f ? 'bg-bg-elevated text-text-primary' : 'text-text-muted hover:text-text-secondary'
+                  }`}
+                >{f}</button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1 bg-bg-secondary rounded-lg p-0.5">
+              {([30, 60, 100] as PageLimit[]).map(n => (
+                <button
+                  key={n}
+                  onClick={() => setPageLimit(n)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                    pageLimit === n ? 'bg-bg-elevated text-text-primary' : 'text-text-muted hover:text-text-secondary'
+                  }`}
+                >{n}</button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -276,9 +315,11 @@ export default function HistoryPage() {
           <div className="flex items-center justify-center py-16">
             <Loader2 className="w-5 h-5 text-accent animate-spin" />
           </div>
-        ) : !picks || picks.length === 0 ? (
+        ) : displayedPicks.length === 0 ? (
           <div className="text-center py-16 px-4">
-            <p className="text-sm text-text-secondary">No picks yet. Save picks from the player page to track them here.</p>
+            <p className="text-sm text-text-secondary">
+              {resultFilter !== 'all' ? `No ${resultFilter} to show.` : 'No picks yet. Save picks from the player page to track them here.'}
+            </p>
           </div>
         ) : (
           <>
@@ -299,7 +340,7 @@ export default function HistoryPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {picks.slice(0, 30).map((pick: Pick) => (
+                  {displayedPicks.map((pick: Pick) => (
                     <tr key={pick.id}>
                       <td className="text-xs text-text-muted whitespace-nowrap">{formatDate(pick.timestamp)}</td>
                       <td className="font-medium text-text-primary text-sm">{pick.player}</td>
@@ -374,7 +415,7 @@ export default function HistoryPage() {
 
             {/* Mobile Card View */}
             <div className="md:hidden divide-y divide-border-subtle">
-              {picks.slice(0, 30).map((pick: Pick) => {
+              {displayedPicks.map((pick: Pick) => {
                 const isOver = pick.direction === 'OVER'
                 return (
                   <div key={pick.id} className={`p-4 border-l-2 ${isOver ? 'border-l-accent-success' : 'border-l-accent-danger'}`}>

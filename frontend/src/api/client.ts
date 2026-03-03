@@ -417,9 +417,9 @@ export async function getTodaysBestBets(minEdge = 5, limit = 10): Promise<{ bets
   return response.json()
 }
 
-export async function getPicks(days = 30, pendingOnly = false): Promise<Pick[]> {
+export async function getPicks(limit = 100, pendingOnly = false): Promise<Pick[]> {
   const params = new URLSearchParams({
-    days: days.toString(),
+    limit: limit.toString(),
     pending_only: pendingOnly.toString(),
   })
   const response = await fetch(`${API_BASE}/picks?${params}`, {
