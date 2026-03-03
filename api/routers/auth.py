@@ -180,6 +180,23 @@ async def change_password(
     db.update_user_password(current_user["id"], hash_password(req.new_password))
 
 
+@router.post("/refresh", response_model=AuthResponse)
+async def refresh_token(current_user: dict = Depends(get_current_user)):
+    """Issue a fresh JWT token for an already-authenticated user."""
+    token = create_access_token(current_user["id"], current_user["email"])
+    return AuthResponse(
+        token=token,
+        user={
+            "id": current_user["id"],
+            "email": current_user["email"],
+            "username": current_user["username"],
+            "created_at": current_user["created_at"],
+            "role": current_user.get("role", "user"),
+            "avatar_url": current_user.get("avatar_url"),
+        },
+    )
+
+
 @router.delete("/avatar", status_code=200)
 async def delete_avatar(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]

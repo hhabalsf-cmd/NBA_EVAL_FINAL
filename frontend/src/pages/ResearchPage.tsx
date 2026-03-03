@@ -239,7 +239,7 @@ export default function ResearchPage() {
     queryKey: ['player-research', decoded],
     queryFn: () => getPlayerResearch(decoded),
     enabled: !!decoded,
-    staleTime: 1000 * 60 * 5, // 5 min
+    staleTime: 1000 * 30, // 30 seconds
     retry: 1,
   })
 
@@ -460,9 +460,13 @@ export default function ResearchPage() {
           <input
             type="number"
             step="0.5"
+            min="0.5"
             placeholder="e.g. 25.5"
             value={lineInput}
-            onChange={(e) => setLineInput(e.target.value)}
+            onChange={(e) => {
+              const val = e.target.value
+              if (val === '' || parseFloat(val) > 0) setLineInput(val)
+            }}
             className="w-24 px-3 py-1.5 rounded-lg text-sm font-mono text-center bg-bg-elevated border border-border-subtle text-text-primary focus:outline-none focus:border-accent transition-colors"
           />
           {parsedLine !== null && (
@@ -503,7 +507,7 @@ export default function ResearchPage() {
               <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-secondary)' }}>
                 Hit Rate — {STAT_LABELS[activeStat]} over {parsedLine}
               </h2>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 {hitRates.map((hr) => (
                   <HitRateCard key={hr.label} {...hr} />
                 ))}
@@ -711,18 +715,18 @@ export default function ResearchPage() {
                       {/* PRA */}
                       <StatCell val={g.pra} isHighlighted={activeStat === 'PRA'} isOver={activeStat === 'PRA' ? isOver : null} />
                       <td className="px-3 py-2 text-center font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
-                        {g.fg_pct.toFixed(0)}%
+                        {g.fg_pct != null ? `${(g.fg_pct * 100).toFixed(0)}%` : '—'}
                       </td>
                       <td className="px-3 py-2 text-center font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
-                        {g.fg3_pct.toFixed(0)}%
+                        {g.fg3_pct != null ? `${(g.fg3_pct * 100).toFixed(0)}%` : '—'}
                       </td>
                       <td className="px-3 py-2 text-center font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
-                        {g.ft_pct.toFixed(0)}%
+                        {g.ft_pct != null ? `${(g.ft_pct * 100).toFixed(0)}%` : '—'}
                       </td>
                       <td className="px-3 py-2 text-center font-mono text-xs" style={{
-                        color: g.plus_minus > 0 ? 'var(--accent-success)' : g.plus_minus < 0 ? 'var(--accent-danger)' : 'var(--text-muted)',
+                        color: (g.plus_minus ?? 0) > 0 ? 'var(--accent-success)' : (g.plus_minus ?? 0) < 0 ? 'var(--accent-danger)' : 'var(--text-muted)',
                       }}>
-                        {g.plus_minus > 0 ? `+${g.plus_minus}` : g.plus_minus}
+                        {g.plus_minus != null ? (g.plus_minus > 0 ? `+${g.plus_minus}` : g.plus_minus) : '—'}
                       </td>
                     </tr>
                   )

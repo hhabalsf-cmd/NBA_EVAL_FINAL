@@ -41,7 +41,10 @@ export default function AccuracyTracker({ stats }: AccuracyTrackerProps) {
         </div>
 
         {Object.keys(stats.by_confidence_range).length > 0 && (
-          <div className="flex items-center gap-3 sm:gap-4 overflow-x-auto">
+          <div className="relative">
+            <div className="flex items-center gap-3 sm:gap-4 overflow-x-auto pb-1 pr-4"
+              style={{ maskImage: 'linear-gradient(to right, black 85%, transparent 100%)', WebkitMaskImage: 'linear-gradient(to right, black 85%, transparent 100%)' }}
+            >
             {Object.entries(stats.by_confidence_range).map(([range, data]) => (
               <div key={range} className="text-center flex-shrink-0">
                 <div className="text-[10px] text-text-muted uppercase">{range}</div>
@@ -53,6 +56,7 @@ export default function AccuracyTracker({ stats }: AccuracyTrackerProps) {
                 <div className="text-[10px] text-text-muted">{data.total}g</div>
               </div>
             ))}
+            </div>
           </div>
         )}
       </div>

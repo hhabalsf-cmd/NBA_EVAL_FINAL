@@ -51,9 +51,14 @@ export default function GamesPage() {
 
   const autoGradeMutation = useMutation({
     mutationFn: autoGradeGamePredictions,
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['game-history'] })
       queryClient.invalidateQueries({ queryKey: ['game-accuracy'] })
+      const graded = (data as { graded?: number })?.graded ?? 0
+      alert(graded > 0 ? `Auto-graded ${graded} game prediction${graded !== 1 ? 's' : ''}.` : 'No pending game predictions to grade.')
+    },
+    onError: () => {
+      alert('Auto-grade failed. Please try again.')
     },
   })
 
@@ -234,7 +239,7 @@ export default function GamesPage() {
           {/* No Games */}
           {!isLoading && !error && !isStreaming && predictions.length === 0 && (
             <div className="card p-12 text-center">
-              <h3 className="text-lg font-medium text-text-primary mb-2">No Games Today</h3>
+              <h3 className="text-lg font-medium text-text-primary mb-2">No Scheduled Games Found</h3>
               <p className="text-sm text-text-secondary max-md mx-auto leading-relaxed">
                 Check back on game days for ML-powered win predictions.
               </p>

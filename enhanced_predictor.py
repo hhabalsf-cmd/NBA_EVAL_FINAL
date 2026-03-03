@@ -62,9 +62,38 @@ class EnhancedFeatureEngineer:
     - Interaction terms
     """
 
-    # Team defensive strength tiers (updated regularly)
-    ELITE_DEFENSES = ['BOS', 'CLE', 'OKC', 'MIN', 'MEM']
-    WEAK_DEFENSES = ['WAS', 'UTA', 'POR', 'SAS', 'DET']
+    # Fallback defensive tier lists when live team_stats are unavailable
+    _FALLBACK_ELITE_DEFENSES = ['BOS', 'CLE', 'OKC', 'MIN', 'MEM']
+    _FALLBACK_WEAK_DEFENSES = ['WAS', 'UTA', 'POR', 'SAS', 'DET']
+
+    @staticmethod
+    def _compute_defense_tiers(team_stats: dict) -> tuple[set, set, dict]:
+        """
+        Compute elite/weak defense sets and per-team rank from live team_stats.
+
+        Returns:
+            (elite_teams, weak_teams, rank_map) where rank_map[abbrev] = 1..30
+            (rank 1 = best defense / lowest def_rating).
+        """
+        if not team_stats:
+            return (
+                set(EnhancedFeatureEngineer._FALLBACK_ELITE_DEFENSES),
+                set(EnhancedFeatureEngineer._FALLBACK_WEAK_DEFENSES),
+                {},
+            )
+
+        # Sort ascending by def_rating (lower = better defense)
+        sorted_teams = sorted(
+            [(abbrev, stats.get('def_rating', 112)) for abbrev, stats in team_stats.items()],
+            key=lambda x: x[1],
+        )
+        rank_map = {abbrev: rank + 1 for rank, (abbrev, _) in enumerate(sorted_teams)}
+        n = len(sorted_teams)
+        top_n = max(1, round(n * 0.17))  # ~top 5 of 30
+        bot_n = max(1, round(n * 0.17))
+        elite = {abbrev for abbrev, _ in sorted_teams[:top_n]}
+        weak = {abbrev for abbrev, _ in sorted_teams[-bot_n:]}
+        return elite, weak, rank_map
 
     @staticmethod
     def create_advanced_features(df, player_info=None, game_info=None,
@@ -210,6 +239,18 @@ class EnhancedFeatureEngineer:
             df['IS_HOT'] = (df['PTS_ZSCORE'] > 1.0).astype(int)
             df['IS_COLD'] = (df['PTS_ZSCORE'] < -1.0).astype(int)
 
+            # Momentum reversion: extreme streaks tend to revert toward mean
+            # Positive values = expected upward reversion (cold streak), negative = downward (hot streak)
+            df['REVERSION_FACTOR'] = np.where(
+                df['PTS_ZSCORE'] > 2.0,
+                -(df['PTS_ZSCORE'] - 2.0) * 0.15,   # hot extreme → slight downward pull
+                np.where(
+                    df['PTS_ZSCORE'] < -2.0,
+                    -(df['PTS_ZSCORE'] + 2.0) * 0.15,  # cold extreme → slight upward pull
+                    0.0
+                )
+            )
+
         # ===== OPPONENT CONTEXT =====
         if team_stats:
             opponent = game_info.get('opponent', '') if game_info else ''
@@ -222,9 +263,11 @@ class EnhancedFeatureEngineer:
             df['OPP_DEF_RATING_NORM'] = (opp_def_rating - 112) / 4
             df['OPP_PACE_NORM'] = (opp_pace - 100) / 4
 
-            # Categorical opponent strength
-            df['OPP_ELITE_DEF'] = 1 if opponent in EnhancedFeatureEngineer.ELITE_DEFENSES else 0
-            df['OPP_WEAK_DEF'] = 1 if opponent in EnhancedFeatureEngineer.WEAK_DEFENSES else 0
+            # Dynamic defensive tiers (computed from live rankings)
+            elite_teams, weak_teams, rank_map = EnhancedFeatureEngineer._compute_defense_tiers(team_stats)
+            df['OPP_ELITE_DEF'] = 1 if opponent in elite_teams else 0
+            df['OPP_WEAK_DEF'] = 1 if opponent in weak_teams else 0
+            df['OPP_DEF_RATING_RANK'] = rank_map.get(opponent, 15)  # 1=best, 30=worst
 
             # Pace-adjusted projections
             pace_factor = opp_pace / 100
@@ -246,11 +289,29 @@ class EnhancedFeatureEngineer:
             team_injuries = injuries.get(team_abbrev, {})
             opp_injuries = injuries.get(opponent, {})
 
-            df['TEAM_INJURIES_OUT'] = team_injuries.get('out', 0)
-            df['OPP_INJURIES_OUT'] = opp_injuries.get('out', 0)
+            team_out = team_injuries.get('out', 0)
+            opp_out = opp_injuries.get('out', 0)
+            df['TEAM_INJURIES_OUT'] = team_out
+            df['OPP_INJURIES_OUT'] = opp_out
 
-            # More teammates out = potentially more usage
-            df['INJURY_USAGE_BOOST'] = np.minimum(df['TEAM_INJURIES_OUT'] * 0.5, 2)
+            # Severity-weighted injury boost: star player out counts more
+            # Use injury notes if available to differentiate severity
+            team_injury_notes = team_injuries.get('notes', [])
+            severity_weight = 0.0
+            for note in team_injury_notes:
+                note_lower = str(note).lower()
+                if any(kw in note_lower for kw in ['out for season', 'surgery', 'torn', 'fracture']):
+                    severity_weight += 1.0   # long-term out, full usage shift
+                elif any(kw in note_lower for kw in ['questionable', 'doubtful', 'game-time']):
+                    severity_weight += 0.5   # uncertain, partial usage shift
+                else:
+                    severity_weight += 0.75  # standard out
+
+            # Fall back to count-based estimate if no notes available
+            if not team_injury_notes:
+                severity_weight = team_out * 0.75
+
+            df['INJURY_USAGE_BOOST'] = np.minimum(severity_weight, 2.5)
 
         # ===== VS OPPONENT HISTORY =====
         if vs_stats:
@@ -282,6 +343,19 @@ class EnhancedFeatureEngineer:
                         (n_vs + smoothing)
                     ).fillna(global_mean)
             df.drop(columns=['_OPP_TEAM'], errors='ignore', inplace=True)
+
+        # ===== POSITION FEATURE =====
+        if player_info:
+            # Map position string to ordinal (PG=0, SG=1, SF=2, PF=3, C=4)
+            _pos_map = {'PG': 0, 'SG': 1, 'SF': 2, 'PF': 3, 'C': 4, 'G': 0.5, 'F': 2.5, 'G-F': 1.5, 'F-G': 1.5, 'F-C': 3.5, 'C-F': 3.5}
+            raw_pos = str(player_info.get('position', '')).upper().strip()
+            df['POSITION_ORD'] = _pos_map.get(raw_pos, 2.0)  # default SF if unknown
+
+            # Position x defensive interactions (centers more impacted by shot-blocking defenses)
+            if 'OPP_DEF_RATING_NORM' in df.columns:
+                df['POSITION_x_OPP_DEF'] = df['POSITION_ORD'] * df['OPP_DEF_RATING_NORM']
+            if 'OPP_PACE_NORM' in df.columns:
+                df['POSITION_x_OPP_PACE'] = df['POSITION_ORD'] * df['OPP_PACE_NORM']
 
         # ===== INTERACTION FEATURES =====
         # B2B + Elite defense = harder game
@@ -321,7 +395,8 @@ class EnhancedFeatureEngineer:
     @staticmethod
     def get_prediction_features(df, is_home=0, opponent='', injuries_team=0,
                                  injuries_opp=0, opp_def_rating=112, opp_pace=100,
-                                 days_rest=2, vs_stats=None):
+                                 days_rest=2, vs_stats=None, all_team_stats=None,
+                                 player_info=None, injuries_notes=None):
         """
         Extract features for making a prediction.
         Returns DataFrame with single row of features.
@@ -395,11 +470,16 @@ class EnhancedFeatureEngineer:
             'SEASON_PHASE': last.get('SEASON_PHASE', 2),
             'GAME_NUM': min(last.get('GAME_NUM', 41), 100),
 
-            # Opponent
+            # Opponent — use dynamic tiers when all_team_stats is available
             'OPP_DEF_RATING_NORM': (opp_def_rating - 112) / 4,
             'OPP_PACE_NORM': (opp_pace - 100) / 4,
-            'OPP_ELITE_DEF': 1 if opponent in EnhancedFeatureEngineer.ELITE_DEFENSES else 0,
-            'OPP_WEAK_DEF': 1 if opponent in EnhancedFeatureEngineer.WEAK_DEFENSES else 0,
+        }
+
+        elite_teams, weak_teams, rank_map = EnhancedFeatureEngineer._compute_defense_tiers(all_team_stats or {})
+        features.update({
+            'OPP_ELITE_DEF': 1 if opponent in elite_teams else 0,
+            'OPP_WEAK_DEF': 1 if opponent in weak_teams else 0,
+            'OPP_DEF_RATING_RANK': rank_map.get(opponent, 15),  # 1=best defense, 30=worst
 
             # Pace-adjusted
             'PTS_PACE_ADJ': last.get('PTS_PACE_ADJ', last.get('ROLL_5_PTS', 20) * opp_pace / 100),
@@ -413,16 +493,41 @@ class EnhancedFeatureEngineer:
             'ROLL_5_PRA': last.get('ROLL_5_PRA', 30),
             'ROLL_10_PRA': last.get('ROLL_10_PRA', 30),
 
-            # Injuries
+            # Injuries (severity-weighted)
             'TEAM_INJURIES_OUT': injuries_team,
             'OPP_INJURIES_OUT': injuries_opp,
-            'INJURY_USAGE_BOOST': min(injuries_team * 0.5, 2),
+            'INJURY_USAGE_BOOST': min(
+                sum(
+                    1.0 if any(kw in str(n).lower() for kw in ['out for season', 'surgery', 'torn', 'fracture'])
+                    else 0.5 if any(kw in str(n).lower() for kw in ['questionable', 'doubtful', 'game-time'])
+                    else 0.75
+                    for n in (injuries_notes or [])
+                ) if injuries_notes else injuries_team * 0.75,
+                2.5,
+            ),
+
+            # Momentum reversion
+            'REVERSION_FACTOR': (
+                -(last.get('PTS_ZSCORE', 0) - 2.0) * 0.15 if last.get('PTS_ZSCORE', 0) > 2.0
+                else -(last.get('PTS_ZSCORE', 0) + 2.0) * 0.15 if last.get('PTS_ZSCORE', 0) < -2.0
+                else 0.0
+            ),
 
             # Interactions
-            'B2B_VS_ELITE': (1 if days_rest == 1 else 0) * (1 if opponent in EnhancedFeatureEngineer.ELITE_DEFENSES else 0),
-            'HOT_VS_WEAK': last.get('IS_HOT', 0) * (1 if opponent in EnhancedFeatureEngineer.WEAK_DEFENSES else 0),
+            'B2B_VS_ELITE': (1 if days_rest == 1 else 0) * (1 if opponent in elite_teams else 0),
+            'HOT_VS_WEAK': last.get('IS_HOT', 0) * (1 if opponent in weak_teams else 0),
             'RESTED_HOME': (1 if days_rest >= 3 else 0) * is_home,
-        }
+
+            # Position
+            'POSITION_ORD': {
+                'PG': 0, 'SG': 1, 'SF': 2, 'PF': 3, 'C': 4,
+                'G': 0.5, 'F': 2.5, 'G-F': 1.5, 'F-G': 1.5, 'F-C': 3.5, 'C-F': 3.5,
+            }.get(str((player_info or {}).get('position', '')).upper().strip(), 2.0),
+        })
+
+        # Position interaction features (computed after update)
+        features['POSITION_x_OPP_DEF'] = features['POSITION_ORD'] * features['OPP_DEF_RATING_NORM']
+        features['POSITION_x_OPP_PACE'] = features['POSITION_ORD'] * features['OPP_PACE_NORM']
 
         # VS opponent history
         if vs_stats:
@@ -478,13 +583,13 @@ class EnhancedMLPredictor:
         'MIN_CONSISTENCY', 'USAGE_PROXY', 'SHOT_VOLUME_TREND',
 
         # Hot/cold
-        'PTS_ZSCORE', 'IS_HOT', 'IS_COLD',
+        'PTS_ZSCORE', 'IS_HOT', 'IS_COLD', 'REVERSION_FACTOR',
 
         # Season
         'SEASON_PHASE', 'GAME_NUM',
 
         # Opponent
-        'OPP_DEF_RATING_NORM', 'OPP_PACE_NORM', 'OPP_ELITE_DEF', 'OPP_WEAK_DEF',
+        'OPP_DEF_RATING_NORM', 'OPP_PACE_NORM', 'OPP_ELITE_DEF', 'OPP_WEAK_DEF', 'OPP_DEF_RATING_RANK',
 
         # Pace-adjusted
         'PTS_PACE_ADJ', 'REB_PACE_ADJ', 'AST_PACE_ADJ',
@@ -501,6 +606,9 @@ class EnhancedMLPredictor:
 
         # VS opponent
         'VS_OPP_AVG_PTS', 'VS_OPP_AVG_REB', 'VS_OPP_AVG_AST', 'VS_OPP_GAMES',
+
+        # Position
+        'POSITION_ORD', 'POSITION_x_OPP_DEF', 'POSITION_x_OPP_PACE',
     ]
 
     def __init__(self, use_stacking=True):

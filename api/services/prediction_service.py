@@ -323,7 +323,8 @@ class PredictionService:
             opp_pace=opp_pace,
             opp_ast_allowed=opp_ast_allowed,
             days_rest=days_rest,
-            vs_stats=vs_stats
+            vs_stats=vs_stats,
+            player_info=player_info,
         )
 
         # Estimate minutes for this game context

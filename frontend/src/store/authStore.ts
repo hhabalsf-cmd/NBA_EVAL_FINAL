@@ -4,6 +4,7 @@ import {
   authLogin,
   authRegister,
   authGetMe,
+  authRefresh,
   uploadAvatar,
   deleteAvatar,
   changePassword,
@@ -68,9 +69,17 @@ export const useAuthStore = create<AuthStore>((set) => ({
     try {
       const user = await authGetMe()
       set({ user, isAuthenticated: true, isLoading: false })
+      // Proactively refresh if token is older than 6 days (TTL is 7 days)
+      await authRefresh().catch(() => undefined)
     } catch {
-      clearAuthToken()
-      set({ user: null, isAuthenticated: false, isLoading: false })
+      // /me failed — try to refresh the token before giving up
+      try {
+        const { user } = await authRefresh()
+        set({ user, isAuthenticated: true, isLoading: false })
+      } catch {
+        clearAuthToken()
+        set({ user: null, isAuthenticated: false, isLoading: false })
+      }
     }
   },
 

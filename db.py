@@ -512,7 +512,11 @@ def auto_grade_game_predictions() -> dict:
             continue
 
         try:
-            pred_date = datetime.strptime(game_date[:10], '%Y-%m-%d').date()
+            from datetime import date as _date
+            if isinstance(game_date, _date):
+                pred_date = game_date
+            else:
+                pred_date = datetime.strptime(str(game_date)[:10], '%Y-%m-%d').date()
             if pred_date >= today:
                 continue  # Game hasn't happened yet
 
@@ -554,7 +558,8 @@ def auto_grade_game_predictions() -> dict:
                     home_pts = home_line.iloc[0].get('PTS', 0)
                     away_pts = away_line.iloc[0].get('PTS', 0)
 
-                    if home_pts is None or away_pts is None:
+                    import math
+                    if home_pts is None or away_pts is None or (isinstance(home_pts, float) and math.isnan(home_pts)) or (isinstance(away_pts, float) and math.isnan(away_pts)):
                         continue
 
                     actual_winner = home_team if home_pts > away_pts else away_team
@@ -716,7 +721,7 @@ def get_picks_history(days: int = 30, user_id: str = None) -> list:
     else:
         cursor.execute("""
             SELECT * FROM picks
-            WHERE timestamp >= %s
+            WHERE timestamp >= %s AND (voided IS NULL OR voided = 0)
             ORDER BY timestamp DESC
         """, (cutoff,))
 

@@ -18,6 +18,7 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  Legend,
 } from 'recharts'
 
 export default function HistoryPage() {
@@ -43,10 +44,15 @@ export default function HistoryPage() {
 
   const autoGradeMutation = useMutation({
     mutationFn: autoGradePicks,
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['picks'] })
       queryClient.invalidateQueries({ queryKey: ['performance-stats'] })
       queryClient.invalidateQueries({ queryKey: ['cumulative-profit'] })
+      const graded = (data as { graded?: number })?.graded ?? 0
+      alert(graded > 0 ? `Auto-graded ${graded} pick${graded !== 1 ? 's' : ''} successfully.` : 'No pending picks to grade.')
+    },
+    onError: () => {
+      alert('Auto-grade failed. Please try again.')
     },
   })
 
@@ -95,6 +101,32 @@ export default function HistoryPage() {
   const formatDate = (timestamp: string) => {
     const date = new Date(timestamp)
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+  }
+
+  if (picksLoading) {
+    return (
+      <div className="space-y-8">
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <div className="skeleton h-7 w-36 rounded-lg" />
+            <div className="skeleton h-4 w-52 rounded" />
+          </div>
+          <div className="skeleton h-9 w-32 rounded-lg" />
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="card p-4 text-center space-y-2">
+              <div className="skeleton h-3 w-16 mx-auto rounded" />
+              <div className="skeleton h-6 w-12 mx-auto rounded" />
+            </div>
+          ))}
+        </div>
+        <div className="card p-4 sm:p-6">
+          <div className="skeleton h-5 w-40 rounded mb-5" />
+          <div className="skeleton h-44 sm:h-56 w-full rounded-lg" />
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -159,7 +191,12 @@ export default function HistoryPage() {
                     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
                   }}
                 />
-                <YAxis stroke="var(--text-muted)" fontSize={11} tickFormatter={(value) => `${value}u`} />
+                <YAxis
+                  stroke="var(--text-muted)"
+                  fontSize={11}
+                  tickFormatter={(value) => `${value}u`}
+                  label={{ value: 'units', angle: -90, position: 'insideLeft', offset: 10, style: { fontSize: 10, fill: 'var(--text-muted)' } }}
+                />
                 <Tooltip
                   contentStyle={{
                     background: 'var(--bg-elevated)',
@@ -168,6 +205,12 @@ export default function HistoryPage() {
                     fontSize: '12px',
                   }}
                   labelStyle={{ color: 'var(--text-secondary)' }}
+                  labelFormatter={(label) => new Date(label).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  formatter={(value: number) => [`${value > 0 ? '+' : ''}${value.toFixed(2)} units`, 'Cumulative Profit']}
+                />
+                <Legend
+                  formatter={() => 'Cumulative Profit (units = 1 standard bet)'}
+                  wrapperStyle={{ fontSize: '11px', color: 'var(--text-muted)' }}
                 />
                 <Line
                   type="monotone"

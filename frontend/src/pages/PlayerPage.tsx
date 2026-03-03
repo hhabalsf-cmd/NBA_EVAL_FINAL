@@ -89,8 +89,9 @@ export default function PlayerPage() {
         })
       )
       setAllEvaluations(results)
-    } catch {
-      // Error handling
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to evaluate lines'
+      alert(`Evaluation failed: ${msg}`)
     } finally {
       setIsEvaluatingAll(false)
     }
@@ -380,8 +381,14 @@ export default function PlayerPage() {
                 <input
                   type="number"
                   step="0.5"
+                  min="0.5"
                   value={lineInputs[stat] ?? ''}
-                  onChange={e => setLineInputs(prev => ({ ...prev, [stat]: e.target.value }))}
+                  onChange={e => {
+                    const val = e.target.value
+                    if (val === '' || parseFloat(val) > 0) {
+                      setLineInputs(prev => ({ ...prev, [stat]: val }))
+                    }
+                  }}
                   placeholder="—"
                   className="w-full"
                 />

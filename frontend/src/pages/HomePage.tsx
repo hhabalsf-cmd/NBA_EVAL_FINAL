@@ -21,7 +21,7 @@ const statCardVariant: Variants = {
 }
 
 export default function HomePage() {
-  const { data: stats } = useQuery({
+  const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['performance-stats'],
     queryFn: getPerformanceStats,
     staleTime: 1000 * 60 * 5,
@@ -48,6 +48,24 @@ export default function HomePage() {
       </motion.section>
 
       {/* Performance Stats Bar */}
+      {statsLoading && (
+        <motion.section className="card p-5" variants={fadeUp} transition={{ duration: 0.38, ease: 'easeOut' }}>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-5 animate-pulse">
+            <div className="space-y-2">
+              <div className="skeleton h-4 w-24 rounded" />
+              <div className="skeleton h-6 w-32 rounded" />
+            </div>
+            <div className="flex gap-6">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="text-center space-y-1">
+                  <div className="skeleton h-3 w-14 rounded mx-auto" />
+                  <div className="skeleton h-6 w-10 rounded mx-auto" />
+                </div>
+              ))}
+            </div>
+          </div>
+        </motion.section>
+      )}
       {stats && stats.graded_picks > 0 && (
         <motion.section
           className="card p-5"

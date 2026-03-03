@@ -81,13 +81,13 @@ export default function GameCard({ prediction }: GameCardProps) {
           {showFactors && (
             <div className="mt-3 space-y-2 animate-slide-up">
               {key_factors.map((factor, idx) => (
-                <div key={idx} className="flex items-start gap-2 text-xs">
+                <div key={idx} className="flex flex-wrap items-start gap-1.5 text-xs">
                   <span className={`flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium uppercase ${
                     factor.impact === 'MAJOR' ? 'bg-accent-danger/10 text-accent-danger'
                       : factor.impact === 'MODERATE' ? 'bg-accent/10 text-accent'
                       : 'bg-bg-elevated text-text-muted'
                   }`}>{factor.impact}</span>
-                  <span className="text-text-muted flex-1">{factor.description}</span>
+                  <span className="text-text-muted flex-1 min-w-0">{factor.description}</span>
                   <span className={`flex-shrink-0 font-medium ${
                     factor.favors === 'HOME' ? 'text-accent-success' : 'text-accent-danger'
                   }`}>
@@ -101,7 +101,7 @@ export default function GameCard({ prediction }: GameCardProps) {
       )}
 
       <div className="border-t border-border-subtle pt-4 mt-4">
-        <div className="grid grid-cols-3 gap-3 text-center text-[10px]">
+        <div className="grid grid-cols-3 gap-2 sm:gap-3 text-center text-[10px]">
           <div>
             <div className="text-text-muted uppercase tracking-wider mb-1">Off Rtg</div>
             <div className="flex justify-between px-2">

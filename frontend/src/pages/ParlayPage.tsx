@@ -182,8 +182,8 @@ export default function ParlayPage() {
                     <div className="text-[10px] text-text-muted uppercase tracking-wider">Payout</div>
                     <div className="font-mono text-lg font-bold text-text-primary">{parlayPayout.toFixed(2)}x</div>
                   </div>
-                  <div>
-                    <div className="text-[10px] text-text-muted uppercase tracking-wider">EV</div>
+                  <div title="Expected value as a percentage of your stake. Positive = profitable long-term, negative = losing.">
+                    <div className="text-[10px] text-text-muted uppercase tracking-wider cursor-help">EV (?)</div>
                     <div className={`font-mono text-lg font-bold ${expectedValue > 0 ? 'text-accent-success' : 'text-accent-danger'}`}>
                       {expectedValue > 0 ? '+' : ''}{(expectedValue * 100).toFixed(1)}%
                     </div>
@@ -355,7 +355,9 @@ export default function ParlayPage() {
                 <>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Legs</div>
+                      <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">
+                        Legs <span className="normal-case font-normal text-text-muted">(max 8)</span>
+                      </div>
                       <div key={`legs-${selected.length}`} className="font-mono text-2xl font-bold text-text-primary animate-pop">{selected.length}</div>
                     </div>
                     <div>

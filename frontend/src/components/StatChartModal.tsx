@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { X } from 'lucide-react'
 import {
   ComposedChart,
@@ -43,7 +43,7 @@ export default function StatChartModal({ stat, gameLog, onClose }: StatChartModa
     return () => window.removeEventListener('keydown', handleKey)
   }, [onClose])
 
-  const chartData = gameLog.map((g, i, arr) => {
+  const chartData = useMemo(() => gameLog.map((g, i, arr) => {
     const val = getStatValue(g, stat)
     const window = arr.slice(Math.max(0, i - 9), i + 1)
     const rollAvg = +(
@@ -55,7 +55,7 @@ export default function StatChartModal({ stat, gameLog, onClose }: StatChartModa
       value: val,
       rollAvg,
     }
-  })
+  }), [gameLog, stat])
 
   const label = STAT_LABELS[stat] ?? stat
 

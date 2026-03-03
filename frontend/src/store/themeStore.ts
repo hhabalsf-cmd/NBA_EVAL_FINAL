@@ -18,7 +18,7 @@ function applyTheme(theme: Theme) {
 // Read saved theme or system preference on init
 const savedTheme = localStorage.getItem('eval-theme') as Theme | null
 const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-const initialTheme: Theme = savedTheme ?? (prefersDark ? 'dark' : 'dark')
+const initialTheme: Theme = savedTheme ?? (prefersDark ? 'dark' : 'light')
 
 // Apply immediately before first render to avoid flash
 applyTheme(initialTheme)

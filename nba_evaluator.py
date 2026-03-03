@@ -243,13 +243,15 @@ class NBADataScraper:
             team_id = info_df['TEAM_ID'].values[0]
             team_abbrev = info_df['TEAM_ABBREVIATION'].values[0]
             team_name = info_df['TEAM_NAME'].values[0]
-            
+            position = str(info_df['POSITION'].values[0]) if 'POSITION' in info_df.columns else ''
+
             return {
                 'player_id': player_id,
                 'player_name': player_name,
                 'team_id': team_id,
                 'team_abbrev': team_abbrev,
-                'team_name': team_name
+                'team_name': team_name,
+                'position': position,
             }
         except Exception as e:
             print(f"⚠️ Error getting player info: {e}")
@@ -1070,6 +1072,23 @@ class FeatureEngineer:
         if 'EXTENDED_REST' in df.columns and 'IS_HOME' in df.columns:
             df['RESTED_HOME'] = df['EXTENDED_REST'] * df['IS_HOME']
 
+        # =====================
+        # POSITION FEATURES
+        # =====================
+        _POSITION_ORD = {
+            'Guard': 0, 'Guard-Forward': 1, 'Forward-Guard': 1,
+            'Forward': 2, 'Forward-Center': 3, 'Center-Forward': 3, 'Center': 4,
+        }
+        position_str = player_info.get('position', '') if player_info else ''
+        pos_ord = _POSITION_ORD.get(position_str, 2)  # Default: Forward
+        df['POSITION_ORD'] = pos_ord
+        if 'OPP_DEF_RATING_NORM' in df.columns:
+            df['POSITION_x_OPP_DEF'] = df['POSITION_ORD'] * df['OPP_DEF_RATING_NORM']
+            df['POSITION_x_OPP_PACE'] = df['POSITION_ORD'] * df['OPP_PACE_NORM']
+        else:
+            df['POSITION_x_OPP_DEF'] = 0.0
+            df['POSITION_x_OPP_PACE'] = 0.0
+
         # --- VS_OPP head-to-head features (leak-free expanding window) ---
         if 'OPPONENT' in df.columns:
             for stat in ['PTS', 'REB', 'AST']:
@@ -1099,11 +1118,13 @@ class FeatureEngineer:
     
     @staticmethod
     def get_prediction_features(df, is_home, opponent, injuries_team=0, injuries_opp=0,
-                                 opp_def_rating=110, opp_pace=100, opp_ast_allowed=25, days_rest=2, vs_stats=None):
+                                 opp_def_rating=110, opp_pace=100, opp_ast_allowed=25, days_rest=2, vs_stats=None,
+                                 player_info=None):
         """Get feature vector for prediction
 
         Args:
             vs_stats: Dict with head-to-head stats (avg_pts, avg_reb, avg_ast, games)
+            player_info: Dict with player metadata including 'position'
         """
         latest = df.iloc[-1]
 
@@ -1215,6 +1236,13 @@ class FeatureEngineer:
             'VS_OPP_PTS_DIFF': 0,
             'VS_OPP_REB_DIFF': 0,
             'VS_OPP_AST_DIFF': 0,
+
+            # =====================
+            # POSITION FEATURES
+            # =====================
+            'POSITION_ORD': latest.get('POSITION_ORD', 2),
+            'POSITION_x_OPP_DEF': latest.get('POSITION_x_OPP_DEF', 0),
+            'POSITION_x_OPP_PACE': latest.get('POSITION_x_OPP_PACE', 0),
         }
 
         # Add head-to-head stats if available
@@ -1344,6 +1372,8 @@ class MLPredictor:
         'B2B_VS_ELITE', 'HOT_VS_WEAK', 'RESTED_HOME',
         # Injury context (0 in training data; non-zero at prediction time via apply_injury_boost)
         'INJURIES_TEAM', 'INJURIES_OPP',
+        # Position features
+        'POSITION_ORD', 'POSITION_x_OPP_DEF', 'POSITION_x_OPP_PACE',
     ]
 
     # Per-stat optimized hyperparameters for Gradient Boosting

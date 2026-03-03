@@ -2,6 +2,7 @@
 NBA Prop Evaluator API
 FastAPI backend for player prop analysis.
 """
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -53,16 +54,12 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 app.add_middleware(SecurityHeadersMiddleware)
 
 # CORS middleware for frontend
+_default_origins = "http://localhost:5173,http://localhost:5174,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:3000"
+_allowed_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", _default_origins).split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",  # Vite dev server
-        "http://localhost:5174",  # Vite dev server (alt port)
-        "http://localhost:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

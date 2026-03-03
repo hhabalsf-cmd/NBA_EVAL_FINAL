@@ -135,7 +135,11 @@ export default function PlayerSearch({
                 src={getNbaHeadshotUrl(player.player_id)}
                 alt=""
                 className="w-10 h-10 rounded-full object-cover bg-bg-secondary flex-shrink-0"
-                onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
+                onError={e => {
+                  const img = e.target as HTMLImageElement
+                  img.src = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Ccircle cx='20' cy='20' r='20' fill='%23333'/%3E%3Ccircle cx='20' cy='15' r='7' fill='%23666'/%3E%3Cellipse cx='20' cy='36' rx='11' ry='8' fill='%23666'/%3E%3C/svg%3E`
+                  img.onerror = null
+                }}
               />
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-text-primary truncate">{player.player_name}</div>

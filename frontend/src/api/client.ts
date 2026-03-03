@@ -242,6 +242,17 @@ export async function authGetMe(): Promise<AuthUser> {
   if (!r.ok) throw new Error('Not authenticated')
   return r.json()
 }
+
+export async function authRefresh(): Promise<AuthResponse> {
+  const r = await fetch(`${API_BASE}/auth/refresh`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+  })
+  if (!r.ok) throw new Error('Session expired — please log in again')
+  const data: AuthResponse = await r.json()
+  setAuthToken(data.token)
+  return data
+}
 export async function uploadAvatar(file: File): Promise<AuthUser> {
   const form = new FormData()
   form.append('file', file)
