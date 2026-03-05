@@ -6,6 +6,8 @@ sse-starlette>=1.8.0
 passlib[bcrypt]>=1.7.4
 bcrypt>=4.0.1,<5.0.0
 pydantic[email]>=2.5.0
+# python-jose PYSEC-2024-232 affects asymmetric (RS*/EC*) algorithms only;
+# this app uses HS256 exclusively so is not exposed. Pin to latest release.
 python-jose[cryptography]>=3.3.0
 slowapi>=0.1.9
 

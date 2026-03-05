@@ -328,6 +328,18 @@ def save_game_prediction(prediction_data: dict) -> int:
 
     pred_id = cursor.fetchone()['id']
     conn.commit()
+
+    # Enforce 40-prediction cap — delete oldest predictions beyond the limit
+    cursor.execute("""
+        DELETE FROM game_predictions
+        WHERE id NOT IN (
+            SELECT id FROM game_predictions
+            ORDER BY timestamp DESC
+            LIMIT 40
+        )
+    """)
+    conn.commit()
+
     conn.close()
     return pred_id
 
@@ -411,18 +423,24 @@ def get_todays_stored_predictions() -> list:
     return results
 
 
-def get_game_predictions(days: int = 7) -> list:
-    """Get game predictions for the last N days."""
+def get_game_predictions(days: int = 7, limit: int = None) -> list:
+    """Get game predictions for the last N days or most recent N records."""
     conn = get_connection()
     cursor = conn.cursor()
 
-    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-
-    cursor.execute("""
-        SELECT * FROM game_predictions
-        WHERE timestamp >= %s
-        ORDER BY timestamp DESC
-    """, (cutoff,))
+    if limit is not None:
+        cursor.execute("""
+            SELECT * FROM game_predictions
+            ORDER BY timestamp DESC
+            LIMIT %s
+        """, (limit,))
+    else:
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        cursor.execute("""
+            SELECT * FROM game_predictions
+            WHERE timestamp >= %s
+            ORDER BY timestamp DESC
+        """, (cutoff,))
 
     rows = cursor.fetchall()
     conn.close()
@@ -698,6 +716,21 @@ def save_pick(pick_data: dict) -> int:
 
     pick_id = cursor.fetchone()['id']
     conn.commit()
+
+    # Enforce 100-pick cap per user — delete oldest picks beyond the limit
+    user_id = pick_data.get('user_id')
+    if user_id:
+        cursor.execute("""
+            DELETE FROM picks
+            WHERE user_id = %s AND id NOT IN (
+                SELECT id FROM picks
+                WHERE user_id = %s
+                ORDER BY timestamp DESC
+                LIMIT 100
+            )
+        """, (user_id, user_id))
+        conn.commit()
+
     conn.close()
 
     return pick_id

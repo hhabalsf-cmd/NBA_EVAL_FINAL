@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useAuthStore } from '../store/authStore'
 import { RefreshCw, Trash2, Check, X, Loader2 } from 'lucide-react'
 import {
   getPicks,
@@ -21,52 +22,61 @@ import {
   Legend,
 } from 'recharts'
 
-type PageLimit = 30 | 60 | 100
 type ResultFilter = 'all' | 'wins' | 'losses'
+
+const PAGE_SIZE = 30
 
 export default function HistoryPage() {
   const queryClient = useQueryClient()
+  const { isAuthenticated } = useAuthStore()
   const [showPending, setShowPending] = useState(false)
   const [gradePickId, setGradePickId] = useState<number | null>(null)
   const [gradeValue, setGradeValue] = useState('')
-  const [pageLimit, setPageLimit] = useState<PageLimit>(30)
+  const [page, setPage] = useState(1)
   const [resultFilter, setResultFilter] = useState<ResultFilter>('all')
 
   const { data: picks, isLoading: picksLoading } = useQuery({
     queryKey: ['picks', showPending],
     queryFn: () => getPicks(100, showPending),
+    enabled: isAuthenticated,
   })
 
-  const displayedPicks = useMemo(() => {
+  const filteredPicks = useMemo(() => {
     if (!picks) return []
-    let filtered = picks
-    if (resultFilter === 'wins') filtered = picks.filter(p => p.won === true)
-    else if (resultFilter === 'losses') filtered = picks.filter(p => p.won === false)
-    return filtered.slice(0, pageLimit)
-  }, [picks, resultFilter, pageLimit])
+    if (resultFilter === 'wins') return picks.filter(p => p.won === true)
+    if (resultFilter === 'losses') return picks.filter(p => p.won === false)
+    return picks
+  }, [picks, resultFilter])
+
+  const totalPages = Math.max(1, Math.ceil(filteredPicks.length / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages)
+  const displayedPicks = filteredPicks.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+
+  const handleFilterChange = (f: ResultFilter) => {
+    setResultFilter(f)
+    setPage(1)
+  }
 
   const { data: stats } = useQuery({
     queryKey: ['performance-stats'],
     queryFn: getPerformanceStats,
+    enabled: isAuthenticated,
   })
 
   const { data: profitData } = useQuery({
     queryKey: ['cumulative-profit'],
     queryFn: getCumulativeProfit,
+    enabled: isAuthenticated,
   })
 
   const autoGradeMutation = useMutation({
     mutationFn: autoGradePicks,
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['picks'] })
-      queryClient.invalidateQueries({ queryKey: ['performance-stats'] })
-      queryClient.invalidateQueries({ queryKey: ['cumulative-profit'] })
-      const graded = (data as { graded?: number })?.graded ?? 0
-      alert(graded > 0 ? `Auto-graded ${graded} pick${graded !== 1 ? 's' : ''} successfully.` : 'No pending picks to grade.')
+    onSuccess: () => {
+      queryClient.refetchQueries({ queryKey: ['picks'] })
+      queryClient.refetchQueries({ queryKey: ['performance-stats'] })
+      queryClient.refetchQueries({ queryKey: ['cumulative-profit'] })
     },
-    onError: () => {
-      alert('Auto-grade failed. Please try again.')
-    },
+    onError: () => {},
   })
 
   const gradePickMutation = useMutation({
@@ -290,24 +300,28 @@ export default function HistoryPage() {
               {(['all', 'wins', 'losses'] as ResultFilter[]).map(f => (
                 <button
                   key={f}
-                  onClick={() => setResultFilter(f)}
+                  onClick={() => handleFilterChange(f)}
                   className={`px-3 py-1.5 rounded-md text-xs font-medium capitalize transition-colors ${
                     resultFilter === f ? 'bg-bg-elevated text-text-primary' : 'text-text-muted hover:text-text-secondary'
                   }`}
                 >{f}</button>
               ))}
             </div>
-            <div className="flex items-center gap-1 bg-bg-secondary rounded-lg p-0.5">
-              {([30, 60, 100] as PageLimit[]).map(n => (
+            {totalPages > 1 && (
+              <div className="flex items-center gap-1.5 text-xs text-text-muted">
                 <button
-                  key={n}
-                  onClick={() => setPageLimit(n)}
-                  className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                    pageLimit === n ? 'bg-bg-elevated text-text-primary' : 'text-text-muted hover:text-text-secondary'
-                  }`}
-                >{n}</button>
-              ))}
-            </div>
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={safePage <= 1}
+                  className="px-2 py-1 rounded-md bg-bg-secondary hover:bg-bg-elevated disabled:opacity-30 transition-colors"
+                >&#8249;</button>
+                <span className="font-mono">{safePage} / {totalPages}</span>
+                <button
+                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                  disabled={safePage >= totalPages}
+                  className="px-2 py-1 rounded-md bg-bg-secondary hover:bg-bg-elevated disabled:opacity-30 transition-colors"
+                >&#8250;</button>
+              </div>
+            )}
           </div>
         </div>
 

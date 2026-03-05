@@ -2,11 +2,13 @@ import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Settings, LogOut } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
+import { useQueryClient } from '@tanstack/react-query'
 
 export default function UserMenu() {
   const [isOpen, setIsOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const { user, logout } = useAuthStore()
 
   useEffect(() => {
@@ -69,7 +71,7 @@ export default function UserMenu() {
               Settings
             </button>
             <button
-              onClick={() => { logout(); setIsOpen(false); navigate('/') }}
+              onClick={() => { logout(); queryClient.clear(); setIsOpen(false); navigate('/') }}
               className="w-full px-4 py-2.5 text-left text-sm text-text-secondary hover:text-text-primary hover:bg-bg-elevated transition-colors flex items-center gap-2.5"
             >
               <LogOut className="w-3.5 h-3.5" />

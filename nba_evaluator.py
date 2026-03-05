@@ -163,7 +163,7 @@ class CacheManager:
     def get_cache_key(prefix, *args):
         """Generate a unique cache key"""
         key_str = f"{prefix}_{'_'.join(str(a) for a in args)}"
-        return hashlib.md5(key_str.encode()).hexdigest()
+        return hashlib.sha256(key_str.encode()).hexdigest()
 
     @staticmethod
     def get(prefix, *args, expiry_type='game_log'):

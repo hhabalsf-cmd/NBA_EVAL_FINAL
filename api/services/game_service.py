@@ -129,9 +129,9 @@ class GamePredictionService:
             },
         }
 
-    def get_prediction_history(self, days: int = 7) -> list:
+    def get_prediction_history(self, limit: int = 40) -> list:
         """Get past predictions."""
-        return db.get_game_predictions(days)
+        return db.get_game_predictions(limit=limit)
 
     def auto_grade(self) -> dict:
         """Auto-grade pending predictions."""

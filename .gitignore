@@ -13,3 +13,28 @@ uploads/
 
 # Local secrets — never commit (use env vars in production)
 config.json
+
+# ML model binaries — never commit (executable code risk + large files)
+models/**/*.pkl
+*.pkl
+
+# Data and report files — runtime artifacts, not source code
+*.csv
+*.xlsx
+*.xls
+backtest_results.csv
+backtest_game_results.csv
+nba_picks_tracker.xlsx
+
+# Large media binaries
+*.mp4
+*.mp3
+*.wav
+video/out/
+video/public/audio/
+
+# Prediction history (runtime data)
+history/predictions.json
+
+# pip install artifacts
+=*

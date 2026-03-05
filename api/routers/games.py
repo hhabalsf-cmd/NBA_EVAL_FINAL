@@ -62,10 +62,10 @@ async def predict_todays_games():
 
 
 @router.get("/history")
-def get_prediction_history(days: int = Query(default=7, ge=1, le=90)):
+def get_prediction_history(limit: int = Query(default=40, ge=1, le=40)):
     """Get past game predictions with results."""
     service = get_game_service()
-    return service.get_prediction_history(days)
+    return service.get_prediction_history(limit)
 
 
 @router.post("/auto-grade")

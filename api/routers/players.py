@@ -1,9 +1,12 @@
 """Player search and prediction endpoints."""
 import json
+import logging
 from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 import pandas as pd
 
@@ -177,7 +180,8 @@ async def get_player_research(player_name: str):
     try:
         raw_df = service.scraper.get_player_game_log(player_id)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch game log: {str(e)}")
+        logger.error("Failed to fetch game log for player %s: %s", player_id, e)
+        raise HTTPException(status_code=500, detail="Failed to fetch player game log. Please try again.")
 
     if raw_df is None or raw_df.empty:
         raise HTTPException(status_code=404, detail=f"No game log found for '{player_name}'")
@@ -342,8 +346,8 @@ async def get_player_research(player_name: str):
                     player_info['team_id'] = team_match['id']
                     if not player_info.get('team_abbrev'):
                         player_info['team_abbrev'] = team_match['abbreviation']
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Team ID enrichment failed for %s: %s", team_abbrev_from_log, e)
 
     # --- Next game + matchup context ---
     next_game_info = None
@@ -400,10 +404,10 @@ async def get_player_research(player_name: str):
                         avg_reb=round(vs_raw.get('avg_reb', 0.0), 1),
                         avg_ast=round(vs_raw.get('avg_ast', 0.0), 1),
                     )
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as e:
+                logger.debug("vs-team stats fetch failed for player %s vs %s: %s", player_id, opp_abbrev, e)
+    except Exception as e:
+        logger.warning("Next game context unavailable for player %s: %s", player_id, e)
 
     return PlayerResearchResponse(
         player_name=player_info.get('full_name', player_name),

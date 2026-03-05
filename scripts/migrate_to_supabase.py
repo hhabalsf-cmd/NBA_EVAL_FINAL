@@ -108,7 +108,7 @@ def migrate_picks(sqlite_conn, pg_conn):
 
     # Reset sequence so new inserts don't collide with migrated IDs
     max_id = max(r['id'] for r in rows)
-    dst.execute(f"SELECT setval('picks_id_seq', {max_id})")
+    dst.execute("SELECT setval('picks_id_seq', %s)", (max_id,))
     pg_conn.commit()
     print(f"  picks: {inserted}/{len(rows)} rows migrated (sequence reset to {max_id})")
     return inserted
@@ -165,7 +165,7 @@ def migrate_game_predictions(sqlite_conn, pg_conn):
 
     if rows:
         max_id = max(r['id'] for r in rows)
-        dst.execute(f"SELECT setval('game_predictions_id_seq', {max_id})")
+        dst.execute("SELECT setval('game_predictions_id_seq', %s)", (max_id,))
 
     pg_conn.commit()
     print(f"  game_predictions: {inserted}/{len(rows)} rows migrated")

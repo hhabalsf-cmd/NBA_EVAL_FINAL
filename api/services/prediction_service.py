@@ -1,7 +1,10 @@
 """Service layer wrapping existing ML prediction classes."""
+import fcntl
+import json
 import sys
 import time
 import unicodedata
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, Generator
@@ -17,8 +20,58 @@ from nba_evaluator import (
     MLPredictor,
     LineEvaluator,
     OddsAPI,
+    MODEL_DIR,
     should_retrain,
 )
+
+
+PRED_CACHE_DIR = Path("./cache/predictions")
+
+
+def _prediction_cache_path(player_name: str) -> Path:
+    key = player_name.replace(" ", "_")
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    return PRED_CACHE_DIR / f"{key}_{date_str}.json"
+
+
+def _load_prediction_cache(player_name: str) -> Optional[Dict]:
+    """Return today's cached prediction data, or None if absent/stale."""
+    path = _prediction_cache_path(player_name)
+    if not path.exists():
+        return None
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _save_prediction_cache(player_name: str, data: Dict) -> None:
+    """Write prediction data to today's cache file."""
+    PRED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = _prediction_cache_path(player_name)
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f)
+    except Exception:
+        pass  # Cache write failure is non-fatal
+
+
+@contextmanager
+def _player_model_lock(player_name: str):
+    """Exclusive per-player file lock to prevent concurrent model overwrites.
+
+    Uses fcntl.LOCK_EX so it works across all uvicorn worker processes.
+    Blocks until the lock is acquired.
+    """
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = MODEL_DIR / f"{player_name.replace(' ', '_')}.lock"
+    with open(lock_path, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lf, fcntl.LOCK_UN)
 
 
 class PredictionService:
@@ -171,6 +224,25 @@ class PredictionService:
             }
             return
 
+        # Check prediction cache — skip on explicit retrain
+        canonical_name = player_info['player_name']
+        if not retrain:
+            cached = _load_prediction_cache(canonical_name)
+            if cached is not None:
+                yield {
+                    "stage": "fetching_data",
+                    "progress": 50,
+                    "message": "Loading today's cached prediction..."
+                }
+                yield {
+                    "stage": "complete",
+                    "progress": 100,
+                    "message": "Predictions complete",
+                    "data": cached,
+                    "from_cache": True,
+                }
+                return
+
         await asyncio.sleep(0.1)  # Yield control
 
         yield {
@@ -253,31 +325,37 @@ class PredictionService:
             retrain = False
             retrain_skipped = True
 
-        # Try to load existing model
-        if not retrain and predictor.load(player_info['player_name']):
-            yield {
-                "stage": "training_model",
-                "progress": 70,
-                "message": "Model already retrained tonight — using latest data..." if retrain_skipped else "Updating model with recent games..."
-            }
-            predictor.update(df_features)
-        else:
-            yield {
-                "stage": "training_model",
-                "progress": 70,
-                "message": "Training new model..."
-            }
-            if not predictor.train(df_features):
-                yield {
-                    "stage": "error",
-                    "progress": 100,
-                    "message": "Insufficient data for training",
-                    "data": None
-                }
-                return
+        # Acquire an exclusive per-player file lock so concurrent worker
+        # processes can't overwrite each other's trained model.  The lock is
+        # held only for the synchronous load/train/update/save operations and
+        # released before the next yield.
+        train_failed = False
+        with _player_model_lock(player_info['player_name']):
+            loaded = not retrain and predictor.load(player_info['player_name'])
+            if loaded:
+                predictor.update(df_features)
+            else:
+                if not predictor.train(df_features):
+                    train_failed = True
+            if not train_failed:
+                predictor.save(player_info['player_name'])
 
-        # Save model
-        predictor.save(player_info['player_name'])
+        if train_failed:
+            yield {
+                "stage": "error",
+                "progress": 100,
+                "message": "Insufficient data for training",
+                "data": None
+            }
+            return
+
+        yield {
+            "stage": "training_model",
+            "progress": 70,
+            "message": "Model already retrained tonight — using latest data..." if retrain_skipped else (
+                "Updating model with recent games..." if loaded else "Training new model..."
+            )
+        }
 
         await asyncio.sleep(0.1)
 
@@ -423,23 +501,26 @@ class PredictionService:
             pass  # Non-critical — omit if any issue
 
         # Final result
+        result_data = {
+            "player_name": player_info['player_name'],
+            "player_id": player_info['player_id'],
+            "team_abbrev": player_info.get('team_abbrev'),
+            "predictions": stat_predictions,
+            "game_info": game_info_response,
+            "opponent_context": opponent_context,
+            "vs_stats": vs_stats_response,
+            "model_type": model_type,
+            "games_trained_on": predictor.games_trained_on,
+            "game_log": game_log_data,
+            "avg_min_l10": avg_min_l10,
+        }
+        _save_prediction_cache(canonical_name, result_data)
+
         yield {
             "stage": "complete",
             "progress": 100,
             "message": "Predictions complete",
-            "data": {
-                "player_name": player_info['player_name'],
-                "player_id": player_info['player_id'],
-                "team_abbrev": player_info.get('team_abbrev'),
-                "predictions": stat_predictions,
-                "game_info": game_info_response,
-                "opponent_context": opponent_context,
-                "vs_stats": vs_stats_response,
-                "model_type": model_type,
-                "games_trained_on": predictor.games_trained_on,
-                "game_log": game_log_data,
-                "avg_min_l10": avg_min_l10,
-            }
+            "data": result_data,
         }
 
     def evaluate_line(

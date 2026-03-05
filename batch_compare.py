@@ -83,8 +83,9 @@ for i, pick in enumerate(PICKS):
             if game_info:
                 try:
                     vs_stats = scraper.get_vs_team_stats(player_info['player_id'], opponent)
-                except Exception:
-                    pass
+                except Exception as e:
+                    import warnings
+                    warnings.warn(f"vs-team stats unavailable for {opponent}: {e}")
 
             opp_def_rating  = team_stats.get(opponent, {}).get('def_rating', 110)
             opp_pace        = team_stats.get(opponent, {}).get('pace', 100)

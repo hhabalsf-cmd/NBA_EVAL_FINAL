@@ -50,6 +50,7 @@ export default function SignupForm({ onSuccess }: SignupFormProps) {
           onChange={e => setPassword(e.target.value)}
           placeholder="Create a password"
           required
+          autoComplete="new-password"
           className="w-full"
         />
       </div>

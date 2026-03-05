@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useAuthStore } from '../store/authStore'
 import { RefreshCw, Loader2, BarChart3, Cpu, Users, Zap, X } from 'lucide-react'
 import GameCard from '../components/GameCard'
 import AccuracyTracker from '../components/AccuracyTracker'
@@ -16,12 +17,18 @@ import {
 } from '../api/client'
 
 type Tab = 'today' | 'history'
+type ResultFilter = 'all' | 'wins' | 'losses'
+
+const PAGE_SIZE = 10
+const MAX_PAGES = 4
 
 export default function GamesPage() {
   const queryClient = useQueryClient()
+  const { isAuthenticated } = useAuthStore()
   const [activeTab, setActiveTab] = useState<Tab>('today')
-  const [days, setDays] = useState(7)
   const [gradingId, setGradingId] = useState<number | null>(null)
+  const [page, setPage] = useState(1)
+  const [resultFilter, setResultFilter] = useState<ResultFilter>('all')
 
   // Today tab state
   const [isStreaming, setIsStreaming] = useState(false)
@@ -40,35 +47,48 @@ export default function GamesPage() {
     queryKey: ['game-accuracy'],
     queryFn: getGameAccuracyStats,
     staleTime: 1000 * 60 * 10,
+    enabled: isAuthenticated,
   })
 
   const { data: history, isLoading: historyLoading } = useQuery({
-    queryKey: ['game-history', days],
-    queryFn: () => getGamePredictionHistory(days),
-    enabled: activeTab === 'history',
+    queryKey: ['game-history'],
+    queryFn: () => getGamePredictionHistory(),
+    enabled: isAuthenticated && activeTab === 'history',
     staleTime: 1000 * 60 * 2,
   })
 
+  const filteredHistory = useMemo(() => {
+    if (!history) return []
+    if (resultFilter === 'wins') return history.filter(h => h.actual_winner != null && !!h.correct)
+    if (resultFilter === 'losses') return history.filter(h => h.actual_winner != null && h.correct != null && !h.correct)
+    return history
+  }, [history, resultFilter])
+
+  const totalPages = Math.min(MAX_PAGES, Math.max(1, Math.ceil(filteredHistory.length / PAGE_SIZE)))
+  const safePage = Math.min(page, totalPages)
+  const displayedHistory = filteredHistory.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+
+  const handleFilterChange = (f: ResultFilter) => {
+    setResultFilter(f)
+    setPage(1)
+  }
+
   const autoGradeMutation = useMutation({
     mutationFn: autoGradeGamePredictions,
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['game-history'] })
-      queryClient.invalidateQueries({ queryKey: ['game-accuracy'] })
-      const graded = (data as { graded?: number })?.graded ?? 0
-      alert(graded > 0 ? `Auto-graded ${graded} game prediction${graded !== 1 ? 's' : ''}.` : 'No pending game predictions to grade.')
+    onSuccess: () => {
+      queryClient.refetchQueries({ queryKey: ['game-history'] })
+      queryClient.refetchQueries({ queryKey: ['game-accuracy'] })
     },
-    onError: () => {
-      alert('Auto-grade failed. Please try again.')
-    },
+    onError: () => {},
   })
 
   const gradeMutation = useMutation({
     mutationFn: ({ id, winner }: { id: number; winner: string }) =>
       gradeGamePrediction(id, winner),
     onMutate: async ({ id, winner }) => {
-      await queryClient.cancelQueries({ queryKey: ['game-history', days] })
-      const previous = queryClient.getQueryData<GamePredictionHistoryItem[]>(['game-history', days])
-      queryClient.setQueryData<GamePredictionHistoryItem[]>(['game-history', days], old =>
+      await queryClient.cancelQueries({ queryKey: ['game-history'] })
+      const previous = queryClient.getQueryData<GamePredictionHistoryItem[]>(['game-history'])
+      queryClient.setQueryData<GamePredictionHistoryItem[]>(['game-history'], old =>
         old?.map(item =>
           item.id === id
             ? { ...item, actual_winner: winner, correct: item.predicted_winner === winner }
@@ -80,7 +100,7 @@ export default function GamesPage() {
     },
     onError: (_err, _vars, context) => {
       if (context?.previous) {
-        queryClient.setQueryData(['game-history', days], context.previous)
+        queryClient.setQueryData(['game-history'], context.previous)
       }
     },
     onSettled: () => {
@@ -279,45 +299,55 @@ export default function GamesPage() {
             <AccuracyTracker stats={accuracyStats} />
           )}
 
-          {/* Days Filter */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-text-muted">Show:</span>
-            <div className="flex items-center gap-1 bg-bg-secondary rounded-lg p-0.5">
-              {[7, 14, 30].map(d => (
-                <button
-                  key={d}
-                  onClick={() => setDays(d)}
-                  className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                    days === d
-                      ? 'bg-bg-elevated text-text-primary'
-                      : 'text-text-muted hover:text-text-secondary'
-                  }`}
-                >
-                  {d}d
-                </button>
-              ))}
-            </div>
-          </div>
-
           {/* History List */}
           <section className="card overflow-hidden">
-            <div className="p-4 sm:p-5 border-b border-border-subtle">
-              <h2 className="text-base font-semibold text-text-primary tracking-tight">
-                Past Predictions
-              </h2>
+            <div className="p-4 sm:p-5 border-b border-border-subtle space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-base font-semibold text-text-primary tracking-tight">Past Predictions</h2>
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1 bg-bg-secondary rounded-lg p-0.5">
+                  {(['all', 'wins', 'losses'] as ResultFilter[]).map(f => (
+                    <button
+                      key={f}
+                      onClick={() => handleFilterChange(f)}
+                      className={`px-3 py-1.5 rounded-md text-xs font-medium capitalize transition-colors ${
+                        resultFilter === f ? 'bg-bg-elevated text-text-primary' : 'text-text-muted hover:text-text-secondary'
+                      }`}
+                    >{f}</button>
+                  ))}
+                </div>
+                {totalPages > 1 && (
+                  <div className="flex items-center gap-1 text-xs">
+                    {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
+                      <button
+                        key={p}
+                        onClick={() => setPage(p)}
+                        className={`w-7 h-7 rounded-md font-mono transition-colors ${
+                          safePage === p
+                            ? 'bg-accent text-white'
+                            : 'bg-bg-secondary text-text-muted hover:bg-bg-elevated hover:text-text-primary'
+                        }`}
+                      >{p}</button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             {historyLoading ? (
               <div className="flex items-center justify-center py-16">
                 <Loader2 className="w-5 h-5 text-accent animate-spin" />
               </div>
-            ) : !history || history.length === 0 ? (
+            ) : displayedHistory.length === 0 ? (
               <div className="text-center py-16 px-4">
-                <p className="text-sm text-text-secondary">No prediction history for this period.</p>
+                <p className="text-sm text-text-secondary">
+                  {resultFilter !== 'all' ? `No ${resultFilter} to show.` : 'No prediction history yet.'}
+                </p>
               </div>
             ) : (
               <div className="divide-y divide-border-subtle">
-                {history.slice(0, 30).map((item: GamePredictionHistoryItem) => {
+                {displayedHistory.map((item: GamePredictionHistoryItem) => {
                   const isGraded = item.actual_winner != null
                   const isCorrect = isGraded && !!item.correct
                   const isIncorrect = isGraded && !item.correct

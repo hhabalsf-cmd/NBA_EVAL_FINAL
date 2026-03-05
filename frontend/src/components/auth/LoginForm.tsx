@@ -38,6 +38,7 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
           onChange={e => setPassword(e.target.value)}
           placeholder="Enter password"
           required
+          autoComplete="current-password"
           className="w-full"
         />
       </div>

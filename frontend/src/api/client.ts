@@ -609,8 +609,8 @@ export async function predictTodaysGames(
   return result
 }
 
-export async function getGamePredictionHistory(days = 7): Promise<GamePredictionHistoryItem[]> {
-  const response = await fetch(`${API_BASE}/games/history?days=${days}`)
+export async function getGamePredictionHistory(): Promise<GamePredictionHistoryItem[]> {
+  const response = await fetch(`${API_BASE}/games/history`)
   if (!response.ok) throw new Error('Failed to fetch game history')
   return response.json()
 }
