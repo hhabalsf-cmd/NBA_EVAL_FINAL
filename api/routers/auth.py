@@ -7,15 +7,26 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-import db
 from ..auth_utils import (
     decode_access_token,
 )
+from supabase import create_client as _create_supabase_client
+
+_supa_client = None
+
+
+def _get_supa_client():
+    global _supa_client
+    if _supa_client is None:
+        _supa_client = _create_supabase_client(
+            os.environ["SUPABASE_URL"],
+            os.environ["SUPABASE_SERVICE_KEY"],
+        )
+    return _supa_client
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 # ── Avatar upload constants ─────────────────────────────────────
-_AVATAR_DIR = Path(__file__).parent.parent.parent / "uploads" / "avatars"
 _ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
 _EXT_MAP = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 _MAX_BYTES = 5 * 1024 * 1024  # 5 MB
@@ -41,7 +52,6 @@ def _validate_image_magic(data: bytes, declared_type: str) -> bool:
 # ── Schemas ────────────────────────────────────────────────────
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str = Field(..., min_length=1, max_length=128)
     new_password: str = Field(..., min_length=8, max_length=128)
 
 
@@ -70,11 +80,7 @@ def get_current_user(request: Request) -> dict:
     except Exception:
         raise credentials_exception
 
-    from supabase import create_client
-    supa = create_client(
-        os.environ["SUPABASE_URL"],
-        os.environ["SUPABASE_SERVICE_KEY"],
-    )
+    supa = _get_supa_client()
     result = supa.table("profiles").select("*").eq("id", user_id).single().execute()
     if not result.data:
         raise credentials_exception
@@ -93,6 +99,10 @@ def get_current_user(request: Request) -> dict:
 # ── Service key dependency ──────────────────────────────────────
 
 FASTAPI_SERVICE_KEY = os.getenv("FASTAPI_SERVICE_KEY")
+if not FASTAPI_SERVICE_KEY:
+    raise RuntimeError(
+        "FASTAPI_SERVICE_KEY env var is not set. Auto-grade endpoints would be unprotected."
+    )
 
 
 def verify_service_key(request: Request) -> None:
@@ -117,36 +127,32 @@ async def upload_avatar(
         raise HTTPException(status_code=413, detail="File too large — maximum 5MB")
 
     if not _validate_image_magic(contents, file.content_type):
-        raise HTTPException(status_code=400, detail="File content does not match the declared image type")
+        raise HTTPException(status_code=400, detail="File content does not match declared type")
 
     ext = _EXT_MAP[file.content_type]
-    filename = f"{current_user['id']}.{ext}"
-    dest = _AVATAR_DIR / filename
+    storage_path = f"{current_user['id']}.{ext}"
 
-    # Write new file first — only clean up old files after successful write
+    supa = _get_supa_client()
     try:
-        dest.write_bytes(contents)
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail="Failed to save avatar") from exc
+        supa.storage.from_("avatars").upload(
+            storage_path,
+            contents,
+            {"content-type": file.content_type, "upsert": "true"},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Failed to upload avatar") from exc
 
-    # Remove old avatar files with a different extension (e.g. old .jpg when uploading .png)
-    for old in _AVATAR_DIR.glob(f"{current_user['id']}.*"):
-        if old != dest:
-            old.unlink(missing_ok=True)
+    avatar_url = f"{os.environ['SUPABASE_URL']}/storage/v1/object/public/avatars/{storage_path}"
 
-    avatar_url = f"/uploads/avatars/{filename}"
-    updated = db.update_user_avatar(current_user["id"], avatar_url)
-
-    if not updated:
-        raise HTTPException(status_code=500, detail="Failed to retrieve updated user")
+    supa.table("profiles").update({"avatar_url": avatar_url}).eq("id", current_user["id"]).execute()
 
     return {
-        "id": updated["id"],
-        "email": updated["email"],
-        "username": updated["username"],
-        "created_at": updated["created_at"],
-        "role": updated.get("role", "user"),
-        "avatar_url": updated.get("avatar_url"),
+        "id": current_user["id"],
+        "email": current_user["email"],
+        "username": current_user["username"],
+        "created_at": current_user["created_at"],
+        "role": current_user.get("role", "user"),
+        "avatar_url": avatar_url,
     }
 
 
@@ -155,29 +161,35 @@ async def change_password(
     req: ChangePasswordRequest,
     current_user: dict = Depends(get_current_user),
 ):
-    from ..auth_utils import verify_password, hash_password
-    if not verify_password(req.current_password, current_user["hashed_password"]):
-        raise HTTPException(status_code=401, detail="Current password is incorrect")
-    db.update_user_password(current_user["id"], hash_password(req.new_password))
+    supa = _get_supa_client()
+    try:
+        supa.auth.admin.update_user_by_id(
+            current_user["id"],
+            {"password": req.new_password}
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.delete("/avatar", status_code=200)
 async def delete_avatar(current_user: dict = Depends(get_current_user)):
+    supa = _get_supa_client()
     user_id = current_user["id"]
 
-    updated = db.clear_user_avatar(user_id)
-    if not updated:
-        raise HTTPException(status_code=500, detail="Failed to update user")
+    # Remove all avatar variants from storage (user may have uploaded different extensions)
+    for ext in ["jpg", "png", "webp"]:
+        try:
+            supa.storage.from_("avatars").remove([f"{user_id}.{ext}"])
+        except Exception:
+            pass  # File may not exist for that extension
 
-    # Delete avatar files from disk only after DB write succeeds
-    for old in _AVATAR_DIR.glob(f"{user_id}.*"):
-        old.unlink(missing_ok=True)
+    supa.table("profiles").update({"avatar_url": None}).eq("id", user_id).execute()
 
     return {
-        "id": updated["id"],
-        "email": updated["email"],
-        "username": updated["username"],
-        "created_at": updated["created_at"],
-        "role": updated.get("role", "user"),
-        "avatar_url": updated.get("avatar_url"),
+        "id": user_id,
+        "email": current_user["email"],
+        "username": current_user["username"],
+        "created_at": current_user["created_at"],
+        "role": current_user.get("role", "user"),
+        "avatar_url": None,
     }
