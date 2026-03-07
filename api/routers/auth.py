@@ -1,30 +1,18 @@
-"""Authentication endpoints — register, login, me."""
+"""Authentication endpoints — avatar management and password change."""
 import os
 import sys
-import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
-from jose import JWTError
-from pydantic import BaseModel, EmailStr, Field
-
-from ..limiter import limiter
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from pydantic import BaseModel, Field
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 import db
 from ..auth_utils import (
-    create_access_token,
     decode_access_token,
-    hash_password,
-    verify_password,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
-
-# ── Cookie config ───────────────────────────────────────────────
-_COOKIE_NAME = "access_token"
-_COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
-_COOKIE_MAX_AGE = 7 * 24 * 60 * 60  # 7 days in seconds
 
 # ── Avatar upload constants ─────────────────────────────────────
 _AVATAR_DIR = Path(__file__).parent.parent.parent / "uploads" / "avatars"
@@ -50,130 +38,71 @@ def _validate_image_magic(data: bytes, declared_type: str) -> bool:
     return False
 
 
-def _set_auth_cookie(response: Response, token: str) -> None:
-    """Set the httpOnly auth cookie on a response."""
-    response.set_cookie(
-        key=_COOKIE_NAME,
-        value=token,
-        httponly=True,
-        secure=_COOKIE_SECURE,
-        samesite="strict",
-        max_age=_COOKIE_MAX_AGE,
-        path="/",
-    )
-
-
 # ── Schemas ────────────────────────────────────────────────────
-
-class RegisterRequest(BaseModel):
-    email: EmailStr
-    username: str = Field(..., min_length=3, max_length=50, pattern=r'^[a-zA-Z0-9_-]+$')
-    password: str = Field(..., min_length=8, max_length=128)
-
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str = Field(..., min_length=1, max_length=128)
-
 
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(..., min_length=1, max_length=128)
     new_password: str = Field(..., min_length=8, max_length=128)
 
 
-class AuthResponse(BaseModel):
-    user: dict
-
-
 # ── Dependency ─────────────────────────────────────────────────
 
 def get_current_user(request: Request) -> dict:
-    """FastAPI dependency — validates httpOnly cookie, returns user dict."""
+    """FastAPI dependency — validates Supabase Bearer JWT, returns profile dict."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    token = request.cookies.get(_COOKIE_NAME)
-    if not token:
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    token = auth_header.removeprefix("Bearer ").strip()
     try:
         payload = decode_access_token(token)
         user_id: str = payload.get("sub")
         if not user_id:
             raise credentials_exception
-    except JWTError:
+    except Exception:
         raise credentials_exception
 
-    user = db.get_user_by_id(user_id)
-    if not user:
+    from supabase import create_client
+    supa = create_client(
+        os.environ["SUPABASE_URL"],
+        os.environ["SUPABASE_SERVICE_KEY"],
+    )
+    result = supa.table("profiles").select("*").eq("id", user_id).single().execute()
+    if not result.data:
         raise credentials_exception
-    return user
+
+    profile = result.data
+    return {
+        "id": profile["id"],
+        "email": payload.get("email", ""),
+        "username": profile["username"],
+        "created_at": profile["created_at"],
+        "role": profile.get("role", "user"),
+        "avatar_url": profile.get("avatar_url"),
+    }
+
+
+# ── Service key dependency ──────────────────────────────────────
+
+FASTAPI_SERVICE_KEY = os.getenv("FASTAPI_SERVICE_KEY")
+
+
+def verify_service_key(request: Request) -> None:
+    """Dependency for internal endpoints called by Edge Functions / pg_cron."""
+    key = request.headers.get("X-Service-Key")
+    if not key or key != FASTAPI_SERVICE_KEY:
+        raise HTTPException(status_code=403, detail="Forbidden")
 
 
 # ── Endpoints ──────────────────────────────────────────────────
-
-@router.post("/register", response_model=AuthResponse, status_code=201)
-@limiter.limit("3/minute")
-async def register(request: Request, response: Response, req: RegisterRequest):
-    if db.get_user_by_email(req.email):
-        raise HTTPException(status_code=409, detail="Registration failed")
-
-    user_id = str(uuid.uuid4())
-    hashed = hash_password(req.password)
-    user = db.create_user(user_id, req.email, hashed, req.username)
-
-    access_token_str = create_access_token(user["id"], user["email"]) # nosec
-    _set_auth_cookie(response, access_token_str)
-    return AuthResponse(
-        user={"id": user["id"], "email": user["email"], "username": user["username"],
-              "created_at": user["created_at"], "role": user.get("role", "user"),
-              "avatar_url": user.get("avatar_url")},
-    )
-
-
-@router.post("/login", response_model=AuthResponse)
-@limiter.limit("5/minute")
-async def login(request: Request, response: Response, req: LoginRequest):
-    invalid = HTTPException(status_code=401, detail="Invalid credentials")
-    user = db.get_user_by_email(req.email)
-    # Always run bcrypt to prevent timing-based account enumeration
-    dummy_hash = "$2b$12$dummy.hash.to.prevent.timing.attacks.on.missing.accounts"
-    candidate_hash = user["hashed_password"] if user else dummy_hash
-    password_valid = verify_password(req.password, candidate_hash)
-    if not user or not password_valid:
-        raise invalid
-
-    access_token_str = create_access_token(user["id"], user["email"]) # nosec
-    _set_auth_cookie(response, access_token_str)
-    return AuthResponse(
-        user={"id": user["id"], "email": user["email"], "username": user["username"],
-              "created_at": user["created_at"], "role": user.get("role", "user"),
-              "avatar_url": user.get("avatar_url")},
-    )
-
-
-@router.post("/logout", status_code=204)
-async def logout(response: Response):
-    """Clear the auth cookie — no auth required."""
-    response.delete_cookie(key=_COOKIE_NAME, path="/")
-
-
-@router.get("/me")
-async def me(current_user: dict = Depends(get_current_user)):
-    return {
-        "id": current_user["id"],
-        "email": current_user["email"],
-        "username": current_user["username"],
-        "created_at": current_user["created_at"],
-        "role": current_user.get("role", "user"),
-        "avatar_url": current_user.get("avatar_url"),
-    }
-
 
 @router.post("/avatar")
 async def upload_avatar(
@@ -226,26 +155,10 @@ async def change_password(
     req: ChangePasswordRequest,
     current_user: dict = Depends(get_current_user),
 ):
+    from ..auth_utils import verify_password, hash_password
     if not verify_password(req.current_password, current_user["hashed_password"]):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
     db.update_user_password(current_user["id"], hash_password(req.new_password))
-
-
-@router.post("/refresh", response_model=AuthResponse)
-async def refresh_token(response: Response, current_user: dict = Depends(get_current_user)):
-    """Issue a fresh JWT token for an already-authenticated user."""
-    access_token_str = create_access_token(current_user["id"], current_user["email"]) # nosec
-    _set_auth_cookie(response, access_token_str)
-    return AuthResponse(
-        user={
-            "id": current_user["id"],
-            "email": current_user["email"],
-            "username": current_user["username"],
-            "created_at": current_user.get("created_at"),
-            "role": current_user.get("role", "user"),
-            "avatar_url": current_user.get("avatar_url"),
-        },
-    )
 
 
 @router.delete("/avatar", status_code=200)

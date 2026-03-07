@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 
 from ..limiter import limiter
-from ..routers.auth import get_current_user
+from ..routers.auth import get_current_user, verify_service_key
 
 from ..schemas.prediction import (
     TodaysGamesResponse,
@@ -88,7 +88,7 @@ def get_prediction_history(request: Request, limit: int = Query(default=40, ge=1
 
 @router.post("/auto-grade")
 @limiter.limit("10/minute")
-def auto_grade_predictions(request: Request, current_user: dict = Depends(get_current_user)):
+def auto_grade_predictions(request: Request, _: None = Depends(verify_service_key)):
     """Auto-grade pending game predictions using final scores."""
     service = get_game_service()
     return service.auto_grade()

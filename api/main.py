@@ -3,17 +3,15 @@ NBA Prop Evaluator API
 FastAPI backend for player prop analysis.
 """
 import os
-from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from slowapi.errors import RateLimitExceeded
 
 from .limiter import limiter
-from .routers import players_router, bets_router, picks_router, games_router, auth_router
+from .routers import players_router, bets_router, picks_router, games_router, auth_router, parlays_router
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -30,7 +28,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "script-src 'self' 'unsafe-inline'; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: https:; "
-            "connect-src 'self';"
+            "connect-src 'self' https://*.supabase.co wss://*.supabase.co;"
         )
         response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
         return response
@@ -72,17 +70,13 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
-# Serve uploaded avatars
-_UPLOADS_DIR = Path(__file__).parent.parent / "uploads" / "avatars"
-_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/uploads/avatars", StaticFiles(directory=str(_UPLOADS_DIR)), name="avatars")
-
 # Include routers
 app.include_router(players_router)
 app.include_router(bets_router)
 app.include_router(picks_router)
 app.include_router(games_router)
 app.include_router(auth_router)
+app.include_router(parlays_router)
 
 
 @app.get("/api/health")
