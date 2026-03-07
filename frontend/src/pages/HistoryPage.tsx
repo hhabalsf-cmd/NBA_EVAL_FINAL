@@ -37,7 +37,7 @@ export default function HistoryPage() {
 
   const { data: picks, isLoading: picksLoading } = useQuery({
     queryKey: ['picks', showPending],
-    queryFn: () => getPicks(100, showPending),
+    queryFn: () => getPicks(showPending),
     enabled: isAuthenticated,
   })
 
@@ -71,10 +71,14 @@ export default function HistoryPage() {
 
   const autoGradeMutation = useMutation({
     mutationFn: autoGradePicks,
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.refetchQueries({ queryKey: ['picks'] })
       queryClient.refetchQueries({ queryKey: ['performance-stats'] })
       queryClient.refetchQueries({ queryKey: ['cumulative-profit'] })
+      queryClient.invalidateQueries({ queryKey: ['parlays'] })
+      if (data.parlays_graded > 0) {
+        console.log(`Auto-grade: ${data.graded_count} picks graded, ${data.parlays_graded} parlays resolved`)
+      }
     },
     onError: () => {},
   })

@@ -14,6 +14,18 @@ async function throwResponseError(response: Response, fallback: string): Promise
   throw new Error((body as { detail?: string }).detail ?? fallback)
 }
 
+/**
+ * Fetch wrapper that always includes credentials (httpOnly cookie) and
+ * dispatches a global event on 401 so the auth store can log the user out.
+ */
+async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const res = await fetch(input, { ...init, credentials: 'include' })
+  if (res.status === 401) {
+    window.dispatchEvent(new Event('auth:unauthorized'))
+  }
+  return res
+}
+
 // Types
 export interface PlayerInfo {
   player_id: number
@@ -116,6 +128,35 @@ export interface Pick {
   prob_over?: number
 }
 
+export interface ParlayLegDetail {
+  id: number
+  pick_id: number
+  player: string
+  player_id?: number
+  team_abbrev?: string
+  stat: string
+  line: number
+  prediction: number
+  direction: string
+  edge: number
+  prob_over?: number
+  actual_result?: number
+  won?: boolean
+  voided?: boolean
+  void_reason?: string
+  game_date?: string
+  opponent?: string
+}
+
+export interface SavedParlay {
+  id: number
+  legs_count: number
+  status: 'pending' | 'won' | 'lost' | 'voided'
+  graded_at?: string
+  created_at: string
+  legs: ParlayLegDetail[]
+}
+
 export interface PerformanceStats {
   total_picks: number
   graded_picks: number
@@ -168,28 +209,7 @@ export interface ProgressEvent {
   data?: PredictionResult
 }
 
-// ── Auth helpers ────────────────────────────────────────────
-
-const TOKEN_KEY = 'nba_eval_token'
-
-export function getAuthToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
-}
-
-export function setAuthToken(token: string): void {
-  localStorage.setItem(TOKEN_KEY, token)
-}
-
-export function clearAuthToken(): void {
-  localStorage.removeItem(TOKEN_KEY)
-}
-
-function authHeaders(): HeadersInit {
-  const token = getAuthToken()
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
-
-// ── Auth API functions ─────────────────────────────────────
+// ── Auth API functions ─────────────────────────────────────────
 
 export interface AuthUser {
   id: string
@@ -201,7 +221,6 @@ export interface AuthUser {
 }
 
 export interface AuthResponse {
-  token: string
   user: AuthUser
 }
 
@@ -210,7 +229,7 @@ export async function authRegister(
   username: string,
   password: string
 ): Promise<AuthResponse> {
-  const r = await fetch(`${API_BASE}/auth/register`, {
+  const r = await apiFetch(`${API_BASE}/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, username, password }),
@@ -223,7 +242,7 @@ export async function authRegister(
 }
 
 export async function authLogin(email: string, password: string): Promise<AuthResponse> {
-  const r = await fetch(`${API_BASE}/auth/login`, {
+  const r = await apiFetch(`${API_BASE}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
@@ -235,30 +254,32 @@ export async function authLogin(email: string, password: string): Promise<AuthRe
   return r.json()
 }
 
+export async function authLogout(): Promise<void> {
+  await apiFetch(`${API_BASE}/auth/logout`, { method: 'POST' })
+}
+
 export async function authGetMe(): Promise<AuthUser> {
-  const r = await fetch(`${API_BASE}/auth/me`, {
-    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+  const r = await apiFetch(`${API_BASE}/auth/me`, {
+    headers: { 'Content-Type': 'application/json' },
   })
   if (!r.ok) throw new Error('Not authenticated')
   return r.json()
 }
 
 export async function authRefresh(): Promise<AuthResponse> {
-  const r = await fetch(`${API_BASE}/auth/refresh`, {
+  const r = await apiFetch(`${API_BASE}/auth/refresh`, {
     method: 'POST',
-    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
   })
   if (!r.ok) throw new Error('Session expired — please log in again')
-  const data: AuthResponse = await r.json()
-  setAuthToken(data.token)
-  return data
+  return r.json()
 }
+
 export async function uploadAvatar(file: File): Promise<AuthUser> {
   const form = new FormData()
   form.append('file', file)
-  const r = await fetch(`${API_BASE}/auth/avatar`, {
+  const r = await apiFetch(`${API_BASE}/auth/avatar`, {
     method: 'POST',
-    headers: { ...authHeaders() },
     body: form,
   })
   if (!r.ok) {
@@ -267,11 +288,9 @@ export async function uploadAvatar(file: File): Promise<AuthUser> {
   }
   return r.json()
 }
+
 export async function deleteAvatar(): Promise<AuthUser> {
-  const r = await fetch(`${API_BASE}/auth/avatar`, {
-    method: 'DELETE',
-    headers: { ...authHeaders() },
-  })
+  const r = await apiFetch(`${API_BASE}/auth/avatar`, { method: 'DELETE' })
   if (!r.ok) {
     const err = await r.json().catch(() => ({}))
     throw new Error((err as { detail?: string }).detail || 'Failed to remove avatar')
@@ -283,9 +302,9 @@ export async function changePassword(
   currentPassword: string,
   newPassword: string,
 ): Promise<void> {
-  const r = await fetch(`${API_BASE}/auth/change-password`, {
+  const r = await apiFetch(`${API_BASE}/auth/change-password`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
   })
   if (!r.ok) {
@@ -298,13 +317,13 @@ export async function changePassword(
 // API Functions
 
 export async function getPlayerOdds(playerName: string): Promise<PlayerOdds> {
-  const response = await fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/odds`)
+  const response = await apiFetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/odds`)
   if (!response.ok) return { found: false }
   return response.json()
 }
 
 export async function searchPlayers(query: string): Promise<PlayerInfo[]> {
-  const response = await fetch(`${API_BASE}/players/search?q=${encodeURIComponent(query)}`)
+  const response = await apiFetch(`${API_BASE}/players/search?q=${encodeURIComponent(query)}`)
   if (!response.ok) await throwResponseError(response, 'Search failed')
   const data = await response.json()
   return data.players
@@ -319,7 +338,7 @@ export async function predictPlayer(
     retrain?: boolean
   } = {}
 ): Promise<PredictionResult | null> {
-  const response = await fetch(`${API_BASE}/players/predict`, {
+  const response = await apiFetch(`${API_BASE}/players/predict`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -371,7 +390,7 @@ export async function predictPlayerSync(
     retrain?: boolean
   } = {}
 ): Promise<PredictionResult> {
-  const response = await fetch(`${API_BASE}/players/predict/sync`, {
+  const response = await apiFetch(`${API_BASE}/players/predict/sync`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -396,7 +415,7 @@ export async function evaluateLine(
   line: number,
   prediction?: number
 ): Promise<LineEvaluation> {
-  const response = await fetch(`${API_BASE}/players/evaluate-line`, {
+  const response = await apiFetch(`${API_BASE}/players/evaluate-line`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -412,27 +431,25 @@ export async function evaluateLine(
 }
 
 export async function getTodaysBestBets(minEdge = 5, limit = 10): Promise<{ bets: BestBet[]; generated_at: string; games_count: number }> {
-  const response = await fetch(`${API_BASE}/bets/today?min_edge=${minEdge}&limit=${limit}`)
+  const response = await apiFetch(`${API_BASE}/bets/today?min_edge=${minEdge}&limit=${limit}`)
   if (!response.ok) throw new Error('Failed to fetch best bets')
   return response.json()
 }
 
-export async function getPicks(limit = 100, pendingOnly = false): Promise<Pick[]> {
+export async function getPicks(pendingOnly = false): Promise<Pick[]> {
   const params = new URLSearchParams({
-    limit: limit.toString(),
+    days: '90',
     pending_only: pendingOnly.toString(),
   })
-  const response = await fetch(`${API_BASE}/picks?${params}`, {
-    headers: { ...authHeaders() },
-  })
+  const response = await apiFetch(`${API_BASE}/picks?${params}`)
   if (!response.ok) throw new Error('Failed to fetch picks')
   return response.json()
 }
 
 export async function createPick(pick: Omit<Pick, 'id' | 'timestamp' | 'actual_result' | 'won'>): Promise<Pick> {
-  const response = await fetch(`${API_BASE}/picks`, {
+  const response = await apiFetch(`${API_BASE}/picks`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(pick),
   })
 
@@ -441,9 +458,9 @@ export async function createPick(pick: Omit<Pick, 'id' | 'timestamp' | 'actual_r
 }
 
 export async function gradePick(pickId: number, actualResult: number): Promise<Pick> {
-  const response = await fetch(`${API_BASE}/picks/${pickId}/grade`, {
+  const response = await apiFetch(`${API_BASE}/picks/${pickId}/grade`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ actual_result: actualResult }),
   })
 
@@ -452,36 +469,45 @@ export async function gradePick(pickId: number, actualResult: number): Promise<P
 }
 
 export async function deletePick(pickId: number): Promise<void> {
-  const response = await fetch(`${API_BASE}/picks/${pickId}`, {
-    method: 'DELETE',
-    headers: { ...authHeaders() },
-  })
-
+  const response = await apiFetch(`${API_BASE}/picks/${pickId}`, { method: 'DELETE' })
   if (!response.ok) throw new Error('Failed to delete pick')
 }
 
-export async function autoGradePicks(): Promise<{ graded_count: number; errors: string[]; results: unknown[] }> {
-  const response = await fetch(`${API_BASE}/picks/auto-grade`, {
+export async function createParlay(pickIds: number[]): Promise<SavedParlay> {
+  const response = await apiFetch(`${API_BASE}/parlays`, {
     method: 'POST',
-    headers: { ...authHeaders() },
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pick_ids: pickIds }),
   })
+  if (!response.ok) await throwResponseError(response, 'Failed to save parlay')
+  return response.json()
+}
 
+export async function getParlays(): Promise<SavedParlay[]> {
+  const response = await apiFetch(`${API_BASE}/parlays`)
+  if (!response.ok) throw new Error('Failed to fetch parlays')
+  return response.json()
+}
+
+export async function deleteParlay(parlayId: number): Promise<void> {
+  const response = await apiFetch(`${API_BASE}/parlays/${parlayId}`, { method: 'DELETE' })
+  if (!response.ok) throw new Error('Failed to delete parlay')
+}
+
+export async function autoGradePicks(): Promise<{ graded_count: number; parlays_graded: number; errors: string[]; results: unknown[] }> {
+  const response = await apiFetch(`${API_BASE}/picks/auto-grade`, { method: 'POST' })
   if (!response.ok) throw new Error('Failed to auto-grade picks')
   return response.json()
 }
 
 export async function getPerformanceStats(): Promise<PerformanceStats> {
-  const response = await fetch(`${API_BASE}/picks/stats/performance`, {
-    headers: { ...authHeaders() },
-  })
+  const response = await apiFetch(`${API_BASE}/picks/stats/performance`)
   if (!response.ok) throw new Error('Failed to fetch performance stats')
   return response.json()
 }
 
 export async function getCumulativeProfit(): Promise<CumulativeProfitPoint[]> {
-  const response = await fetch(`${API_BASE}/picks/stats/profit`, {
-    headers: { ...authHeaders() },
-  })
+  const response = await apiFetch(`${API_BASE}/picks/stats/profit`)
   if (!response.ok) throw new Error('Failed to fetch profit data')
   return response.json()
 }
@@ -563,7 +589,7 @@ export interface GameAccuracyStats {
 // === Game Prediction API Functions ===
 
 export async function getTodaysGamePredictions(): Promise<TodaysGamesResponse> {
-  const response = await fetch(`${API_BASE}/games/today`)
+  const response = await apiFetch(`${API_BASE}/games/today`)
   if (!response.ok) await throwResponseError(response, 'Failed to fetch game predictions')
   return response.json()
 }
@@ -571,9 +597,7 @@ export async function getTodaysGamePredictions(): Promise<TodaysGamesResponse> {
 export async function predictTodaysGames(
   onProgress: (event: ProgressEvent) => void
 ): Promise<GamePrediction[] | null> {
-  const response = await fetch(`${API_BASE}/games/predict`, {
-    method: 'POST',
-  })
+  const response = await apiFetch(`${API_BASE}/games/predict`, { method: 'POST' })
 
   if (!response.ok) throw new Error('Prediction failed')
   if (!response.body) throw new Error('No response body')
@@ -610,7 +634,7 @@ export async function predictTodaysGames(
 }
 
 export async function getGamePredictionHistory(): Promise<GamePredictionHistoryItem[]> {
-  const response = await fetch(`${API_BASE}/games/history`)
+  const response = await apiFetch(`${API_BASE}/games/history`)
   if (!response.ok) throw new Error('Failed to fetch game history')
   return response.json()
 }
@@ -620,16 +644,13 @@ export async function autoGradeGamePredictions(): Promise<{
   errors: string[]
   results: unknown[]
 }> {
-  const response = await fetch(`${API_BASE}/games/auto-grade`, {
-    method: 'POST',
-    headers: { ...authHeaders() },
-  })
+  const response = await apiFetch(`${API_BASE}/games/auto-grade`, { method: 'POST' })
   if (!response.ok) throw new Error('Failed to auto-grade game predictions')
   return response.json()
 }
 
 export async function gradeGamePrediction(id: number, actualWinner: string): Promise<void> {
-  const response = await fetch(`${API_BASE}/games/${id}/grade`, {
+  const response = await apiFetch(`${API_BASE}/games/${id}/grade`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ actual_winner: actualWinner }),
@@ -638,7 +659,7 @@ export async function gradeGamePrediction(id: number, actualWinner: string): Pro
 }
 
 export async function getGameAccuracyStats(): Promise<GameAccuracyStats> {
-  const response = await fetch(`${API_BASE}/games/stats/accuracy`)
+  const response = await apiFetch(`${API_BASE}/games/stats/accuracy`)
   if (!response.ok) throw new Error('Failed to fetch game accuracy stats')
   return response.json()
 }
@@ -662,7 +683,7 @@ export interface TeamInjuriesData {
 }
 
 export async function getTeamInjuries(playerName: string): Promise<TeamInjuriesData> {
-  const res = await fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/team-injuries`)
+  const res = await apiFetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/team-injuries`)
   if (!res.ok) throw new Error('Failed to fetch injuries')
   return res.json()
 }
@@ -693,7 +714,7 @@ export interface StandingsData {
 // === Standings API Functions ===
 
 export async function getStandings(): Promise<StandingsData> {
-  const res = await fetch(`${API_BASE}/standings`)
+  const res = await apiFetch(`${API_BASE}/standings`)
   if (!res.ok) throw new Error('Failed to fetch standings')
   return res.json()
 }
@@ -754,7 +775,7 @@ export interface PlayerResearchData {
 }
 
 export async function getPlayerResearch(playerName: string): Promise<PlayerResearchData> {
-  const res = await fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/research`)
+  const res = await apiFetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/research`)
   if (!res.ok) throw new Error(`Failed to fetch research data for ${playerName}`)
   return res.json()
 }

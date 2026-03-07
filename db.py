@@ -1,5 +1,33 @@
 """
 Postgres (Supabase) database helper for tracking picks history and performance metrics.
+
+Supabase tables managed via SQL Editor (not locally):
+  - picks, bets, games  (original)
+  - parlays             (added 2026-03-06) — parlay headers, one row per saved parlay
+  - parlay_legs         (added 2026-03-06) — junction table linking parlays → picks
+
+To create the parlay tables, run the following SQL in the Supabase SQL Editor:
+
+    CREATE TABLE IF NOT EXISTS parlays (
+        id          BIGSERIAL PRIMARY KEY,
+        user_id     UUID NOT NULL,
+        name        TEXT,
+        legs_count  INTEGER NOT NULL,
+        status      TEXT NOT NULL DEFAULT 'pending',
+        graded_at   TIMESTAMPTZ,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS parlay_legs (
+        id         BIGSERIAL PRIMARY KEY,
+        parlay_id  BIGINT NOT NULL REFERENCES parlays(id) ON DELETE CASCADE,
+        pick_id    BIGINT NOT NULL REFERENCES picks(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS parlays_user_id_idx ON parlays(user_id);
+    CREATE INDEX IF NOT EXISTS parlays_status_idx ON parlays(status);
+    CREATE INDEX IF NOT EXISTS parlay_legs_parlay_id_idx ON parlay_legs(parlay_id);
+    CREATE INDEX IF NOT EXISTS parlay_legs_pick_id_idx ON parlay_legs(pick_id);
 """
 import json
 import os
@@ -210,14 +238,14 @@ def _safe_user(row) -> dict:
     return d
 
 
-def create_user(user_id: str, email: str, hashed_password: str, username: str) -> dict:
+def create_user(user_id: str, email: str, pass_hash: str, username: str) -> dict:
     """Insert a new user row. Returns the created user dict."""
     conn = get_connection()
     cursor = conn.cursor()
     now = datetime.utcnow().isoformat()
     cursor.execute(
-        "INSERT INTO users (id, email, hashed_password, username, created_at) VALUES (%s, %s, %s, %s, %s)",
-        (user_id, email, hashed_password, username, now)
+        "INSERT INTO users (id, email, pass_hash, username, created_at) VALUES (%s, %s, %s, %s, %s)",
+        (user_id, email, pass_hash, username, now)
     )
     conn.commit()
     cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
@@ -261,12 +289,12 @@ def update_user_avatar(user_id: str, avatar_url: str) -> Optional[dict]:
     return _safe_user(row) if row else None
 
 
-def update_user_password(user_id: str, hashed_password: str) -> None:
+def update_user_password(user_id: str, pass_hash: str) -> None:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         "UPDATE users SET hashed_password = %s WHERE id = %s",
-        (hashed_password, user_id),
+        (pass_hash, user_id),
     )
     conn.commit()
     conn.close()
@@ -798,6 +826,16 @@ def get_all_picks() -> list:
     conn.close()
 
     return [dict(row) for row in rows]
+
+
+def get_pick_by_id(pick_id: int) -> Optional[dict]:
+    """Get a single pick by ID. Returns dict or None."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM picks WHERE id = %s", (pick_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 def update_pick_result(pick_id: int, actual_result: float, line: float, direction: str):
@@ -1453,9 +1491,9 @@ def auto_grade_picks(scraper=None) -> Dict:
     }
 
 
-def get_performance_by_model() -> Dict:
+def get_performance_by_model(user_id: str) -> Dict:
     """
-    Get performance statistics broken down by model type.
+    Get performance statistics broken down by model type for a specific user.
 
     Returns:
         Dict with model types as keys, each containing win_rate, total, wins, roi
@@ -1465,8 +1503,8 @@ def get_performance_by_model() -> Dict:
 
     cursor.execute("""
         SELECT model_type, won, edge FROM picks
-        WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0)
-    """)
+        WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0) AND user_id = %s
+    """, (user_id,))
 
     rows = cursor.fetchall()
     conn.close()
@@ -1510,9 +1548,9 @@ def get_performance_by_model() -> Dict:
     return results
 
 
-def get_performance_by_model_and_stat() -> Dict:
+def get_performance_by_model_and_stat(user_id: str) -> Dict:
     """
-    Get detailed performance breakdown by model type AND stat type.
+    Get detailed performance breakdown by model type AND stat type for a specific user.
 
     Returns:
         Nested dict: {model_type: {stat: {win_rate, total, wins}}}
@@ -1522,8 +1560,8 @@ def get_performance_by_model_and_stat() -> Dict:
 
     cursor.execute("""
         SELECT model_type, stat, won, edge FROM picks
-        WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0)
-    """)
+        WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0) AND user_id = %s
+    """, (user_id,))
 
     rows = cursor.fetchall()
     conn.close()
@@ -1560,6 +1598,152 @@ def get_performance_by_model_and_stat() -> Dict:
             }
 
     return results
+
+
+# ── Parlay helpers ─────────────────────────────────────────────
+
+def create_parlay(user_id: str, pick_ids: list) -> dict:
+    """Create a parlay record and its leg records. Returns the created parlay dict."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO parlays (user_id, legs_count, status, created_at)
+                VALUES (%s, %s, 'pending', NOW())
+                RETURNING id, user_id, legs_count, status, graded_at, created_at
+                """,
+                (user_id, len(pick_ids))
+            )
+            parlay = dict(cur.fetchone())
+            parlay_id = parlay['id']
+
+            for pick_id in pick_ids:
+                cur.execute(
+                    "INSERT INTO parlay_legs (parlay_id, pick_id) VALUES (%s, %s)",
+                    (parlay_id, pick_id)
+                )
+
+            conn.commit()
+            return parlay
+    finally:
+        conn.close()
+
+
+def get_parlays(user_id: str) -> list:
+    """Return all non-voided parlays for a user, newest first, with leg details."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT p.id, p.user_id, p.name, p.legs_count, p.status,
+                       p.graded_at, p.created_at
+                FROM parlays p
+                WHERE p.user_id = %s
+                ORDER BY p.created_at DESC
+                """,
+                (user_id,)
+            )
+            parlays = [dict(row) for row in cur.fetchall()]
+
+            for parlay in parlays:
+                cur.execute(
+                    """
+                    SELECT pl.id, pl.pick_id,
+                           pk.player, pk.player_id, pk.team_abbrev, pk.stat,
+                           pk.line, pk.prediction, pk.direction, pk.edge,
+                           pk.prob_over, pk.actual_result, pk.won,
+                           pk.voided, pk.void_reason, pk.game_date, pk.opponent
+                    FROM parlay_legs pl
+                    JOIN picks pk ON pk.id = pl.pick_id
+                    WHERE pl.parlay_id = %s
+                    ORDER BY pl.id
+                    """,
+                    (parlay['id'],)
+                )
+                parlay['legs'] = [dict(row) for row in cur.fetchall()]
+
+            return parlays
+    finally:
+        conn.close()
+
+
+def void_parlay(parlay_id: int, user_id: str) -> None:
+    """Set parlay status to voided. Enforces ownership via user_id."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE parlays
+                SET status = 'voided'
+                WHERE id = %s AND user_id = %s
+                """,
+                (parlay_id, user_id)
+            )
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def grade_pending_parlays(user_id: str = None) -> dict:
+    """
+    Derive and store status for all pending parlays whose picks are all resolved.
+
+    Grading rules:
+    - All legs won=1 → 'won'
+    - Any leg won=0 → 'lost'
+    - Any leg won IS NULL (and no losses) → stay 'pending'
+    - Voided legs (voided=1) are excluded from result calculation but kept in legs list.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            query = "SELECT id FROM parlays WHERE status = 'pending'"
+            params = []
+            if user_id:
+                query += " AND user_id = %s"
+                params.append(user_id)
+            cur.execute(query, params)
+            pending_ids = [row['id'] for row in cur.fetchall()]
+
+            graded_count = 0
+            for parlay_id in pending_ids:
+                cur.execute(
+                    """
+                    SELECT pk.won, pk.voided
+                    FROM parlay_legs pl
+                    JOIN picks pk ON pk.id = pl.pick_id
+                    WHERE pl.parlay_id = %s
+                    """,
+                    (parlay_id,)
+                )
+                legs = cur.fetchall()
+
+                # Active legs only (exclude voided picks)
+                active = [l for l in legs if not l['voided']]
+
+                if not active:
+                    continue  # All legs voided — skip
+
+                if any(l['won'] == False for l in active):
+                    new_status = 'lost'
+                elif all(l['won'] == True for l in active):
+                    new_status = 'won'
+                else:
+                    continue  # Still pending legs
+
+                cur.execute(
+                    "UPDATE parlays SET status = %s, graded_at = NOW() WHERE id = %s",
+                    (new_status, parlay_id)
+                )
+                graded_count += 1
+
+            conn.commit()
+            return {'parlays_graded': graded_count}
+    finally:
+        conn.close()
 
 
 def export_to_excel() -> str:

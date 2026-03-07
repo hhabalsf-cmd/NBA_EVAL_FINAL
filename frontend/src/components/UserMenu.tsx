@@ -71,7 +71,7 @@ export default function UserMenu() {
               Settings
             </button>
             <button
-              onClick={() => { logout(); queryClient.clear(); setIsOpen(false); navigate('/') }}
+              onClick={() => { logout().then(() => { queryClient.clear(); setIsOpen(false); navigate('/') }) }}
               className="w-full px-4 py-2.5 text-left text-sm text-text-secondary hover:text-text-primary hover:bg-bg-elevated transition-colors flex items-center gap-2.5"
             >
               <LogOut className="w-3.5 h-3.5" />

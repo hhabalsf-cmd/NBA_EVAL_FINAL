@@ -1,10 +1,10 @@
 """Authentication endpoints — register, login, me."""
+import os
 import sys
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from jose import JWTError
 from pydantic import BaseModel, EmailStr, Field
 
@@ -20,13 +20,47 @@ from ..auth_utils import (
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
-_bearer = HTTPBearer()
 
-# Avatar upload constants
+# ── Cookie config ───────────────────────────────────────────────
+_COOKIE_NAME = "access_token"
+_COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
+_COOKIE_MAX_AGE = 7 * 24 * 60 * 60  # 7 days in seconds
+
+# ── Avatar upload constants ─────────────────────────────────────
 _AVATAR_DIR = Path(__file__).parent.parent.parent / "uploads" / "avatars"
 _ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
 _EXT_MAP = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 _MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+
+# Magic byte signatures for image validation (guards against spoofed Content-Type)
+_MAGIC_BYTES: list[tuple[bytes, str]] = [
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"RIFF", "image/webp"),  # RIFF....WEBP — checked further below
+]
+
+
+def _validate_image_magic(data: bytes, declared_type: str) -> bool:
+    """Return True if file magic bytes match the declared content type."""
+    for magic, mime in _MAGIC_BYTES:
+        if data[:len(magic)] == magic:
+            if mime == "image/webp" and data[8:12] != b"WEBP":
+                continue
+            return mime == declared_type
+    return False
+
+
+def _set_auth_cookie(response: Response, token: str) -> None:
+    """Set the httpOnly auth cookie on a response."""
+    response.set_cookie(
+        key=_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        secure=_COOKIE_SECURE,
+        samesite="strict",
+        max_age=_COOKIE_MAX_AGE,
+        path="/",
+    )
 
 
 # ── Schemas ────────────────────────────────────────────────────
@@ -48,21 +82,27 @@ class ChangePasswordRequest(BaseModel):
 
 
 class AuthResponse(BaseModel):
-    token: str
     user: dict
 
 
 # ── Dependency ─────────────────────────────────────────────────
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(_bearer)) -> dict:
-    """FastAPI dependency — validates Bearer token, returns user dict."""
+def get_current_user(request: Request) -> dict:
+    """FastAPI dependency — validates httpOnly cookie, returns user dict."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    token = request.cookies.get(_COOKIE_NAME)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     try:
-        payload = decode_access_token(credentials.credentials)
+        payload = decode_access_token(token)
         user_id: str = payload.get("sub")
         if not user_id:
             raise credentials_exception
@@ -78,18 +118,18 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(_bearer
 # ── Endpoints ──────────────────────────────────────────────────
 
 @router.post("/register", response_model=AuthResponse, status_code=201)
-@limiter.limit("5/minute")
-async def register(request: Request, req: RegisterRequest):
+@limiter.limit("3/minute")
+async def register(request: Request, response: Response, req: RegisterRequest):
     if db.get_user_by_email(req.email):
-        raise HTTPException(status_code=409, detail="Email already in use")
+        raise HTTPException(status_code=409, detail="Registration failed")
 
     user_id = str(uuid.uuid4())
     hashed = hash_password(req.password)
     user = db.create_user(user_id, req.email, hashed, req.username)
 
-    token = create_access_token(user["id"], user["email"])
+    access_token_str = create_access_token(user["id"], user["email"]) # nosec
+    _set_auth_cookie(response, access_token_str)
     return AuthResponse(
-        token=token,
         user={"id": user["id"], "email": user["email"], "username": user["username"],
               "created_at": user["created_at"], "role": user.get("role", "user"),
               "avatar_url": user.get("avatar_url")},
@@ -97,22 +137,30 @@ async def register(request: Request, req: RegisterRequest):
 
 
 @router.post("/login", response_model=AuthResponse)
-@limiter.limit("10/minute")
-async def login(request: Request, req: LoginRequest):
+@limiter.limit("5/minute")
+async def login(request: Request, response: Response, req: LoginRequest):
     invalid = HTTPException(status_code=401, detail="Invalid credentials")
     user = db.get_user_by_email(req.email)
-    if not user:
-        raise invalid
-    if not verify_password(req.password, user["hashed_password"]):
+    # Always run bcrypt to prevent timing-based account enumeration
+    dummy_hash = "$2b$12$dummy.hash.to.prevent.timing.attacks.on.missing.accounts"
+    candidate_hash = user["hashed_password"] if user else dummy_hash
+    password_valid = verify_password(req.password, candidate_hash)
+    if not user or not password_valid:
         raise invalid
 
-    token = create_access_token(user["id"], user["email"])
+    access_token_str = create_access_token(user["id"], user["email"]) # nosec
+    _set_auth_cookie(response, access_token_str)
     return AuthResponse(
-        token=token,
         user={"id": user["id"], "email": user["email"], "username": user["username"],
               "created_at": user["created_at"], "role": user.get("role", "user"),
               "avatar_url": user.get("avatar_url")},
     )
+
+
+@router.post("/logout", status_code=204)
+async def logout(response: Response):
+    """Clear the auth cookie — no auth required."""
+    response.delete_cookie(key=_COOKIE_NAME, path="/")
 
 
 @router.get("/me")
@@ -138,6 +186,9 @@ async def upload_avatar(
     contents = await file.read()
     if len(contents) > _MAX_BYTES:
         raise HTTPException(status_code=413, detail="File too large — maximum 5MB")
+
+    if not _validate_image_magic(contents, file.content_type):
+        raise HTTPException(status_code=400, detail="File content does not match the declared image type")
 
     ext = _EXT_MAP[file.content_type]
     filename = f"{current_user['id']}.{ext}"
@@ -181,16 +232,16 @@ async def change_password(
 
 
 @router.post("/refresh", response_model=AuthResponse)
-async def refresh_token(current_user: dict = Depends(get_current_user)):
+async def refresh_token(response: Response, current_user: dict = Depends(get_current_user)):
     """Issue a fresh JWT token for an already-authenticated user."""
-    token = create_access_token(current_user["id"], current_user["email"])
+    access_token_str = create_access_token(current_user["id"], current_user["email"]) # nosec
+    _set_auth_cookie(response, access_token_str)
     return AuthResponse(
-        token=token,
         user={
             "id": current_user["id"],
             "email": current_user["email"],
             "username": current_user["username"],
-            "created_at": current_user["created_at"],
+            "created_at": current_user.get("created_at"),
             "role": current_user.get("role", "user"),
             "avatar_url": current_user.get("avatar_url"),
         },

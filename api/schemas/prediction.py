@@ -151,7 +151,7 @@ class PickResponse(BaseModel):
 
 
 class PickGradeRequest(BaseModel):
-    actual_result: float
+    actual_result: float = Field(..., ge=0, le=250, description="Actual stat result (0–250)")
 
 
 class PerformanceByStatItem(BaseModel):
@@ -350,3 +350,38 @@ class PlayerResearchResponse(BaseModel):
     vs_weak_def: StatSplits
     opponent_context: Optional[OpponentContext] = None
     vs_stats: Optional[VsStats] = None
+
+
+# === Parlay Schemas ===
+
+class ParlayLegDetail(BaseModel):
+    id: int
+    pick_id: int
+    player: str
+    player_id: Optional[int] = None
+    team_abbrev: Optional[str] = None
+    stat: str
+    line: float
+    prediction: float
+    direction: str
+    edge: float
+    prob_over: Optional[float] = None
+    actual_result: Optional[float] = None
+    won: Optional[bool] = None
+    voided: Optional[bool] = None
+    void_reason: Optional[str] = None
+    game_date: Optional[str] = None
+    opponent: Optional[str] = None
+
+
+class ParlayResponse(BaseModel):
+    id: int
+    legs_count: int
+    status: str  # 'pending' | 'won' | 'lost' | 'voided'
+    graded_at: Optional[datetime] = None
+    created_at: datetime
+    legs: List[ParlayLegDetail] = []
+
+
+class ParlayCreate(BaseModel):
+    pick_ids: List[int] = Field(..., min_length=2, max_length=6)

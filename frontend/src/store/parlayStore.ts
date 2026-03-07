@@ -23,7 +23,7 @@ export const useParlayStore = create<ParlayStore>((set, get) => ({
 
   addLeg: (leg) => {
     const { legs } = get()
-    if (legs.length >= 8) return
+    if (legs.length >= 6) return
     // Don't add duplicate player+stat combos
     const exists = legs.some(l => l.player === leg.player && l.stat === leg.stat)
     if (exists) return

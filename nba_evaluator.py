@@ -668,17 +668,6 @@ class OddsAPI:
         """Initialize with API key from param, env var, or config file"""
         self.api_key = api_key or os.environ.get('ODDS_API_KEY')
 
-        # Try loading from config file if not set
-        if not self.api_key:
-            config_path = Path(__file__).parent / 'config.json'
-            if config_path.exists():
-                try:
-                    with open(config_path) as f:
-                        config = json.load(f)
-                        self.api_key = config.get('odds_api_key')
-                except Exception:
-                    pass
-
         if not self.api_key:
             print("⚠️  No Odds API key found. Set ODDS_API_KEY env var or add to config.json")
             print("    Get a free key at: https://the-odds-api.com/")

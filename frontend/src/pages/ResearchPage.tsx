@@ -29,6 +29,7 @@ import {
   ReferenceLine,
   Cell,
 } from 'recharts'
+import DOMPurify from 'dompurify'
 import { getPlayerResearch, StatSplits, FullGameLogEntry } from '../api/client'
 import { getNbaHeadshotUrl } from '../utils/nba'
 import PlayerSearch from '../components/PlayerSearch'
@@ -134,8 +135,8 @@ function RollCell({
   const arrowColor = isFlat
     ? 'var(--text-muted)'
     : isUp
-    ? 'var(--accent-success)'
-    : 'var(--accent-danger)'
+      ? 'var(--accent-success)'
+      : 'var(--accent-danger)'
 
   return (
     <td className="px-3 py-2 text-center">
@@ -335,7 +336,7 @@ export default function ResearchPage() {
         <AlertCircle className="w-8 h-8" style={{ color: 'var(--accent-danger)' }} />
         <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
           Could not load research data for{' '}
-          <span style={{ color: 'var(--accent)' }}>{decoded}</span>
+          <span style={{ color: 'var(--accent)' }}>{DOMPurify.sanitize(decoded)}</span>
         </p>
         <button
           onClick={() => refetch()}
@@ -386,7 +387,7 @@ export default function ResearchPage() {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-xl font-bold text-text-primary leading-tight truncate">
-                {data.player_name}
+                {DOMPurify.sanitize(data.player_name)}
               </h1>
               {data.team_abbrev && (
                 <span
@@ -441,10 +442,10 @@ export default function ResearchPage() {
                 activeStat === s
                   ? { background: 'var(--accent)', color: '#09090B' }
                   : {
-                      background: 'var(--bg-elevated)',
-                      color: 'var(--text-muted)',
-                      border: '1px solid rgba(255,255,255,0.06)',
-                    }
+                    background: 'var(--bg-elevated)',
+                    color: 'var(--text-muted)',
+                    border: '1px solid rgba(255,255,255,0.06)',
+                  }
               }
             >
               {s}
@@ -930,8 +931,8 @@ export default function ResearchPage() {
                             data.opponent_context.def_rank.includes('Elite') || data.opponent_context.def_rank.includes('Strong')
                               ? 'var(--accent-danger)'
                               : data.opponent_context.def_rank.includes('Weak')
-                              ? 'var(--accent-success)'
-                              : 'var(--text-secondary)',
+                                ? 'var(--accent-success)'
+                                : 'var(--text-secondary)',
                         }}
                       >
                         {data.opponent_context.def_rank}
