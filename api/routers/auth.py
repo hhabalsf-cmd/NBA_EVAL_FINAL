@@ -1,7 +1,10 @@
 """Authentication endpoints — avatar management and password change."""
+import logging
 import os
 import sys
 from pathlib import Path
+
+_logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
@@ -137,7 +140,7 @@ async def upload_avatar(
         supa.storage.from_("avatars").upload(
             storage_path,
             contents,
-            {"content-type": file.content_type, "upsert": "true"},
+            {"content-type": file.content_type, "upsert": True},
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Failed to upload avatar") from exc
@@ -168,7 +171,8 @@ async def change_password(
             {"password": req.new_password}
         )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        _logger.error("change_password failed for user %s: %s", current_user["id"], exc)
+        raise HTTPException(status_code=400, detail="Password change failed. Ensure the new password meets requirements.")
 
 
 @router.delete("/avatar", status_code=200)
@@ -180,8 +184,9 @@ async def delete_avatar(current_user: dict = Depends(get_current_user)):
     for ext in ["jpg", "png", "webp"]:
         try:
             supa.storage.from_("avatars").remove([f"{user_id}.{ext}"])
-        except Exception:
-            pass  # File may not exist for that extension
+        except Exception as exc:
+            if "not found" not in str(exc).lower():
+                _logger.warning("Storage remove failed for %s.%s: %s", user_id, ext, exc)
 
     supa.table("profiles").update({"avatar_url": None}).eq("id", user_id).execute()
 
