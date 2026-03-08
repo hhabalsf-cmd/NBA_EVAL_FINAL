@@ -1,14 +1,6 @@
 import { create } from 'zustand'
 import { User } from '../types/auth'
-import {
-  authLogin,
-  authLogout,
-  authRegister,
-  authGetMe,
-  uploadAvatar,
-  deleteAvatar,
-  changePassword,
-} from '../api/client'
+import { supabase } from '../lib/supabase'
 
 interface AuthStore {
   user: User | null
@@ -26,89 +18,158 @@ interface AuthStore {
   changePassword: (curPass: string, newPass: string) => Promise<void>
 }
 
-export const useAuthStore = create<AuthStore>((set) => {
-  // Auto-logout when any API call returns 401 (e.g. expired cookie)
-  if (typeof window !== 'undefined') {
-    window.addEventListener('auth:unauthorized', () => {
-      set({ user: null, isAuthenticated: false, error: null })
-    })
-  }
+async function fetchProfile(userId: string): Promise<Partial<User>> {
+  const { data } = await supabase
+    .from('profiles')
+    .select('username, avatar_url, role, created_at')
+    .eq('id', userId)
+    .single()
+  return data ?? {}
+}
 
-  return {
-    user: null,
-    isAuthenticated: false,
-    isLoading: false,
-    isUploadingAvatar: false,
-    error: null,
+export const useAuthStore = create<AuthStore>((set) => ({
+  user: null,
+  isAuthenticated: false,
+  isLoading: false,
+  isUploadingAvatar: false,
+  error: null,
 
-    login: async (email, password) => {
-      set({ isLoading: true, error: null })
-      try {
-        const { user } = await authLogin(email, password)
-        set({ user, isAuthenticated: true, isLoading: false })
-      } catch (err) {
-        set({ error: (err as Error).message, isLoading: false })
-      }
-    },
+  login: async (email, password) => {
+    set({ isLoading: true, error: null })
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+      if (error) throw error
+      const profile = await fetchProfile(data.user.id)
+      set({
+        user: {
+          id: data.user.id,
+          email: data.user.email!,
+          username: profile.username ?? '',
+          created_at: profile.created_at ?? data.user.created_at,
+          role: (profile.role as 'user' | 'admin') ?? 'user',
+          avatar_url: profile.avatar_url,
+        },
+        isAuthenticated: true,
+        isLoading: false,
+      })
+    } catch (err) {
+      set({ error: (err as Error).message, isLoading: false })
+    }
+  },
 
-    signup: async (email, username, password) => {
-      set({ isLoading: true, error: null })
-      try {
-        const { user } = await authRegister(email, username, password)
-        set({ user, isAuthenticated: true, isLoading: false })
-      } catch (err) {
-        set({ error: (err as Error).message, isLoading: false })
-      }
-    },
+  signup: async (email, username, password) => {
+    set({ isLoading: true, error: null })
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { data: { username } },
+      })
+      if (error) throw error
+      if (!data.user) throw new Error('Sign up failed')
+      // Profile is created via DB trigger — fetch it
+      const profile = await fetchProfile(data.user.id)
+      set({
+        user: {
+          id: data.user.id,
+          email: data.user.email!,
+          username: profile.username ?? username,
+          created_at: profile.created_at ?? new Date().toISOString(),
+          role: 'user',
+          avatar_url: undefined,
+        },
+        isAuthenticated: true,
+        isLoading: false,
+      })
+    } catch (err) {
+      set({ error: (err as Error).message, isLoading: false })
+    }
+  },
 
-    logout: async () => {
-      await authLogout().catch(() => undefined) // clear httpOnly cookie on server
-      set({ user: null, isAuthenticated: false, error: null })
-    },
+  logout: async () => {
+    await supabase.auth.signOut()
+    set({ user: null, isAuthenticated: false, error: null })
+  },
 
-    checkAuth: async () => {
-      set({ isLoading: true })
-      try {
-        // Cookie is sent automatically — no token juggling needed
-        const user = await authGetMe()
-        set({ user, isAuthenticated: true, isLoading: false })
-      } catch {
+  checkAuth: async () => {
+    set({ isLoading: true })
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
         set({ user: null, isAuthenticated: false, isLoading: false })
+        return
       }
-    },
+      const profile = await fetchProfile(session.user.id)
+      set({
+        user: {
+          id: session.user.id,
+          email: session.user.email!,
+          username: profile.username ?? '',
+          created_at: profile.created_at ?? session.user.created_at,
+          role: (profile.role as 'user' | 'admin') ?? 'user',
+          avatar_url: profile.avatar_url,
+        },
+        isAuthenticated: true,
+        isLoading: false,
+      })
+    } catch {
+      set({ user: null, isAuthenticated: false, isLoading: false })
+    }
+  },
 
-    clearError: () => set({ error: null }),
+  clearError: () => set({ error: null }),
 
-    updateAvatar: async (file) => {
-      set({ isUploadingAvatar: true, error: null })
-      try {
-        const updated = await uploadAvatar(file)
-        set((state) => ({
-          user: state.user ? { ...state.user, avatar_url: updated.avatar_url } : null,
-          isUploadingAvatar: false,
-        }))
-      } catch (err) {
-        set({ isUploadingAvatar: false })
-        throw err
+  updateAvatar: async (file) => {
+    set({ isUploadingAvatar: true, error: null })
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('Not authenticated')
+
+      const formData = new FormData()
+      formData.append('file', file)
+      const res = await fetch('/api/auth/avatar', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        body: formData,
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error((err as { detail?: string }).detail ?? 'Upload failed')
       }
-    },
+      const updated = await res.json()
+      set((state) => ({
+        user: state.user ? { ...state.user, avatar_url: updated.avatar_url } : null,
+        isUploadingAvatar: false,
+      }))
+    } catch (err) {
+      set({ isUploadingAvatar: false })
+      throw err
+    }
+  },
 
-    removeAvatar: async () => {
-      set({ isUploadingAvatar: true, error: null })
-      try {
-        const updated = await deleteAvatar()
-        set((state) => ({
-          user: state.user ? { ...state.user, avatar_url: updated.avatar_url } : null,
-          isUploadingAvatar: false,
-        }))
-      } catch (err) {
-        set({ isUploadingAvatar: false })
-        throw err
-      }
-    },
+  removeAvatar: async () => {
+    set({ isUploadingAvatar: true, error: null })
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('Not authenticated')
 
-    changePassword: async (curPass, newPass) => {
-      await changePassword(curPass, newPass)
-    },
-  }
-})
+      const res = await fetch('/api/auth/avatar', {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      })
+      if (!res.ok) throw new Error('Failed to remove avatar')
+      set((state) => ({
+        user: state.user ? { ...state.user, avatar_url: undefined } : null,
+        isUploadingAvatar: false,
+      }))
+    } catch (err) {
+      set({ isUploadingAvatar: false })
+      throw err
+    }
+  },
+
+  changePassword: async (_curPass, newPass) => {
+    const { error } = await supabase.auth.updateUser({ password: newPass })
+    if (error) throw error
+  },
+}))

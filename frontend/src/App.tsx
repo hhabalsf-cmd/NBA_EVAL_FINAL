@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom'
-import { Home, Gamepad2, History, Dice5, FlaskConical } from 'lucide-react'
+import { Home, Gamepad2, Dice5, FlaskConical } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import HomePage from './pages/HomePage'
 import LandingPage from './pages/LandingPage'
@@ -15,6 +15,7 @@ import SettingsPage from './pages/SettingsPage'
 import ProtectedRoute from './components/auth/ProtectedRoute'
 import UserMenu from './components/UserMenu'
 import { useAuthStore } from './store/authStore'
+import { supabase } from './lib/supabase'
 import { useQuery } from '@tanstack/react-query'
 import { getPicks } from './api/client'
 
@@ -39,23 +40,16 @@ function AppRoutes() {
       >
         <Routes location={location}>
           <Route path="/" element={<LandingPage />} />
-          <Route path="/app" element={<HomePage />} />
-          <Route path="/player/:playerName" element={<PlayerPage />} />
-          <Route path="/research" element={<ResearchPage />} />
-          <Route path="/research/:playerName" element={<ResearchPage />} />
-          <Route path="/games" element={<GamesPage />} />
-          <Route path="/history" element={<HistoryPage />} />
-          <Route path="/parlay" element={<ParlayPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/signup" element={<SignupPage />} />
-          <Route
-            path="/settings"
-            element={
-              <ProtectedRoute>
-                <SettingsPage />
-              </ProtectedRoute>
-            }
-          />
+          <Route path="/app" element={<ProtectedRoute><HomePage /></ProtectedRoute>} />
+          <Route path="/player/:playerName" element={<ProtectedRoute><PlayerPage /></ProtectedRoute>} />
+          <Route path="/research" element={<ProtectedRoute><ResearchPage /></ProtectedRoute>} />
+          <Route path="/research/:playerName" element={<ProtectedRoute><ResearchPage /></ProtectedRoute>} />
+          <Route path="/games" element={<ProtectedRoute><GamesPage /></ProtectedRoute>} />
+          <Route path="/history" element={<ProtectedRoute><HistoryPage /></ProtectedRoute>} />
+          <Route path="/parlay" element={<ProtectedRoute><ParlayPage /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
         </Routes>
       </motion.div>
     </AnimatePresence>
@@ -66,12 +60,20 @@ function App() {
   const { isAuthenticated, checkAuth } = useAuthStore()
 
   useEffect(() => {
-    checkAuth()
-  }, [checkAuth])
+    checkAuth() // initial session check
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) {
+        // User signed out (from another tab, token expired, etc.)
+        useAuthStore.setState({ user: null, isAuthenticated: false })
+      }
+    })
+    return () => subscription.unsubscribe()
+  }, [])
 
   const { data: pendingPicks = [] } = useQuery({
     queryKey: ['picks', true],
-    queryFn: () => getPicks(30, true),
+    queryFn: () => getPicks(true),
     staleTime: 1000 * 30,
     enabled: isAuthenticated,
   })
@@ -81,7 +83,6 @@ function App() {
     { to: '/games', icon: Gamepad2, label: 'Games' },
     { to: '/research', icon: FlaskConical, label: 'Research' },
     { to: '/parlay', icon: Dice5, label: 'Parlays', badge: pendingPicks.length },
-    { to: '/history', icon: History, label: 'History' },
   ]
 
   return (
@@ -103,7 +104,7 @@ function App() {
 
               {/* Desktop Nav Links */}
               <div className="hidden sm:flex items-center gap-1">
-                {navItems.map(({ to, icon: Icon, label, badge }) => (
+                {isAuthenticated && navItems.map(({ to, icon: Icon, label, badge }) => (
                   <NavLink
                     key={to}
                     to={to}
@@ -159,7 +160,7 @@ function App() {
         {/* Mobile Bottom Navigation */}
         <nav className="sm:hidden fixed bottom-0 left-0 right-0 z-50 bg-bg-secondary/95 backdrop-blur-xl border-t border-border-subtle safe-area-bottom">
           <div className="flex items-center justify-around h-16 px-2">
-            {navItems.map(({ to, icon: Icon, label, badge }) => (
+            {isAuthenticated && navItems.map(({ to, icon: Icon, label, badge }) => (
               <NavLink
                 key={to}
                 to={to}

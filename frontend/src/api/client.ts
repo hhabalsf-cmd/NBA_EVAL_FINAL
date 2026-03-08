@@ -2,6 +2,8 @@
  * API client for NBA Prop Evaluator backend
  */
 
+import { supabase } from '../lib/supabase'
+
 const API_BASE = '/api'
 
 /** Throw a user-friendly error, with special handling for 429 rate limits. */
@@ -15,11 +17,17 @@ async function throwResponseError(response: Response, fallback: string): Promise
 }
 
 /**
- * Fetch wrapper that always includes credentials (httpOnly cookie) and
- * dispatches a global event on 401 so the auth store can log the user out.
+ * Fetch wrapper that attaches the Supabase session token as a Bearer header
+ * and dispatches a global event on 401 so the auth store can log the user out.
  */
 async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
-  const res = await fetch(input, { ...init, credentials: 'include' })
+  const { data: { session } } = await supabase.auth.getSession()
+  const headers = new Headers(init.headers)
+  if (session?.access_token) {
+    headers.set('Authorization', `Bearer ${session.access_token}`)
+  }
+
+  const res = await fetch(input, { ...init, headers })
   if (res.status === 401) {
     window.dispatchEvent(new Event('auth:unauthorized'))
   }
@@ -208,111 +216,6 @@ export interface ProgressEvent {
   message: string
   data?: PredictionResult
 }
-
-// ── Auth API functions ─────────────────────────────────────────
-
-export interface AuthUser {
-  id: string
-  email: string
-  username: string
-  created_at: string
-  role: 'user' | 'admin'
-  avatar_url?: string
-}
-
-export interface AuthResponse {
-  user: AuthUser
-}
-
-export async function authRegister(
-  email: string,
-  username: string,
-  password: string
-): Promise<AuthResponse> {
-  const r = await apiFetch(`${API_BASE}/auth/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, username, password }),
-  })
-  if (!r.ok) {
-    const err = await r.json().catch(() => ({}))
-    throw new Error((err as { detail?: string }).detail || 'Registration failed')
-  }
-  return r.json()
-}
-
-export async function authLogin(email: string, password: string): Promise<AuthResponse> {
-  const r = await apiFetch(`${API_BASE}/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-  })
-  if (!r.ok) {
-    const err = await r.json().catch(() => ({}))
-    throw new Error((err as { detail?: string }).detail || 'Invalid credentials')
-  }
-  return r.json()
-}
-
-export async function authLogout(): Promise<void> {
-  await apiFetch(`${API_BASE}/auth/logout`, { method: 'POST' })
-}
-
-export async function authGetMe(): Promise<AuthUser> {
-  const r = await apiFetch(`${API_BASE}/auth/me`, {
-    headers: { 'Content-Type': 'application/json' },
-  })
-  if (!r.ok) throw new Error('Not authenticated')
-  return r.json()
-}
-
-export async function authRefresh(): Promise<AuthResponse> {
-  const r = await apiFetch(`${API_BASE}/auth/refresh`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-  })
-  if (!r.ok) throw new Error('Session expired — please log in again')
-  return r.json()
-}
-
-export async function uploadAvatar(file: File): Promise<AuthUser> {
-  const form = new FormData()
-  form.append('file', file)
-  const r = await apiFetch(`${API_BASE}/auth/avatar`, {
-    method: 'POST',
-    body: form,
-  })
-  if (!r.ok) {
-    const err = await r.json().catch(() => ({}))
-    throw new Error((err as { detail?: string }).detail || 'Upload failed')
-  }
-  return r.json()
-}
-
-export async function deleteAvatar(): Promise<AuthUser> {
-  const r = await apiFetch(`${API_BASE}/auth/avatar`, { method: 'DELETE' })
-  if (!r.ok) {
-    const err = await r.json().catch(() => ({}))
-    throw new Error((err as { detail?: string }).detail || 'Failed to remove avatar')
-  }
-  return r.json()
-}
-
-export async function changePassword(
-  currentPassword: string,
-  newPassword: string,
-): Promise<void> {
-  const r = await apiFetch(`${API_BASE}/auth/change-password`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
-  })
-  if (!r.ok) {
-    const err = await r.json().catch(() => ({}))
-    throw new Error((err as { detail?: string }).detail || 'Failed to change password')
-  }
-}
-
 
 // API Functions
 
