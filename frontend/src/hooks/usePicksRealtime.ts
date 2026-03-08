@@ -25,6 +25,15 @@ export function usePicksRealtime() {
           }
         }
       )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'picks' },
+        () => {
+          // Invalidate all picks queries — let them refetch with the new pick
+          queryClient.invalidateQueries({ queryKey: ['picks'] })
+          queryClient.invalidateQueries({ queryKey: ['pending-picks'] })
+        }
+      )
       .subscribe((_status, err) => {
         if (err) {
           console.error('[usePicksRealtime] subscription error', err)

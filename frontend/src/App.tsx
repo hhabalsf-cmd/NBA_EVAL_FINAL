@@ -62,9 +62,12 @@ function App() {
   useEffect(() => {
     checkAuth()
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!session) {
         useAuthStore.setState({ user: null, isAuthenticated: false })
+      } else if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
+        // Re-sync store — checkAuth handles profile fetch
+        useAuthStore.getState().checkAuth()
       }
     })
 

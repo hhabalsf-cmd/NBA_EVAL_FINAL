@@ -30,7 +30,7 @@ async function fetchProfile(userId: string): Promise<Partial<User>> {
   return data ?? {}
 }
 
-export const useAuthStore = create<AuthStore>((set) => ({
+export const useAuthStore = create<AuthStore>((set, get) => ({
   user: null,
   isAuthenticated: false,
   isLoading: false,
@@ -114,7 +114,8 @@ export const useAuthStore = create<AuthStore>((set) => ({
         isAuthenticated: true,
         isLoading: false,
       })
-    } catch {
+    } catch (err) {
+      console.warn('[checkAuth] failed to restore session:', err)
       set({ user: null, isAuthenticated: false, isLoading: false })
     }
   },
@@ -170,7 +171,13 @@ export const useAuthStore = create<AuthStore>((set) => ({
     }
   },
 
-  changePassword: async (_curPass, newPass) => {
+  changePassword: async (curPass, newPass) => {
+    const email = get().user?.email
+    if (!email) throw new Error('Not authenticated')
+    // Re-authenticate to verify current password
+    const { error: authError } = await supabase.auth.signInWithPassword({ email, password: curPass })
+    if (authError) throw new Error('Current password is incorrect')
+    // Now update to new password
     const { error } = await supabase.auth.updateUser({ password: newPass })
     if (error) throw error
   },
