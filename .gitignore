@@ -35,6 +35,7 @@ config.json
 
 # ML model binaries — never commit (executable code risk + large files)
 models/**/*.pkl
+models/**/*.lock
 *.pkl
 
 # Data and report files — runtime artifacts, not source code
