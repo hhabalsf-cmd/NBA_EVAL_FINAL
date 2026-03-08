@@ -398,17 +398,34 @@ export async function createParlay(pickIds: number[]): Promise<SavedParlay> {
 export async function getParlays(): Promise<SavedParlay[]> {
   const { data, error } = await supabase
     .from('parlays')
-    .select('*, parlay_legs(*)')
+    .select('*, parlay_legs(id, pick_id, picks(player, player_id, team_abbrev, stat, line, prediction, direction, edge, prob_over, actual_result, won, voided, void_reason, game_date, opponent))')
     .order('created_at', { ascending: false })
 
   if (error) throw new Error(error.message)
   return (data ?? []).map(p => ({
     ...p,
-    legs: (p.parlay_legs ?? []).map((leg: Record<string, unknown>) => ({
-      ...leg,
-      won: leg.won === 1 ? true : leg.won === 0 ? false : (leg.won ?? null),
-      voided: leg.voided === 1 ? true : false,
-    })),
+    legs: (p.parlay_legs ?? []).map((leg: Record<string, unknown>) => {
+      const pick = ((leg.picks as Record<string, unknown>) ?? {})
+      return {
+        id: leg.id,
+        pick_id: leg.pick_id,
+        player: pick.player,
+        player_id: pick.player_id,
+        team_abbrev: pick.team_abbrev,
+        stat: pick.stat,
+        line: pick.line,
+        prediction: pick.prediction,
+        direction: pick.direction,
+        edge: pick.edge,
+        prob_over: pick.prob_over,
+        actual_result: pick.actual_result,
+        won: pick.won === 1 ? true : pick.won === 0 ? false : (pick.won ?? null),
+        voided: pick.voided === 1 ? true : false,
+        void_reason: pick.void_reason,
+        game_date: pick.game_date,
+        opponent: pick.opponent,
+      }
+    }),
   })) as SavedParlay[]
 }
 
