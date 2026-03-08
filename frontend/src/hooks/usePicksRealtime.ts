@@ -13,20 +13,23 @@ export function usePicksRealtime() {
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'picks' },
         (payload) => {
-          // HistoryPage uses ['picks', showPending] — patch both variants
-          // so the live update applies regardless of whether pending filter is on or off.
-          for (const pendingOnly of [false, true]) {
-            queryClient.setQueryData<Pick[]>(['picks', pendingOnly], (old) =>
+          const updated = payload.new as Pick
+          // Patch all known picks query key variants
+          const keys: unknown[][] = [['picks', false], ['picks', true], ['pending-picks']]
+          for (const key of keys) {
+            queryClient.setQueryData<Pick[]>(key, (old) =>
               old
-                ? old.map((p) =>
-                    p.id === payload.new.id ? { ...p, ...payload.new } : p
-                  )
+                ? old.map((p) => (p.id === updated.id ? { ...p, ...updated } : p))
                 : old
             )
           }
         }
       )
-      .subscribe()
+      .subscribe((_status, err) => {
+        if (err) {
+          console.error('[usePicksRealtime] subscription error', err)
+        }
+      })
 
     return () => { supabase.removeChannel(channel) }
   }, [queryClient])

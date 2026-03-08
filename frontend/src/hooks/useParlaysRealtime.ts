@@ -13,16 +13,19 @@ export function useParlaysRealtime() {
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'parlays' },
         (payload) => {
+          const updated = payload.new as SavedParlay
           queryClient.setQueryData<SavedParlay[]>(['parlays'], (old) =>
             old
-              ? old.map((p) =>
-                  p.id === payload.new.id ? { ...p, ...payload.new } : p
-                )
+              ? old.map((p) => (p.id === updated.id ? { ...p, ...updated } : p))
               : old
           )
         }
       )
-      .subscribe()
+      .subscribe((_status, err) => {
+        if (err) {
+          console.error('[useParlaysRealtime] subscription error', err)
+        }
+      })
 
     return () => { supabase.removeChannel(channel) }
   }, [queryClient])
