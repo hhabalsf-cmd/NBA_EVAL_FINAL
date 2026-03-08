@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import { User } from '../types/auth'
 import { supabase } from '../lib/supabase'
 
+const API_BASE = (import.meta.env.VITE_API_URL ?? '') + '/api'
+
 interface AuthStore {
   user: User | null
   isAuthenticated: boolean
@@ -130,7 +132,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
       const formData = new FormData()
       formData.append('file', file)
-      const res = await fetch('/api/auth/avatar', {
+      const res = await fetch(`${API_BASE}/auth/avatar`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${session.access_token}` },
         body: formData,
@@ -156,7 +158,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) throw new Error('Not authenticated')
 
-      const res = await fetch('/api/auth/avatar', {
+      const res = await fetch(`${API_BASE}/auth/avatar`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${session.access_token}` },
       })
