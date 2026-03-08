@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { X, Trash2, RefreshCw, BookmarkCheck, ArrowUpDown, ArrowUp, ArrowDown, BookmarkPlus } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useParlaysRealtime } from '../hooks/useParlaysRealtime'
 import { getPicks, deletePick, Pick, createParlay, getParlays, deleteParlay, SavedParlay, autoGradePicks } from '../api/client'
 import { useNavigate } from 'react-router-dom'
 import { getNbaHeadshotUrl } from '../utils/nba'
@@ -54,6 +55,7 @@ const SORT_OPTIONS: { field: SortField; label: string }[] = [
 
 export default function ParlayPage() {
   const navigate = useNavigate()
+  useParlaysRealtime()
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [deletingId, setDeletingId] = useState<number | null>(null)
   const [exitingIds, setExitingIds] = useState<Set<number>>(new Set())

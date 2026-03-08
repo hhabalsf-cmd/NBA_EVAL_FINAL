@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '../store/authStore'
+import { usePicksRealtime } from '../hooks/usePicksRealtime'
 import { RefreshCw, Trash2, Check, X, Loader2 } from 'lucide-react'
 import {
   getPicks,
@@ -29,6 +30,7 @@ const PAGE_SIZE = 30
 export default function HistoryPage() {
   const queryClient = useQueryClient()
   const { isAuthenticated } = useAuthStore()
+  usePicksRealtime()
   const [showPending, setShowPending] = useState(false)
   const [gradePickId, setGradePickId] = useState<number | null>(null)
   const [gradeValue, setGradeValue] = useState('')
