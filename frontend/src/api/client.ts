@@ -340,13 +340,22 @@ export async function getTodaysBestBets(minEdge = 5, limit = 10): Promise<{ bets
 }
 
 export async function getPicks(pendingOnly = false): Promise<Pick[]> {
-  const params = new URLSearchParams({
-    days: '90',
-    pending_only: pendingOnly.toString(),
-  })
-  const response = await apiFetch(`${API_BASE}/picks?${params}`)
-  if (!response.ok) throw new Error('Failed to fetch picks')
-  return response.json()
+  let query = supabase
+    .from('picks')
+    .select('*')
+    .order('timestamp', { ascending: false })
+
+  if (pendingOnly) {
+    query = query.is('won', null).eq('voided', 0)
+  }
+
+  const { data, error } = await query
+  if (error) throw new Error(error.message)
+  return (data ?? []).map(p => ({
+    ...p,
+    won: p.won === 1 ? true : p.won === 0 ? false : null,
+    voided: Boolean(p.voided),
+  }))
 }
 
 export async function createPick(pick: Omit<Pick, 'id' | 'timestamp' | 'actual_result' | 'won'>): Promise<Pick> {
@@ -387,9 +396,16 @@ export async function createParlay(pickIds: number[]): Promise<SavedParlay> {
 }
 
 export async function getParlays(): Promise<SavedParlay[]> {
-  const response = await apiFetch(`${API_BASE}/parlays`)
-  if (!response.ok) throw new Error('Failed to fetch parlays')
-  return response.json()
+  const { data, error } = await supabase
+    .from('parlays')
+    .select('*, parlay_legs(*)')
+    .order('created_at', { ascending: false })
+
+  if (error) throw new Error(error.message)
+  return (data ?? []).map(p => ({
+    ...p,
+    legs: p.parlay_legs ?? [],
+  })) as SavedParlay[]
 }
 
 export async function deleteParlay(parlayId: number): Promise<void> {
@@ -404,15 +420,93 @@ export async function autoGradePicks(): Promise<{ graded_count: number; parlays_
 }
 
 export async function getPerformanceStats(): Promise<PerformanceStats> {
-  const response = await apiFetch(`${API_BASE}/picks/stats/performance`)
-  if (!response.ok) throw new Error('Failed to fetch performance stats')
-  return response.json()
+  const { data: picks, error } = await supabase
+    .from('picks')
+    .select('stat, edge, won, voided')
+
+  if (error) throw new Error(error.message)
+  if (!picks) return emptyPerformanceStats()
+
+  const graded = picks.filter(p => p.won !== null && !p.voided)
+  const wins = graded.filter(p => p.won === 1 || p.won === true)
+  const losses = graded.filter(p => p.won === 0 || p.won === false)
+  const pushes = picks.filter(p => p.voided)
+
+  const win_rate = graded.length > 0 ? wins.length / graded.length : 0
+  const roi = graded.length > 0 ? (wins.length - losses.length) / graded.length : 0
+  const avg_edge_winners = wins.length > 0
+    ? wins.reduce((sum, p) => sum + (p.edge ?? 0), 0) / wins.length
+    : 0
+
+  const by_stat: Record<string, { total: number; wins: number; win_rate: number }> = {}
+  for (const p of graded) {
+    if (!by_stat[p.stat]) by_stat[p.stat] = { total: 0, wins: 0, win_rate: 0 }
+    by_stat[p.stat].total++
+    if (p.won === 1 || p.won === true) by_stat[p.stat].wins++
+  }
+  for (const stat of Object.keys(by_stat)) {
+    const s = by_stat[stat]
+    s.win_rate = s.total > 0 ? s.wins / s.total : 0
+  }
+
+  const edgeRanges = [
+    { label: '0-5', min: 0, max: 5 },
+    { label: '5-10', min: 5, max: 10 },
+    { label: '10-15', min: 10, max: 15 },
+    { label: '15+', min: 15, max: Infinity },
+  ]
+  const by_edge_range: Record<string, { total: number; wins: number; win_rate: number }> = {}
+  for (const range of edgeRanges) {
+    const inRange = graded.filter(p => (p.edge ?? 0) >= range.min && (p.edge ?? 0) < range.max)
+    const rangeWins = inRange.filter(p => p.won === 1 || p.won === true)
+    by_edge_range[range.label] = {
+      total: inRange.length,
+      wins: rangeWins.length,
+      win_rate: inRange.length > 0 ? rangeWins.length / inRange.length : 0,
+    }
+  }
+
+  return {
+    total_picks: picks.length,
+    graded_picks: graded.length,
+    wins: wins.length,
+    losses: losses.length,
+    pushes: pushes.length,
+    win_rate,
+    roi,
+    avg_edge_winners,
+    by_stat,
+    by_edge_range,
+  }
+}
+
+function emptyPerformanceStats(): PerformanceStats {
+  return {
+    total_picks: 0, graded_picks: 0, wins: 0, losses: 0, pushes: 0,
+    win_rate: 0, roi: 0, avg_edge_winners: 0, by_stat: {}, by_edge_range: {},
+  }
 }
 
 export async function getCumulativeProfit(): Promise<CumulativeProfitPoint[]> {
-  const response = await apiFetch(`${API_BASE}/picks/stats/profit`)
-  if (!response.ok) throw new Error('Failed to fetch profit data')
-  return response.json()
+  const { data, error } = await supabase
+    .from('picks')
+    .select('game_date, won, voided')
+    .not('won', 'is', null)
+    .not('game_date', 'is', null)
+    .order('game_date', { ascending: true })
+
+  if (error) throw new Error(error.message)
+
+  let cumulative = 0
+  return (data ?? []).map(p => {
+    const profit = (p.won === 1 || p.won === true) ? 1 : (!p.voided ? -1 : 0)
+    cumulative += profit
+    return {
+      date: p.game_date as string,
+      profit,
+      cumulative_profit: cumulative,
+    }
+  })
 }
 
 // === Game Prediction Types ===
@@ -537,9 +631,18 @@ export async function predictTodaysGames(
 }
 
 export async function getGamePredictionHistory(): Promise<GamePredictionHistoryItem[]> {
-  const response = await apiFetch(`${API_BASE}/games/history`)
-  if (!response.ok) throw new Error('Failed to fetch game history')
-  return response.json()
+  const { data, error } = await supabase
+    .from('game_predictions')
+    .select('*')
+    .order('timestamp', { ascending: false })
+
+  if (error) throw new Error(error.message)
+  return (data ?? []).map(item => ({
+    ...item,
+    key_factors: typeof item.key_factors === 'string'
+      ? JSON.parse(item.key_factors)
+      : (item.key_factors ?? []),
+  }))
 }
 
 export async function autoGradeGamePredictions(): Promise<{
@@ -562,9 +665,21 @@ export async function gradeGamePrediction(id: number, actualWinner: string): Pro
 }
 
 export async function getGameAccuracyStats(): Promise<GameAccuracyStats> {
-  const response = await apiFetch(`${API_BASE}/games/stats/accuracy`)
-  if (!response.ok) throw new Error('Failed to fetch game accuracy stats')
-  return response.json()
+  const { data, error } = await supabase
+    .from('game_accuracy_stats')
+    .select('*')
+    .single()
+
+  if (error) throw new Error(error.message)
+  return {
+    total_predictions: data.total_predictions ?? 0,
+    graded_predictions: data.graded_predictions ?? 0,
+    correct: data.correct ?? 0,
+    incorrect: data.incorrect ?? 0,
+    accuracy: data.accuracy ?? 0,
+    by_confidence_range: {},
+    recent_streak: '',
+  }
 }
 
 // === Injury Types ===
