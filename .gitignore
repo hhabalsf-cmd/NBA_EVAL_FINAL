@@ -5,6 +5,10 @@ __pycache__/
 cache/
 *.db
 .env
+.env.local
+.env.*.local
+frontend/.env.local
+frontend/.env.*.local
 node_modules/
 frontend/dist/
 
