@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom'
-import { Home, Gamepad2, Dice5, FlaskConical } from 'lucide-react'
+import { Home, Gamepad2, Dice5, FlaskConical, History } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import HomePage from './pages/HomePage'
 import LandingPage from './pages/LandingPage'
@@ -60,16 +60,24 @@ function App() {
   const { isAuthenticated, checkAuth } = useAuthStore()
 
   useEffect(() => {
-    checkAuth() // initial session check
+    checkAuth()
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!session) {
-        // User signed out (from another tab, token expired, etc.)
         useAuthStore.setState({ user: null, isAuthenticated: false })
       }
     })
-    return () => subscription.unsubscribe()
-  }, [])
+
+    const handleUnauthorized = () => {
+      useAuthStore.setState({ user: null, isAuthenticated: false })
+    }
+    window.addEventListener('auth:unauthorized', handleUnauthorized)
+
+    return () => {
+      subscription.unsubscribe()
+      window.removeEventListener('auth:unauthorized', handleUnauthorized)
+    }
+  }, [checkAuth])
 
   const { data: pendingPicks = [] } = useQuery({
     queryKey: ['picks', true],
@@ -81,6 +89,7 @@ function App() {
   const navItems = [
     { to: '/app', icon: Home, label: 'Home' },
     { to: '/games', icon: Gamepad2, label: 'Games' },
+    { to: '/history', icon: History, label: 'History' },
     { to: '/research', icon: FlaskConical, label: 'Research' },
     { to: '/parlay', icon: Dice5, label: 'Parlays', badge: pendingPicks.length },
   ]

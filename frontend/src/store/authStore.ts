@@ -19,11 +19,14 @@ interface AuthStore {
 }
 
 async function fetchProfile(userId: string): Promise<Partial<User>> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('profiles')
     .select('username, avatar_url, role, created_at')
     .eq('id', userId)
     .single()
+  if (error) {
+    console.warn('fetchProfile error:', error.message)
+  }
   return data ?? {}
 }
 
@@ -67,7 +70,6 @@ export const useAuthStore = create<AuthStore>((set) => ({
       })
       if (error) throw error
       if (!data.user) throw new Error('Sign up failed')
-      // Profile is created via DB trigger — fetch it
       const profile = await fetchProfile(data.user.id)
       set({
         user: {
@@ -78,7 +80,7 @@ export const useAuthStore = create<AuthStore>((set) => ({
           role: 'user',
           avatar_url: undefined,
         },
-        isAuthenticated: true,
+        isAuthenticated: data.session !== null,
         isLoading: false,
       })
     } catch (err) {

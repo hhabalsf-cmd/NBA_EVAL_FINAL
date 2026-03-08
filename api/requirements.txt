@@ -20,3 +20,4 @@ slowapi>=0.1.9
 # beautifulsoup4
 python-multipart>=0.0.9
 psycopg2-binary>=2.9.9
+supabase>=2.0.0

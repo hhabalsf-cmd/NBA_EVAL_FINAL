@@ -16,7 +16,7 @@ from ..schemas.prediction import (
     PerformanceStats,
     CumulativeProfitPoint,
 )
-from ..routers.auth import get_current_user
+from ..routers.auth import get_current_user, verify_service_key
 
 router = APIRouter(prefix="/api/picks", tags=["picks"])
 
@@ -145,13 +145,13 @@ async def delete_pick(pick_id: int, current_user: dict = Depends(get_current_use
 
 
 @router.post("/auto-grade")
-async def auto_grade_picks(current_user: dict = Depends(get_current_user)):
+async def auto_grade_picks(_: None = Depends(verify_service_key)):
     """
     Automatically grade pending picks by fetching actual results,
     then derive and store results for any pending parlays whose picks are all resolved.
     """
     result = db.auto_grade_picks()
-    parlay_result = db.grade_pending_parlays(user_id=current_user["id"])
+    parlay_result = db.grade_pending_parlays(user_id=None)
     return {
         "graded_count": result['graded_count'],
         "parlays_graded": parlay_result['parlays_graded'],

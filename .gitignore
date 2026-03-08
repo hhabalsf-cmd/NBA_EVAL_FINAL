@@ -12,6 +12,21 @@ frontend/.env.*.local
 node_modules/
 frontend/dist/
 
+# Binary artifacts
+*.zip
+nba_line_evaluator.zip
+
+# Data directories (runtime, not source)
+data/
+history/predictions.json
+
+# Video build artifacts
+video/node_modules/
+video/out/
+
+# Deploy artifacts
+.vercel/
+
 # User-uploaded files (runtime data, not source code)
 uploads/
 

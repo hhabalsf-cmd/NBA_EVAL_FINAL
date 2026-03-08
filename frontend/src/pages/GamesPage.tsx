@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '../store/authStore'
 import { RefreshCw, Loader2, BarChart3, Cpu, Users, Zap, X } from 'lucide-react'
+import DOMPurify from 'dompurify'
 import GameCard from '../components/GameCard'
 import AccuracyTracker from '../components/AccuracyTracker'
 import {
@@ -79,7 +80,7 @@ export default function GamesPage() {
       queryClient.refetchQueries({ queryKey: ['game-history'] })
       queryClient.refetchQueries({ queryKey: ['game-accuracy'] })
     },
-    onError: () => {},
+    onError: () => { },
   })
 
   const gradeMutation = useMutation({
@@ -188,11 +189,10 @@ export default function GamesPage() {
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors capitalize ${
-              activeTab === tab
+            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors capitalize ${activeTab === tab
                 ? 'bg-bg-elevated text-text-primary'
                 : 'text-text-muted hover:text-text-secondary'
-            }`}
+              }`}
           >
             {tab === 'today' ? "Today" : "History"}
           </button>
@@ -207,7 +207,7 @@ export default function GamesPage() {
             <div className="card p-5 animate-fade-in">
               <div className="flex items-center gap-3 mb-3">
                 <Loader2 className="w-4 h-4 text-accent animate-spin" />
-                <span className="text-sm text-text-secondary">{streamMessage}</span>
+                <span className="text-sm text-text-secondary">{DOMPurify.sanitize(streamMessage)}</span>
               </div>
               <div className="progress-bar">
                 <div className="progress-bar-fill" style={{ width: `${streamProgress}%` }} />
@@ -233,7 +233,7 @@ export default function GamesPage() {
             <div className="card p-10 text-center">
               <h3 className="text-base font-medium text-text-primary mb-2">Error Loading Predictions</h3>
               <p className="text-sm text-text-secondary mb-5">
-                {error instanceof Error ? error.message : 'Something went wrong'}
+                {error instanceof Error ? DOMPurify.sanitize(error.message) : 'Something went wrong'}
               </p>
               <button onClick={() => refetch()} className="btn btn-secondary">Retry</button>
             </div>
@@ -248,7 +248,7 @@ export default function GamesPage() {
                   {predictions.length} game{predictions.length !== 1 ? 's' : ''} today
                 </span>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {predictions.map((pred, idx) => (
                   <GameCard key={idx} prediction={pred} />
                 ))}
@@ -311,9 +311,8 @@ export default function GamesPage() {
                     <button
                       key={f}
                       onClick={() => handleFilterChange(f)}
-                      className={`px-3 py-1.5 rounded-md text-xs font-medium capitalize transition-colors ${
-                        resultFilter === f ? 'bg-bg-elevated text-text-primary' : 'text-text-muted hover:text-text-secondary'
-                      }`}
+                      className={`px-3 py-1.5 rounded-md text-xs font-medium capitalize transition-colors ${resultFilter === f ? 'bg-bg-elevated text-text-primary' : 'text-text-muted hover:text-text-secondary'
+                        }`}
                     >{f}</button>
                   ))}
                 </div>
@@ -323,11 +322,10 @@ export default function GamesPage() {
                       <button
                         key={p}
                         onClick={() => setPage(p)}
-                        className={`w-7 h-7 rounded-md font-mono transition-colors ${
-                          safePage === p
+                        className={`w-7 h-7 rounded-md font-mono transition-colors ${safePage === p
                             ? 'bg-accent text-white'
                             : 'bg-bg-secondary text-text-muted hover:bg-bg-elevated hover:text-text-primary'
-                        }`}
+                          }`}
                       >{p}</button>
                     ))}
                   </div>
@@ -354,23 +352,20 @@ export default function GamesPage() {
                   const isGradingThis = gradingId === item.id
 
                   return (
-                    <div key={item.id} className={`p-4 sm:p-5 border-l-2 ${
-                      isCorrect ? 'border-l-accent-success' : isIncorrect ? 'border-l-accent-danger' : 'border-l-border-subtle'
-                    }`}>
+                    <div key={item.id} className={`p-4 sm:p-5 border-l-2 ${isCorrect ? 'border-l-accent-success' : isIncorrect ? 'border-l-accent-danger' : 'border-l-border-subtle'
+                      }`}>
                       <div className="flex items-start justify-between gap-3">
                         {/* Left: date + matchup */}
                         <div className="min-w-0">
                           <div className="text-[11px] text-text-muted mb-1">{formatDate(item.game_date)}</div>
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className={`font-mono text-sm font-semibold ${
-                              item.predicted_winner === item.away_team ? 'text-accent' : 'text-text-primary'
-                            }`}>
+                            <span className={`font-mono text-sm font-semibold ${item.predicted_winner === item.away_team ? 'text-accent' : 'text-text-primary'
+                              }`}>
                               {item.away_team}
                             </span>
                             <span className="text-text-muted text-xs">@</span>
-                            <span className={`font-mono text-sm font-semibold ${
-                              item.predicted_winner === item.home_team ? 'text-accent' : 'text-text-primary'
-                            }`}>
+                            <span className={`font-mono text-sm font-semibold ${item.predicted_winner === item.home_team ? 'text-accent' : 'text-text-primary'
+                              }`}>
                               {item.home_team}
                             </span>
                           </div>
@@ -379,11 +374,10 @@ export default function GamesPage() {
                               {item.predicted_winner} WINS
                             </span>
                             {item.confidence != null && (
-                              <span className={`text-[11px] font-mono ${
-                                item.confidence >= 65 ? 'text-accent-success'
+                              <span className={`text-[11px] font-mono ${item.confidence >= 65 ? 'text-accent-success'
                                   : item.confidence >= 55 ? 'text-accent-warning'
-                                  : 'text-text-muted'
-                              }`}>
+                                    : 'text-text-muted'
+                                }`}>
                                 {item.confidence.toFixed(1)}%
                               </span>
                             )}
@@ -395,9 +389,8 @@ export default function GamesPage() {
                           {isGraded ? (
                             <div className="flex flex-col items-end gap-1">
                               <span className="text-xs text-text-muted">Actual: {item.actual_winner}</span>
-                              <span className={`font-mono font-bold text-base ${
-                                isCorrect ? 'text-accent-success' : 'text-accent-danger'
-                              }`}>
+                              <span className={`font-mono font-bold text-base ${isCorrect ? 'text-accent-success' : 'text-accent-danger'
+                                }`}>
                                 {isCorrect ? 'W' : 'L'}
                               </span>
                             </div>

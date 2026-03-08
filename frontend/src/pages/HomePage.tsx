@@ -126,7 +126,7 @@ export default function HomePage() {
         <h2 className="text-xl font-semibold text-text-primary tracking-tight mb-6">Performance by Stat</h2>
         {stats && Object.keys(stats.by_stat).length > 0 ? (
           <motion.div
-            className="grid grid-cols-2 md:grid-cols-4 gap-4"
+            className="grid grid-cols-2 sm:grid-cols-4 gap-4"
             variants={stagger}
             initial="hidden"
             animate="show"

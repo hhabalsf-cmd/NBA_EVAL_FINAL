@@ -124,9 +124,11 @@ function HitRateCard({
 function RollCell({
   value,
   seasonAvg,
+  className = '',
 }: {
   value: number
   seasonAvg: number
+  className?: string
 }) {
   const d = delta(value, seasonAvg)
   const isUp = d > 0
@@ -139,7 +141,7 @@ function RollCell({
       : 'var(--accent-danger)'
 
   return (
-    <td className="px-3 py-2 text-center">
+    <td className={`px-3 py-2 text-center ${className}`}>
       <div className="flex flex-col items-center gap-0.5">
         <span className="font-mono text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
           {value.toFixed(1)}
@@ -377,7 +379,7 @@ export default function ResearchPage() {
         </div>
 
         {/* Player info row */}
-        <div className="card p-4 flex items-center gap-4">
+        <div className="card p-4 flex items-center gap-2 sm:gap-4">
           <img
             src={getNbaHeadshotUrl(data.player_id)}
             alt={data.player_name}
@@ -544,7 +546,7 @@ export default function ResearchPage() {
                         Stat
                       </th>
                       {(['L3', 'L5', 'L10', 'L15', 'L20'] as const).map((w) => (
-                        <th key={w} className="px-3 py-2.5 text-center text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>
+                        <th key={w} className={`px-3 py-2.5 text-center text-xs font-semibold${(w === 'L3' || w === 'L20') ? ' hidden sm:table-cell' : ''}`} style={{ color: 'var(--text-muted)' }}>
                           {w}
                         </th>
                       ))}
@@ -579,7 +581,7 @@ export default function ResearchPage() {
                             </span>
                           </td>
                           {(['L3', 'L5', 'L10', 'L15', 'L20'] as const).map((w) => (
-                            <RollCell key={w} value={getStatValue(rolling[w], stat)} seasonAvg={base} />
+                            <RollCell key={w} value={getStatValue(rolling[w], stat)} seasonAvg={base} className={(w === 'L3' || w === 'L20') ? 'hidden sm:table-cell' : ''} />
                           ))}
                           <td className="px-3 py-2 text-center">
                             <span className="font-mono text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
@@ -594,7 +596,7 @@ export default function ResearchPage() {
                         <span className="text-xs font-mono font-semibold" style={{ color: 'var(--text-muted)' }}>MIN</span>
                       </td>
                       {(['L3', 'L5', 'L10', 'L15', 'L20'] as const).map((w) => (
-                        <RollCell key={w} value={rolling[w].min} seasonAvg={data.season_averages.min} />
+                        <RollCell key={w} value={rolling[w].min} seasonAvg={data.season_averages.min} className={(w === 'L3' || w === 'L20') ? 'hidden sm:table-cell' : ''} />
                       ))}
                       <td className="px-3 py-2 text-center">
                         <span className="font-mono text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
@@ -669,10 +671,10 @@ export default function ResearchPage() {
             <table className="w-full text-sm whitespace-nowrap">
               <thead>
                 <tr style={{ background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-                  {['Date', 'Opp', 'H/A', 'MIN', 'PTS', 'REB', 'AST', 'PRA', 'FG%', '3P%', 'FT%', '+/-'].map((h) => (
+                  {(['Date', 'Opp', 'H/A', 'MIN', 'PTS', 'REB', 'AST', 'PRA', 'FG%', '3P%', 'FT%', '+/-'] as const).map((h) => (
                     <th
                       key={h}
-                      className="px-3 py-2.5 text-xs font-semibold text-center"
+                      className={`px-3 py-2.5 text-xs font-semibold text-center${ ['MIN', 'FG%', '3P%', 'FT%', '+/-'].includes(h) ? ' hidden sm:table-cell' : ''}`}
                       style={{ color: 'var(--text-muted)' }}
                     >
                       {h}
@@ -704,7 +706,7 @@ export default function ResearchPage() {
                           <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold" style={{ background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)' }}>AWAY</span>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-center font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
+                      <td className="px-3 py-2 text-center font-mono text-xs hidden sm:table-cell" style={{ color: 'var(--text-muted)' }}>
                         {g.min.toFixed(0)}
                       </td>
                       {/* PTS */}
@@ -715,16 +717,16 @@ export default function ResearchPage() {
                       <StatCell val={g.ast} isHighlighted={activeStat === 'AST'} isOver={activeStat === 'AST' ? isOver : null} />
                       {/* PRA */}
                       <StatCell val={g.pra} isHighlighted={activeStat === 'PRA'} isOver={activeStat === 'PRA' ? isOver : null} />
-                      <td className="px-3 py-2 text-center font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
+                      <td className="px-3 py-2 text-center font-mono text-xs hidden sm:table-cell" style={{ color: 'var(--text-muted)' }}>
                         {g.fg_pct != null ? `${(g.fg_pct * 100).toFixed(0)}%` : '—'}
                       </td>
-                      <td className="px-3 py-2 text-center font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
+                      <td className="px-3 py-2 text-center font-mono text-xs hidden sm:table-cell" style={{ color: 'var(--text-muted)' }}>
                         {g.fg3_pct != null ? `${(g.fg3_pct * 100).toFixed(0)}%` : '—'}
                       </td>
-                      <td className="px-3 py-2 text-center font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
+                      <td className="px-3 py-2 text-center font-mono text-xs hidden sm:table-cell" style={{ color: 'var(--text-muted)' }}>
                         {g.ft_pct != null ? `${(g.ft_pct * 100).toFixed(0)}%` : '—'}
                       </td>
-                      <td className="px-3 py-2 text-center font-mono text-xs" style={{
+                      <td className="px-3 py-2 text-center font-mono text-xs hidden sm:table-cell" style={{
                         color: (g.plus_minus ?? 0) > 0 ? 'var(--accent-success)' : (g.plus_minus ?? 0) < 0 ? 'var(--accent-danger)' : 'var(--text-muted)',
                       }}>
                         {g.plus_minus != null ? (g.plus_minus > 0 ? `+${g.plus_minus}` : g.plus_minus) : '—'}
@@ -905,7 +907,7 @@ export default function ResearchPage() {
                   <h2 className="text-sm font-semibold mb-4" style={{ color: 'var(--text-secondary)' }}>
                     Opponent: {data.next_game.opponent_name || data.next_game.opponent}
                   </h2>
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
                     <div className="text-center">
                       <p className="text-xs font-medium mb-1" style={{ color: 'var(--text-muted)' }}>Def Rating</p>
                       <p className="text-2xl font-bold font-mono" style={{ color: 'var(--text-primary)' }}>
@@ -948,7 +950,7 @@ export default function ResearchPage() {
                   <h2 className="text-sm font-semibold mb-4" style={{ color: 'var(--text-secondary)' }}>
                     vs {data.next_game.opponent} — Career History ({data.vs_stats.games} games)
                   </h2>
-                  <div className="grid grid-cols-4 gap-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
                     {[
                       { label: 'PTS', val: data.vs_stats.avg_pts },
                       { label: 'REB', val: data.vs_stats.avg_reb },

@@ -82,8 +82,8 @@ def test_me_with_valid_token():
     reg = client.post("/api/auth/register", json={
         "email": "me@test.com", "username": "meuser", "password": "pw"
     })
-    token = reg.json()["token"]
-    r = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    jwt_val = reg.json()["token"]
+    r = client.get("/api/auth/me", headers={"Authorization": f"Bearer {jwt_val}"})
     assert r.status_code == 200
     assert r.json()["email"] == "me@test.com"
 
@@ -106,21 +106,21 @@ def test_create_and_retrieve_pick_scoped_to_user():
     r1 = client.post("/api/auth/register", json={
         "email": "u1@test.com", "username": "u1", "password": "pw"
     })
-    token1 = r1.json()["token"]
+    jwt_val1 = r1.json()["token"]
     r2 = client.post("/api/auth/register", json={
         "email": "u2@test.com", "username": "u2", "password": "pw"
     })
-    token2 = r2.json()["token"]
+    jwt_val2 = r2.json()["token"]
 
     # User 1 saves a pick
     client.post("/api/picks", json={
         "player": "LeBron James", "stat": "PTS", "line": 25.5,
         "prediction": 27.0, "direction": "OVER", "edge": 5.8,
-    }, headers={"Authorization": f"Bearer {token1}"})
+    }, headers={"Authorization": f"Bearer {jwt_val1}"})
 
     # User 1 sees 1 pick, user 2 sees 0
-    picks1 = client.get("/api/picks", headers={"Authorization": f"Bearer {token1}"}).json()
-    picks2 = client.get("/api/picks", headers={"Authorization": f"Bearer {token2}"}).json()
+    picks1 = client.get("/api/picks", headers={"Authorization": f"Bearer {jwt_val1}"}).json()
+    picks2 = client.get("/api/picks", headers={"Authorization": f"Bearer {jwt_val2}"}).json()
     assert len(picks1) == 1
     assert len(picks2) == 0
 
@@ -151,7 +151,7 @@ def _get_token(email="av2@test.com", username="avuser2", password="pw"):
 
 
 def test_avatar_upload_returns_avatar_url():
-    token = _get_token()
+    jwt_val = _get_token()
     img_bytes = (
         b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
         b"\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t"
@@ -161,7 +161,7 @@ def test_avatar_upload_returns_avatar_url():
     )
     r = client.post(
         "/api/auth/avatar",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {jwt_val}"},
         files={"file": ("photo.jpg", io.BytesIO(img_bytes), "image/jpeg")},
     )
     assert r.status_code == 200
@@ -171,21 +171,21 @@ def test_avatar_upload_returns_avatar_url():
 
 
 def test_avatar_upload_rejects_non_image():
-    token = _get_token("av3@test.com", "avuser3")
+    jwt_val = _get_token("av3@test.com", "avuser3")
     r = client.post(
         "/api/auth/avatar",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {jwt_val}"},
         files={"file": ("hack.exe", io.BytesIO(b"MZ\x90\x00"), "application/octet-stream")},
     )
     assert r.status_code == 400
 
 
 def test_avatar_upload_rejects_oversized_file():
-    token = _get_token("av4@test.com", "avuser4")
+    jwt_val = _get_token("av4@test.com", "avuser4")
     big = io.BytesIO(b"\xff\xd8\xff" + b"\x00" * (2 * 1024 * 1024 + 1))
     r = client.post(
         "/api/auth/avatar",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {jwt_val}"},
         files={"file": ("big.jpg", big, "image/jpeg")},
     )
     assert r.status_code == 413
@@ -202,14 +202,14 @@ def test_avatar_upload_requires_auth():
 def test_me_returns_avatar_url_after_upload():
     """End-to-end: avatar_url is persisted and returned by /me after upload."""
     import io
-    token = _get_token("av5@test.com", "avuser5")
+    jwt_val = _get_token("av5@test.com", "avuser5")
     img_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xff\xd9"
     client.post(
         "/api/auth/avatar",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {jwt_val}"},
         files={"file": ("photo.jpg", io.BytesIO(img_bytes), "image/jpeg")},
     )
-    me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"}).json()
+    me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {jwt_val}"}).json()
     assert "avatar_url" in me
     assert me["avatar_url"] is not None
     assert me["avatar_url"].startswith("/uploads/avatars/")
@@ -223,11 +223,11 @@ def _register_and_token(email="cp@test.com", pw="oldpass"):
 
 
 def test_change_password_success():
-    token = _register_and_token()
+    jwt_val = _register_and_token()
     r = client.post(
         "/api/auth/change-password",
         json={"current_password": "oldpass", "new_password": "newpass123"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {jwt_val}"},
     )
     assert r.status_code == 204
     # Old token still valid (we don't invalidate), but new password works for login
@@ -236,11 +236,11 @@ def test_change_password_success():
 
 
 def test_change_password_wrong_current_returns_401():
-    token = _register_and_token("cp2@test.com", "correct")
+    jwt_val = _register_and_token("cp2@test.com", "correct")
     r = client.post(
         "/api/auth/change-password",
         json={"current_password": "wrong", "new_password": "anything"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {jwt_val}"},
     )
     assert r.status_code == 401
 

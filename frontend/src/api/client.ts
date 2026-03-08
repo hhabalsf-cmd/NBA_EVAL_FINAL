@@ -4,7 +4,7 @@
 
 import { supabase } from '../lib/supabase'
 
-const API_BASE = '/api'
+const API_BASE = (import.meta.env.VITE_API_URL ?? '') + '/api'
 
 /** Throw a user-friendly error, with special handling for 429 rate limits. */
 async function throwResponseError(response: Response, fallback: string): Promise<never> {

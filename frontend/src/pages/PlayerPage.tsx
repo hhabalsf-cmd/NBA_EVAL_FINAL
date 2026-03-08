@@ -143,7 +143,7 @@ export default function PlayerPage() {
         </div>
 
         {/* Skeleton prediction cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           {[...Array(4)].map((_, i) => (
             <div key={i} className="card p-5 space-y-4">
               <div className="skeleton h-3 w-16 rounded" />
@@ -317,7 +317,7 @@ export default function PlayerPage() {
       <section>
         <h2 className="text-lg font-semibold text-text-primary mb-5 tracking-tight">ML Predictions</h2>
         <motion.div
-          className="grid grid-cols-2 md:grid-cols-4 gap-4"
+          className="grid grid-cols-2 sm:grid-cols-4 gap-4"
           variants={cardContainer}
           initial="hidden"
           animate="show"
@@ -369,7 +369,7 @@ export default function PlayerPage() {
           )}
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5">
           {STATS.map(stat => {
             const hasLiveOdd = hasOdds && typeof odds?.[stat as keyof typeof odds] === 'number'
             return (

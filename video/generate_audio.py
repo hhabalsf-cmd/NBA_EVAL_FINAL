@@ -3,7 +3,7 @@ Generate voiceover MP3s for the TikTok Top 5 Picks video.
 Outputs 7 files to video/public/audio/.
 
 Usage:
-    ELEVENLABS_API_KEY=your_key python video/generate_audio.py
+    export ELEVENLABS_API_KEY=your_env_key && python video/generate_audio.py
 """
 
 import os
@@ -25,12 +25,12 @@ SCRIPTS = {
 
 
 def main():
-    api_key = os.environ.get("ELEVENLABS_API_KEY")
-    if not api_key:
+    env_key = os.environ.get("ELEVENLABS_API_KEY")
+    if not env_key:
         raise EnvironmentError("ELEVENLABS_API_KEY environment variable not set")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    client = ElevenLabs(api_key=api_key)
+    client = ElevenLabs(api_key=env_key)
 
     for name, text in SCRIPTS.items():
         out_path = OUTPUT_DIR / f"{name}.mp3"

@@ -257,7 +257,7 @@ export default function HistoryPage() {
       {stats && Object.keys(stats.by_stat).length > 0 && (
         <section className="card p-4 sm:p-6">
           <h2 className="text-base font-semibold text-text-primary mb-5 tracking-tight">Performance by Stat</h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-5">
             {['PTS', 'REB', 'AST', 'PRA'].map(stat => {
               const data = stats.by_stat[stat]
               if (!data) return null
