@@ -404,7 +404,11 @@ export async function getParlays(): Promise<SavedParlay[]> {
   if (error) throw new Error(error.message)
   return (data ?? []).map(p => ({
     ...p,
-    legs: p.parlay_legs ?? [],
+    legs: (p.parlay_legs ?? []).map((leg: Record<string, unknown>) => ({
+      ...leg,
+      won: leg.won === 1 ? true : leg.won === 0 ? false : (leg.won ?? null),
+      voided: leg.voided === 1 ? true : false,
+    })),
   })) as SavedParlay[]
 }
 
@@ -427,10 +431,10 @@ export async function getPerformanceStats(): Promise<PerformanceStats> {
   if (error) throw new Error(error.message)
   if (!picks) return emptyPerformanceStats()
 
-  const graded = picks.filter(p => p.won !== null && !p.voided)
+  const graded = picks.filter(p => p.won !== null && p.voided !== 1)
   const wins = graded.filter(p => p.won === 1 || p.won === true)
   const losses = graded.filter(p => p.won === 0 || p.won === false)
-  const pushes = picks.filter(p => p.voided)
+  const pushes = picks.filter(p => p.voided === 1)
 
   const win_rate = graded.length > 0 ? wins.length / graded.length : 0
   const roi = graded.length > 0 ? (wins.length - losses.length) / graded.length : 0
@@ -499,7 +503,7 @@ export async function getCumulativeProfit(): Promise<CumulativeProfitPoint[]> {
 
   let cumulative = 0
   return (data ?? []).map(p => {
-    const profit = (p.won === 1 || p.won === true) ? 1 : (!p.voided ? -1 : 0)
+    const profit = p.won === 1 ? 1 : (p.voided !== 1 ? -1 : 0)
     cumulative += profit
     return {
       date: p.game_date as string,

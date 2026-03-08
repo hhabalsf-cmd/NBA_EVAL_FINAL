@@ -28,11 +28,15 @@ export default function AccuracyTracker({ stats }: AccuracyTrackerProps) {
               {stats.accuracy.toFixed(1)}%
             </div>
           </div>
-          <div className="h-8 w-px bg-border-subtle hidden sm:block" />
-          <div>
-            <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Recent</div>
-            <div className="font-mono text-base sm:text-lg font-semibold text-text-primary">{stats.recent_streak}</div>
-          </div>
+          {stats.recent_streak && (
+            <>
+              <div className="h-8 w-px bg-border-subtle hidden sm:block" />
+              <div>
+                <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Recent</div>
+                <div className="font-mono text-base sm:text-lg font-semibold text-text-primary">{stats.recent_streak}</div>
+              </div>
+            </>
+          )}
           <div className="h-8 w-px bg-border-subtle hidden sm:block" />
           <div>
             <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Total</div>
