@@ -24,28 +24,41 @@ export default function PlayerSearch({
   const [selectedIndex, setSelectedIndex] = useState(-1)
   const inputRef = useRef<HTMLInputElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
+  const abortRef = useRef<AbortController | null>(null)
   const navigate = useNavigate()
 
   useEffect(() => {
     if (query.length < 2) {
+      abortRef.current?.abort()
       setResults([])
       setIsOpen(false)
       return
     }
     const timer = setTimeout(async () => {
+      abortRef.current?.abort()
+      const controller = new AbortController()
+      abortRef.current = controller
+
       setIsLoading(true)
       try {
-        const players = await searchPlayers(query)
+        const players = await searchPlayers(query, controller.signal)
         setResults(players)
         setIsOpen(players.length > 0)
         setSelectedIndex(-1)
-      } catch {
-        setResults([])
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') {
+          setResults([])
+        }
       } finally {
-        setIsLoading(false)
+        if (!controller.signal.aborted) {
+          setIsLoading(false)
+        }
       }
     }, 300)
-    return () => clearTimeout(timer)
+    return () => {
+      clearTimeout(timer)
+      abortRef.current?.abort()
+    }
   }, [query])
 
   useEffect(() => {
