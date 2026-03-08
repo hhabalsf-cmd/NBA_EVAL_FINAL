@@ -88,8 +88,17 @@ def get_prediction_history(request: Request, limit: int = Query(default=40, ge=1
 
 @router.post("/auto-grade")
 @limiter.limit("10/minute")
-def auto_grade_predictions(request: Request, _: None = Depends(verify_service_key)):
-    """Auto-grade pending game predictions using final scores."""
+def auto_grade_predictions(request: Request):
+    """Auto-grade pending game predictions using final scores.
+
+    Accepts either a logged-in user (Bearer JWT) or a service key (X-Service-Key header).
+    """
+    service_key = request.headers.get("X-Service-Key")
+    if service_key:
+        verify_service_key(request)
+    else:
+        get_current_user(request)
+
     service = get_game_service()
     return service.auto_grade()
 

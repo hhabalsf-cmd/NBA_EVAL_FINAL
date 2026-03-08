@@ -140,10 +140,11 @@ async def upload_avatar(
         supa.storage.from_("avatars").upload(
             storage_path,
             contents,
-            {"content-type": file.content_type, "upsert": True},
+            {"content-type": file.content_type, "upsert": "true"},
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail="Failed to upload avatar") from exc
+        _logger.error("Avatar upload failed for user %s: %s", current_user["id"], exc)
+        raise HTTPException(status_code=500, detail=f"Failed to upload avatar: {exc}") from exc
 
     avatar_url = f"{os.environ['SUPABASE_URL']}/storage/v1/object/public/avatars/{storage_path}"
 

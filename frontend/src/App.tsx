@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom'
-import { Home, Gamepad2, Dice5, FlaskConical, History } from 'lucide-react'
+import { Home, Gamepad2, Dice5, FlaskConical } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import HomePage from './pages/HomePage'
 import LandingPage from './pages/LandingPage'
@@ -22,7 +22,7 @@ import { getPicks } from './api/client'
 const pageVariants = {
   initial: { opacity: 0, y: 8 },
   animate: { opacity: 1, y: 0 },
-  exit:    { opacity: 0, y: -6 },
+  exit: { opacity: 0, y: -6 },
 }
 
 function AppRoutes() {
@@ -31,7 +31,7 @@ function AppRoutes() {
   return (
     <AnimatePresence mode="wait" initial={false}>
       <motion.div
-        key={location.key}
+        key={location.pathname}
         variants={pageVariants}
         initial="initial"
         animate="animate"
@@ -92,7 +92,6 @@ function App() {
   const navItems = [
     { to: '/app', icon: Home, label: 'Home' },
     { to: '/games', icon: Gamepad2, label: 'Games' },
-    { to: '/history', icon: History, label: 'History' },
     { to: '/research', icon: FlaskConical, label: 'Research' },
     { to: '/parlay', icon: Dice5, label: 'Parlays', badge: pendingPicks.length },
   ]
@@ -121,10 +120,9 @@ function App() {
                     key={to}
                     to={to}
                     className={({ isActive }) =>
-                      `flex items-center gap-2 px-3.5 py-2 text-sm font-medium rounded-lg transition-all duration-150 ${
-                        isActive
-                          ? 'bg-accent-muted text-accent'
-                          : 'text-text-muted hover:text-text-secondary hover:bg-bg-tertiary'
+                      `flex items-center gap-2 px-3.5 py-2 text-sm font-medium rounded-lg transition-all duration-150 ${isActive
+                        ? 'bg-accent-muted text-accent'
+                        : 'text-text-muted hover:text-text-secondary hover:bg-bg-tertiary'
                       }`
                     }
                   >
@@ -177,8 +175,7 @@ function App() {
                 key={to}
                 to={to}
                 className={({ isActive }) =>
-                  `flex flex-col items-center gap-1 px-3 py-1.5 rounded-lg transition-all duration-150 min-w-[60px] ripple ${
-                    isActive ? 'text-accent' : 'text-text-muted'
+                  `flex flex-col items-center gap-1 px-3 py-1.5 rounded-lg transition-all duration-150 min-w-[60px] ripple ${isActive ? 'text-accent' : 'text-text-muted'
                   }`
                 }
               >

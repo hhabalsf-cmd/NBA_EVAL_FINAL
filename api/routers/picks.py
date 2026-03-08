@@ -1,7 +1,7 @@
 """Pick tracking CRUD endpoints."""
 import sys
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, Request
 from typing import Optional, List
 
 # Add parent directory to path to import db module
@@ -145,11 +145,20 @@ async def delete_pick(pick_id: int, current_user: dict = Depends(get_current_use
 
 
 @router.post("/auto-grade")
-async def auto_grade_picks(_: None = Depends(verify_service_key)):
+async def auto_grade_picks(request: Request):
     """
     Automatically grade pending picks by fetching actual results,
     then derive and store results for any pending parlays whose picks are all resolved.
+
+    Accepts either a logged-in user (Bearer JWT) or a service key (X-Service-Key header).
     """
+    # Try service key first, then fall back to user auth
+    service_key = request.headers.get("X-Service-Key")
+    if service_key:
+        verify_service_key(request)
+    else:
+        get_current_user(request)
+
     result = db.auto_grade_picks()
     parlay_result = db.grade_pending_parlays(user_id=None)
     return {

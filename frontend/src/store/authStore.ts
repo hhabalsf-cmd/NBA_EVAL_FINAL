@@ -33,7 +33,7 @@ async function fetchProfile(userId: string): Promise<Partial<User>> {
 export const useAuthStore = create<AuthStore>((set, get) => ({
   user: null,
   isAuthenticated: false,
-  isLoading: false,
+  isLoading: true,
   isUploadingAvatar: false,
   error: null,
 
