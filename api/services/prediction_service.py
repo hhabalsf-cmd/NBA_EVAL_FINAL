@@ -14,15 +14,16 @@ import pandas as pd
 # Add parent directory to path to import existing modules
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from nba_evaluator import (
-    NBADataScraper,
-    FeatureEngineer,
-    MLPredictor,
-    LineEvaluator,
-    OddsAPI,
-    MODEL_DIR,
-    should_retrain,
-)
+# Lazy import cache — nba_evaluator (and TensorFlow) only loads on first prediction
+_nba_ev = None
+
+def _load_nba_evaluator():
+    """Lazy-load nba_evaluator so TensorFlow only loads on first prediction request."""
+    global _nba_ev
+    if _nba_ev is None:
+        import nba_evaluator as _mod
+        _nba_ev = _mod
+    return _nba_ev
 
 
 PRED_CACHE_DIR = Path("./cache/predictions")
@@ -59,13 +60,10 @@ def _save_prediction_cache(player_name: str, data: Dict) -> None:
 
 @contextmanager
 def _player_model_lock(player_name: str):
-    """Exclusive per-player file lock to prevent concurrent model overwrites.
-
-    Uses fcntl.LOCK_EX so it works across all uvicorn worker processes.
-    Blocks until the lock is acquired.
-    """
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    lock_path = MODEL_DIR / f"{player_name.replace(' ', '_')}.lock"
+    """Exclusive per-player file lock to prevent concurrent model overwrites."""
+    ev = _load_nba_evaluator()
+    ev.MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = ev.MODEL_DIR / f"{player_name.replace(' ', '_')}.lock"
     with open(lock_path, "w") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
         try:
@@ -78,8 +76,9 @@ class PredictionService:
     """Wraps MLPredictor and FeatureEngineer for API use."""
 
     def __init__(self):
-        self.scraper = NBADataScraper()
-        self.evaluator = LineEvaluator()
+        ev = _load_nba_evaluator()
+        self.scraper = ev.NBADataScraper()
+        self.evaluator = ev.LineEvaluator()
         self._team_stats_cache = None
         self._injuries_cache = None
         self._odds_cache: Optional[Dict] = None
@@ -107,12 +106,13 @@ class PredictionService:
 
     def get_player_odds(self, player_name: str) -> Dict:
         """Return today's consensus prop lines for *player_name* (30-min cache)."""
+        ev = _load_nba_evaluator()
         now = time.time()
 
         # Refresh cache if stale
         if self._odds_cache is None or (now - self._odds_cache_time) > self._ODDS_CACHE_TTL:
             try:
-                props = OddsAPI().get_all_todays_props()
+                props = ev.OddsAPI().get_all_todays_props()
             except Exception:
                 props = []
             # Build lookup: normalized_name -> {stat -> line}
@@ -206,6 +206,7 @@ class PredictionService:
         retrain: bool = False
     ) -> Generator[Dict[str, Any], None, None]:
         """Generate predictions with progress updates for SSE."""
+        ev = _load_nba_evaluator()
 
         # Stage 1: Fetching player data
         yield {
@@ -298,7 +299,7 @@ class PredictionService:
         }
 
         # Create features
-        df_features = FeatureEngineer.create_features(
+        df_features = ev.FeatureEngineer.create_features(
             game_log,
             player_info=player_info,
             game_info=game_info,
@@ -315,20 +316,16 @@ class PredictionService:
             "message": "Loading or training model..."
         }
 
-        predictor = MLPredictor(model_type=model_type, use_ensemble=use_ensemble)
+        predictor = ev.MLPredictor(model_type=model_type, use_ensemble=use_ensemble)
 
-        # Enforce once-per-night retrain policy: only allow a retrain after
-        # 11:30pm ET when all NBA games are complete. If the model was already
-        # retrained in that window, skip and use the fresh model.
+        # Enforce once-per-night retrain policy
         retrain_skipped = False
-        if retrain and not should_retrain(player_info['player_name']):
+        if retrain and not ev.should_retrain(player_info['player_name']):
             retrain = False
             retrain_skipped = True
 
         # Acquire an exclusive per-player file lock so concurrent worker
-        # processes can't overwrite each other's trained model.  The lock is
-        # held only for the synchronous load/train/update/save operations and
-        # released before the next yield.
+        # processes can't overwrite each other's trained model.
         train_failed = False
         with _player_model_lock(player_info['player_name']):
             loaded = not retrain and predictor.load(player_info['player_name'])
@@ -391,7 +388,7 @@ class PredictionService:
             days_rest = 2  # Fallback if date parsing fails
 
         # Create prediction features
-        pred_features = FeatureEngineer.get_prediction_features(
+        pred_features = ev.FeatureEngineer.get_prediction_features(
             df_features,
             is_home=is_home,
             opponent=opponent,
@@ -406,7 +403,7 @@ class PredictionService:
         )
 
         # Estimate minutes for this game context
-        estimated_minutes = FeatureEngineer.estimate_minutes(
+        estimated_minutes = ev.FeatureEngineer.estimate_minutes(
             df_features, is_home, days_rest, injuries_team
         )
 
@@ -539,7 +536,8 @@ class BestBetsService:
     """Service for finding best betting opportunities."""
 
     def __init__(self):
-        self.odds_api = OddsAPI()
+        ev = _load_nba_evaluator()
+        self.odds_api = ev.OddsAPI()
         self.prediction_service = PredictionService()
 
     async def get_todays_best_bets(self, min_edge: float = 5.0, limit: int = 10) -> Dict:
