@@ -39,6 +39,7 @@ import pandas as pd
 
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -46,11 +47,36 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 _team_schedule_cache = {}
 EXCEL_PATH = Path(__file__).parent / "nba_picks_tracker.xlsx"
 
+# ── Connection pool (shared across all threads/requests) ──────────────────────
+_pool: "psycopg2.pool.ThreadedConnectionPool | None" = None
+
+
+def _get_pool() -> "psycopg2.pool.ThreadedConnectionPool":
+    """Return the module-level connection pool, initializing it on first call."""
+    global _pool
+    if _pool is None:
+        _pool = psycopg2.pool.ThreadedConnectionPool(
+            minconn=1,
+            maxconn=10,
+            dsn=DATABASE_URL,
+        )
+    return _pool
+
 
 def get_connection():
-    """Get database connection with dict cursor factory."""
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    """Borrow a connection from the pool. Call put_connection() when done."""
+    pool = _get_pool()
+    conn = pool.getconn()
+    conn.cursor_factory = psycopg2.extras.RealDictCursor
     return conn
+
+
+def put_connection(conn) -> None:
+    """Return a connection to the pool."""
+    try:
+        _get_pool().putconn(conn)
+    except Exception:
+        pass
 
 
 def init_db():
@@ -93,7 +119,7 @@ def get_game_logs_from_supabase(player_id: str, season: str):
             (player_id, season),
         )
         rows = cur.fetchall()
-    conn.close()
+    put_connection(conn)
 
     if not rows:
         return None
@@ -147,7 +173,7 @@ def insert_game_logs_to_supabase(df: pd.DataFrame, player_id: str, season: str) 
     with conn.cursor() as cur:
         cur.executemany(insert_sql, rows)
     conn.commit()
-    conn.close()
+    put_connection(conn)
 
 
 # ── Team defensive stats cache (Supabase) ────────────────────
@@ -167,7 +193,7 @@ def get_team_stats_from_supabase(season: str):
             (season,),
         )
         rows = cur.fetchall()
-    conn.close()
+    put_connection(conn)
 
     if not rows:
         return None
@@ -226,7 +252,7 @@ def upsert_team_stats_to_supabase(team_data: dict, season: str) -> None:
     with conn.cursor() as cur:
         cur.executemany(sql, rows)
     conn.commit()
-    conn.close()
+    put_connection(conn)
 
 
 # ── User functions ────────────────────────────────────────────
@@ -250,7 +276,7 @@ def create_user(user_id: str, email: str, pass_hash: str, username: str) -> dict
     conn.commit()
     cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
     row = cursor.fetchone()
-    conn.close()
+    put_connection(conn)
     return _safe_user(row)
 
 
@@ -260,7 +286,7 @@ def get_user_by_email(email: str) -> Optional[dict]:
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE email = %s", (email,))
     row = cursor.fetchone()
-    conn.close()
+    put_connection(conn)
     return dict(row) if row else None
 
 
@@ -270,7 +296,7 @@ def get_user_by_id(user_id: str) -> Optional[dict]:
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
     row = cursor.fetchone()
-    conn.close()
+    put_connection(conn)
     return dict(row) if row else None
 
 
@@ -285,7 +311,7 @@ def update_user_avatar(user_id: str, avatar_url: str) -> Optional[dict]:
     conn.commit()
     cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
     row = cursor.fetchone()
-    conn.close()
+    put_connection(conn)
     return _safe_user(row) if row else None
 
 
@@ -297,7 +323,7 @@ def update_user_password(user_id: str, pass_hash: str) -> None:
         (pass_hash, user_id),
     )
     conn.commit()
-    conn.close()
+    put_connection(conn)
 
 
 def clear_user_avatar(user_id: str) -> Optional[dict]:
@@ -311,7 +337,7 @@ def clear_user_avatar(user_id: str) -> Optional[dict]:
     conn.commit()
     cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
     row = cursor.fetchone()
-    conn.close()
+    put_connection(conn)
     return _safe_user(row) if row else None
 
 
@@ -368,7 +394,7 @@ def save_game_prediction(prediction_data: dict) -> int:
     """)
     conn.commit()
 
-    conn.close()
+    put_connection(conn)
     return pred_id
 
 
@@ -386,7 +412,7 @@ def get_todays_stored_predictions() -> list:
     """, (today,))
 
     rows = cursor.fetchall()
-    conn.close()
+    put_connection(conn)
 
     seen = set()
     results = []
@@ -471,7 +497,7 @@ def get_game_predictions(days: int = 7, limit: int = None) -> list:
         """, (cutoff,))
 
     rows = cursor.fetchall()
-    conn.close()
+    put_connection(conn)
 
     seen = set()
     results = []
@@ -505,7 +531,7 @@ def get_pending_game_predictions() -> list:
     """)
 
     rows = cursor.fetchall()
-    conn.close()
+    put_connection(conn)
 
     results = []
     for row in rows:
@@ -530,7 +556,7 @@ def grade_game_prediction(prediction_id: int, actual_winner: str):
     cursor.execute("SELECT predicted_winner FROM game_predictions WHERE id = %s", (prediction_id,))
     row = cursor.fetchone()
     if not row:
-        conn.close()
+        put_connection(conn)
         return
 
     correct = 1 if row['predicted_winner'] == actual_winner else 0
@@ -542,7 +568,7 @@ def grade_game_prediction(prediction_id: int, actual_winner: str):
     """, (actual_winner, correct, datetime.now().isoformat(), prediction_id))
 
     conn.commit()
-    conn.close()
+    put_connection(conn)
 
 
 def auto_grade_game_predictions() -> dict:
@@ -653,7 +679,7 @@ def get_game_accuracy_stats() -> dict:
     cursor.execute("SELECT COUNT(*) FROM game_predictions")
     total = cursor.fetchone()['count']
 
-    conn.close()
+    put_connection(conn)
 
     if not graded:
         return {
@@ -759,7 +785,7 @@ def save_pick(pick_data: dict) -> int:
         """, (user_id, user_id))
         conn.commit()
 
-    conn.close()
+    put_connection(conn)
 
     return pick_id
 
@@ -810,7 +836,7 @@ def get_picks_history(days: int = 30, user_id: str = None, limit: int = None) ->
             """, (cutoff,))
 
     rows = cursor.fetchall()
-    conn.close()
+    put_connection(conn)
 
     return [dict(row) for row in rows]
 
@@ -823,7 +849,7 @@ def get_all_picks() -> list:
     cursor.execute("SELECT * FROM picks ORDER BY timestamp DESC")
 
     rows = cursor.fetchall()
-    conn.close()
+    put_connection(conn)
 
     return [dict(row) for row in rows]
 
@@ -834,7 +860,7 @@ def get_pick_by_id(pick_id: int) -> Optional[dict]:
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM picks WHERE id = %s", (pick_id,))
     row = cursor.fetchone()
-    conn.close()
+    put_connection(conn)
     return dict(row) if row else None
 
 
@@ -868,7 +894,7 @@ def update_pick_result(pick_id: int, actual_result: float, line: float, directio
     """, (actual_result, won, pick_id))
 
     conn.commit()
-    conn.close()
+    put_connection(conn)
 
 
 def delete_pick(pick_id: int):
@@ -879,7 +905,7 @@ def delete_pick(pick_id: int):
     cursor.execute("DELETE FROM picks WHERE id = %s", (pick_id,))
 
     conn.commit()
-    conn.close()
+    put_connection(conn)
 
 
 def void_pick(pick_id: int, reason: str = "DNP"):
@@ -900,7 +926,7 @@ def void_pick(pick_id: int, reason: str = "DNP"):
     """, (reason, pick_id))
 
     conn.commit()
-    conn.close()
+    put_connection(conn)
 
 
 def get_voided_picks() -> List[Dict]:
@@ -915,7 +941,7 @@ def get_voided_picks() -> List[Dict]:
     """)
 
     rows = cursor.fetchall()
-    conn.close()
+    put_connection(conn)
 
     return [dict(row) for row in rows]
 
@@ -932,7 +958,7 @@ def unvoid_pick(pick_id: int):
     """, (pick_id,))
 
     conn.commit()
-    conn.close()
+    put_connection(conn)
 
 
 def reset_pick_to_pending(pick_id: int):
@@ -947,7 +973,7 @@ def reset_pick_to_pending(pick_id: int):
     """, (pick_id,))
 
     conn.commit()
-    conn.close()
+    put_connection(conn)
 
 
 def reset_all_graded_for_date(game_date: str) -> int:
@@ -977,7 +1003,7 @@ def reset_all_graded_for_date(game_date: str) -> int:
     """, (f"{game_date}%",))
 
     conn.commit()
-    conn.close()
+    put_connection(conn)
 
     return count
 
@@ -990,30 +1016,50 @@ def get_performance_stats(user_id: str = None) -> dict:
         Dict with: total_picks, graded_picks, wins, losses, pushes,
                    win_rate, roi, avg_edge_winners, by_stat, by_edge_range
     """
+    uid_filter = "AND user_id = %s" if user_id else ""
+    params = (user_id,) if user_id else ()
+
     conn = get_connection()
     cursor = conn.cursor()
 
-    # Get all graded picks (where won is not null, excludes voided)
-    if user_id:
-        cursor.execute("""
-            SELECT * FROM picks WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0) AND user_id = %s
-        """, (user_id,))
-    else:
-        cursor.execute("""
-            SELECT * FROM picks WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0)
-        """)
-    graded = [dict(row) for row in cursor.fetchall()]
-
-    # Get total non-voided picks
-    if user_id:
-        cursor.execute("SELECT COUNT(*) FROM picks WHERE (voided IS NULL OR voided = 0) AND user_id = %s", (user_id,))
-    else:
-        cursor.execute("SELECT COUNT(*) FROM picks WHERE voided IS NULL OR voided = 0")
+    # Total non-voided picks
+    cursor.execute(
+        f"SELECT COUNT(*) FROM picks WHERE (voided IS NULL OR voided = 0) {uid_filter}",
+        params,
+    )
     total_picks = cursor.fetchone()['count']
 
-    conn.close()
+    # All graded stats in one SQL aggregation (won is INTEGER: 1=win, 0=loss, NULL=push)
+    cursor.execute(f"""
+        SELECT
+            COUNT(*)                                                          AS graded_picks,
+            COUNT(*) FILTER (WHERE won = 1)                                   AS wins,
+            COUNT(*) FILTER (WHERE won = 0)                                   AS losses,
+            COUNT(*) FILTER (WHERE won IS NULL AND graded_at IS NOT NULL)     AS pushes,
+            AVG(ABS(edge)) FILTER (WHERE won = 1)                             AS avg_edge_winners,
+            COUNT(*) FILTER (WHERE stat = 'PTS' AND won IN (0, 1))           AS pts_total,
+            COUNT(*) FILTER (WHERE stat = 'PTS' AND won = 1)                 AS pts_wins,
+            COUNT(*) FILTER (WHERE stat = 'REB' AND won IN (0, 1))           AS reb_total,
+            COUNT(*) FILTER (WHERE stat = 'REB' AND won = 1)                 AS reb_wins,
+            COUNT(*) FILTER (WHERE stat = 'AST' AND won IN (0, 1))           AS ast_total,
+            COUNT(*) FILTER (WHERE stat = 'AST' AND won = 1)                 AS ast_wins,
+            COUNT(*) FILTER (WHERE stat = 'PRA' AND won IN (0, 1))           AS pra_total,
+            COUNT(*) FILTER (WHERE stat = 'PRA' AND won = 1)                 AS pra_wins,
+            -- Edge ranges (5-8%, 8-12%, 12%+)
+            COUNT(*) FILTER (WHERE ABS(edge) >= 5  AND ABS(edge) < 8  AND won IN (0, 1)) AS e5_total,
+            COUNT(*) FILTER (WHERE ABS(edge) >= 5  AND ABS(edge) < 8  AND won = 1)       AS e5_wins,
+            COUNT(*) FILTER (WHERE ABS(edge) >= 8  AND ABS(edge) < 12 AND won IN (0, 1)) AS e8_total,
+            COUNT(*) FILTER (WHERE ABS(edge) >= 8  AND ABS(edge) < 12 AND won = 1)       AS e8_wins,
+            COUNT(*) FILTER (WHERE ABS(edge) >= 12 AND won IN (0, 1))                    AS e12_total,
+            COUNT(*) FILTER (WHERE ABS(edge) >= 12 AND won = 1)                          AS e12_wins
+        FROM picks
+        WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0) {uid_filter}
+    """, params)
+    row = cursor.fetchone()
+    put_connection(conn)
 
-    if not graded:
+    graded_picks = row['graded_picks'] or 0
+    if graded_picks == 0:
         return {
             'total_picks': total_picks,
             'graded_picks': 0,
@@ -1027,63 +1073,56 @@ def get_performance_stats(user_id: str = None) -> dict:
             'by_edge_range': {}
         }
 
-    wins = sum(1 for p in graded if p['won'] == 1)
-    losses = sum(1 for p in graded if p['won'] == 0)
-    pushes = sum(1 for p in graded if p['won'] is None)
-
-    # Win rate (excluding pushes)
+    wins = row['wins'] or 0
+    losses = row['losses'] or 0
+    pushes = row['pushes'] or 0
     decided = wins + losses
     win_rate = (wins / decided * 100) if decided > 0 else 0.0
-
-    # ROI calculation (assuming -110 odds, risk 1.1 to win 1.0)
-    # Each win: +1.0 unit, each loss: -1.1 units
     profit = (wins * 1.0) - (losses * 1.1)
-    total_risked = decided * 1.1
-    roi = (profit / total_risked * 100) if total_risked > 0 else 0.0
+    roi = (profit / (decided * 1.1) * 100) if decided > 0 else 0.0
 
-    # Average edge on winners
-    winners = [p for p in graded if p['won'] == 1]
-    avg_edge_winners = sum(abs(p['edge']) for p in winners) / len(winners) if winners else 0.0
-
-    # Performance by stat
     by_stat = {}
-    for stat in ['PTS', 'REB', 'AST', 'PRA']:
-        stat_picks = [p for p in graded if p['stat'] == stat and p['won'] is not None]
-        if stat_picks:
-            stat_wins = sum(1 for p in stat_picks if p['won'] == 1)
-            stat_decided = sum(1 for p in stat_picks if p['won'] in [0, 1])
+    for stat, total_col, wins_col in [
+        ('PTS', 'pts_total', 'pts_wins'),
+        ('REB', 'reb_total', 'reb_wins'),
+        ('AST', 'ast_total', 'ast_wins'),
+        ('PRA', 'pra_total', 'pra_wins'),
+    ]:
+        t = row[total_col] or 0
+        w = row[wins_col] or 0
+        if t > 0:
             by_stat[stat] = {
-                'total': len(stat_picks),
-                'wins': stat_wins,
-                'win_rate': (stat_wins / stat_decided * 100) if stat_decided > 0 else 0.0
+                'total': t,
+                'wins': w,
+                'win_rate': (w / t * 100) if t > 0 else 0.0,
             }
 
-    # Performance by edge range
-    edge_ranges = [(5, 8), (8, 12), (12, 100)]
     by_edge_range = {}
-    for low, high in edge_ranges:
-        range_picks = [p for p in graded if low <= abs(p['edge']) < high and p['won'] is not None]
-        if range_picks:
-            range_wins = sum(1 for p in range_picks if p['won'] == 1)
-            range_decided = sum(1 for p in range_picks if p['won'] in [0, 1])
-            label = f"{low}-{high}%" if high < 100 else f"{low}%+"
+    for label, total_col, wins_col in [
+        ('5-8%',  'e5_total',  'e5_wins'),
+        ('8-12%', 'e8_total',  'e8_wins'),
+        ('12%+',  'e12_total', 'e12_wins'),
+    ]:
+        t = row[total_col] or 0
+        w = row[wins_col] or 0
+        if t > 0:
             by_edge_range[label] = {
-                'total': len(range_picks),
-                'wins': range_wins,
-                'win_rate': (range_wins / range_decided * 100) if range_decided > 0 else 0.0
+                'total': t,
+                'wins': w,
+                'win_rate': (w / t * 100) if t > 0 else 0.0,
             }
 
     return {
         'total_picks': total_picks,
-        'graded_picks': len(graded),
+        'graded_picks': graded_picks,
         'wins': wins,
         'losses': losses,
         'pushes': pushes,
         'win_rate': win_rate,
         'roi': roi,
-        'avg_edge_winners': avg_edge_winners,
+        'avg_edge_winners': float(row['avg_edge_winners'] or 0.0),
         'by_stat': by_stat,
-        'by_edge_range': by_edge_range
+        'by_edge_range': by_edge_range,
     }
 
 
@@ -1111,7 +1150,7 @@ def get_cumulative_profit(user_id: str = None) -> list:
         """)
 
     rows = cursor.fetchall()
-    conn.close()
+    put_connection(conn)
 
     results = []
     cumulative = 0.0
@@ -1153,7 +1192,7 @@ def get_pending_picks(user_id: str = None) -> List[Dict]:
         """)
 
     rows = cursor.fetchall()
-    conn.close()
+    put_connection(conn)
 
     return [dict(row) for row in rows]
 
@@ -1170,7 +1209,7 @@ def get_picks_for_date(game_date: str) -> List[Dict]:
     """, (game_date,))
 
     rows = cursor.fetchall()
-    conn.close()
+    put_connection(conn)
 
     return [dict(row) for row in rows]
 
@@ -1243,7 +1282,7 @@ def auto_void_stale_picks(days_threshold: int = 3) -> int:
     """, (cutoff_date,))
 
     stale_picks = cursor.fetchall()
-    conn.close()
+    put_connection(conn)
 
     voided = 0
     for pick in stale_picks:
@@ -1276,7 +1315,7 @@ def get_stale_pending_picks(days_threshold: int = 2) -> List[Dict]:
     """, (cutoff_date,))
 
     rows = cursor.fetchall()
-    conn.close()
+    put_connection(conn)
     return [dict(row) for row in rows]
 
 
@@ -1453,7 +1492,7 @@ def auto_grade_picks(scraper=None) -> Dict:
             cursor.execute("UPDATE picks SET graded_at = %s WHERE id = %s",
                           (datetime.now().isoformat(), pick['id']))
             conn.commit()
-            conn.close()
+            put_connection(conn)
 
             # Determine result
             line = pick['line']
@@ -1507,7 +1546,7 @@ def get_performance_by_model(user_id: str) -> Dict:
     """, (user_id,))
 
     rows = cursor.fetchall()
-    conn.close()
+    put_connection(conn)
 
     # Group by model type
     model_stats = {}
@@ -1564,7 +1603,7 @@ def get_performance_by_model_and_stat(user_id: str) -> Dict:
     """, (user_id,))
 
     rows = cursor.fetchall()
-    conn.close()
+    put_connection(conn)
 
     # Group by model and stat
     data = {}
@@ -1627,7 +1666,7 @@ def create_parlay(user_id: str, pick_ids: list) -> dict:
             conn.commit()
             return parlay
     finally:
-        conn.close()
+        put_connection(conn)
 
 
 def get_parlays(user_id: str) -> list:
@@ -1666,7 +1705,7 @@ def get_parlays(user_id: str) -> list:
 
             return parlays
     finally:
-        conn.close()
+        put_connection(conn)
 
 
 def void_parlay(parlay_id: int, user_id: str) -> None:
@@ -1684,7 +1723,7 @@ def void_parlay(parlay_id: int, user_id: str) -> None:
             )
             conn.commit()
     finally:
-        conn.close()
+        put_connection(conn)
 
 
 def grade_pending_parlays(user_id: str = None) -> dict:
@@ -1743,7 +1782,7 @@ def grade_pending_parlays(user_id: str = None) -> dict:
             conn.commit()
             return {'parlays_graded': graded_count}
     finally:
-        conn.close()
+        put_connection(conn)
 
 
 def export_to_excel() -> str:

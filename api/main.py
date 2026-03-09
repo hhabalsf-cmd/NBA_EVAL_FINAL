@@ -2,16 +2,51 @@
 NBA Prop Evaluator API
 FastAPI backend for player prop analysis.
 """
+import logging
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from slowapi.errors import RateLimitExceeded
 
 from .limiter import limiter
 from .routers import players_router, bets_router, picks_router, games_router, auth_router, parlays_router
+
+_logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Pre-warm expensive singletons at startup so first requests are fast."""
+    # 1. DB connection pool
+    try:
+        import db as _db
+        _db._get_pool()
+        _logger.info("DB connection pool initialized")
+    except Exception as exc:
+        _logger.warning("DB pool warm-up failed (non-fatal): %s", exc)
+
+    # 2. Supabase client singleton
+    try:
+        from .routers.auth import _get_supa_client
+        _get_supa_client()
+        _logger.info("Supabase client initialized")
+    except Exception as exc:
+        _logger.warning("Supabase warm-up failed (non-fatal): %s", exc)
+
+    # 3. GamePredictionService (loads game_predictor model)
+    try:
+        from .routers.games import get_game_service
+        get_game_service()
+        _logger.info("GamePredictionService initialized")
+    except Exception as exc:
+        _logger.warning("GamePredictionService warm-up failed (non-fatal): %s", exc)
+
+    yield
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -41,7 +76,8 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
-    openapi_url="/api/openapi.json"
+    openapi_url="/api/openapi.json",
+    lifespan=lifespan,
 )
 
 def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
@@ -57,6 +93,9 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 
 # Security headers
 app.add_middleware(SecurityHeadersMiddleware)
+
+# GZip compression (auto-skips SSE responses)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # CORS middleware for frontend
 _default_origins = "http://localhost:5173,http://localhost:5174,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:3000"
