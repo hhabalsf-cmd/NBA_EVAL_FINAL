@@ -31,9 +31,11 @@ async function throwResponseError(response: Response, fallback: string): Promise
  * and dispatches a global event on 401 so the auth store can log the user out.
  */
 async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  // Use cached token; fall back to getSession() on initial load before cache is ready
+  const token = _accessToken ?? (await supabase.auth.getSession()).data.session?.access_token ?? null
   const headers = new Headers(init.headers)
-  if (_accessToken) {
-    headers.set('Authorization', `Bearer ${_accessToken}`)
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`)
   }
 
   const res = await fetch(input, { ...init, headers })

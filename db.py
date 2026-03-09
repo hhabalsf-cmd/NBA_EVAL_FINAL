@@ -59,21 +59,21 @@ def _get_pool() -> "psycopg2.pool.ThreadedConnectionPool":
             minconn=1,
             maxconn=10,
             dsn=DATABASE_URL,
+            cursor_factory=psycopg2.extras.RealDictCursor,
         )
     return _pool
 
 
 def get_connection():
     """Borrow a connection from the pool. Call put_connection() when done."""
-    pool = _get_pool()
-    conn = pool.getconn()
-    conn.cursor_factory = psycopg2.extras.RealDictCursor
-    return conn
+    return _get_pool().getconn()
 
 
 def put_connection(conn) -> None:
-    """Return a connection to the pool."""
+    """Return a connection to the pool, rolling back any open transaction first."""
     try:
+        if not conn.closed:
+            conn.rollback()
         _get_pool().putconn(conn)
     except Exception:
         pass
@@ -1020,43 +1020,43 @@ def get_performance_stats(user_id: str = None) -> dict:
     params = (user_id,) if user_id else ()
 
     conn = get_connection()
-    cursor = conn.cursor()
+    try:
+        cursor = conn.cursor()
 
-    # Total non-voided picks
-    cursor.execute(
-        f"SELECT COUNT(*) FROM picks WHERE (voided IS NULL OR voided = 0) {uid_filter}",
-        params,
-    )
-    total_picks = cursor.fetchone()['count']
+        # Total non-voided picks
+        cursor.execute(
+            f"SELECT COUNT(*) FROM picks WHERE (voided IS NULL OR voided = 0) {uid_filter}",
+            params,
+        )
+        total_picks = cursor.fetchone()['count']
 
-    # All graded stats in one SQL aggregation (won is INTEGER: 1=win, 0=loss, NULL=push)
-    cursor.execute(f"""
-        SELECT
-            COUNT(*)                                                          AS graded_picks,
-            COUNT(*) FILTER (WHERE won = 1)                                   AS wins,
-            COUNT(*) FILTER (WHERE won = 0)                                   AS losses,
-            COUNT(*) FILTER (WHERE won IS NULL AND graded_at IS NOT NULL)     AS pushes,
-            AVG(ABS(edge)) FILTER (WHERE won = 1)                             AS avg_edge_winners,
-            COUNT(*) FILTER (WHERE stat = 'PTS' AND won IN (0, 1))           AS pts_total,
-            COUNT(*) FILTER (WHERE stat = 'PTS' AND won = 1)                 AS pts_wins,
-            COUNT(*) FILTER (WHERE stat = 'REB' AND won IN (0, 1))           AS reb_total,
-            COUNT(*) FILTER (WHERE stat = 'REB' AND won = 1)                 AS reb_wins,
-            COUNT(*) FILTER (WHERE stat = 'AST' AND won IN (0, 1))           AS ast_total,
-            COUNT(*) FILTER (WHERE stat = 'AST' AND won = 1)                 AS ast_wins,
-            COUNT(*) FILTER (WHERE stat = 'PRA' AND won IN (0, 1))           AS pra_total,
-            COUNT(*) FILTER (WHERE stat = 'PRA' AND won = 1)                 AS pra_wins,
-            -- Edge ranges (5-8%, 8-12%, 12%+)
-            COUNT(*) FILTER (WHERE ABS(edge) >= 5  AND ABS(edge) < 8  AND won IN (0, 1)) AS e5_total,
-            COUNT(*) FILTER (WHERE ABS(edge) >= 5  AND ABS(edge) < 8  AND won = 1)       AS e5_wins,
-            COUNT(*) FILTER (WHERE ABS(edge) >= 8  AND ABS(edge) < 12 AND won IN (0, 1)) AS e8_total,
-            COUNT(*) FILTER (WHERE ABS(edge) >= 8  AND ABS(edge) < 12 AND won = 1)       AS e8_wins,
-            COUNT(*) FILTER (WHERE ABS(edge) >= 12 AND won IN (0, 1))                    AS e12_total,
-            COUNT(*) FILTER (WHERE ABS(edge) >= 12 AND won = 1)                          AS e12_wins
-        FROM picks
-        WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0) {uid_filter}
-    """, params)
-    row = cursor.fetchone()
-    put_connection(conn)
+        # All graded stats in one SQL aggregation (won is INTEGER: 1=win, 0=loss, NULL=push)
+        cursor.execute(f"""
+            SELECT
+                COUNT(*)                                                          AS graded_picks,
+                COUNT(*) FILTER (WHERE won = 1)                                   AS wins,
+                COUNT(*) FILTER (WHERE won = 0)                                   AS losses,
+                AVG(ABS(edge)) FILTER (WHERE won = 1)                             AS avg_edge_winners,
+                COUNT(*) FILTER (WHERE stat = 'PTS' AND won IN (0, 1))           AS pts_total,
+                COUNT(*) FILTER (WHERE stat = 'PTS' AND won = 1)                 AS pts_wins,
+                COUNT(*) FILTER (WHERE stat = 'REB' AND won IN (0, 1))           AS reb_total,
+                COUNT(*) FILTER (WHERE stat = 'REB' AND won = 1)                 AS reb_wins,
+                COUNT(*) FILTER (WHERE stat = 'AST' AND won IN (0, 1))           AS ast_total,
+                COUNT(*) FILTER (WHERE stat = 'AST' AND won = 1)                 AS ast_wins,
+                COUNT(*) FILTER (WHERE stat = 'PRA' AND won IN (0, 1))           AS pra_total,
+                COUNT(*) FILTER (WHERE stat = 'PRA' AND won = 1)                 AS pra_wins,
+                COUNT(*) FILTER (WHERE ABS(edge) >= 5  AND ABS(edge) < 8  AND won IN (0, 1)) AS e5_total,
+                COUNT(*) FILTER (WHERE ABS(edge) >= 5  AND ABS(edge) < 8  AND won = 1)       AS e5_wins,
+                COUNT(*) FILTER (WHERE ABS(edge) >= 8  AND ABS(edge) < 12 AND won IN (0, 1)) AS e8_total,
+                COUNT(*) FILTER (WHERE ABS(edge) >= 8  AND ABS(edge) < 12 AND won = 1)       AS e8_wins,
+                COUNT(*) FILTER (WHERE ABS(edge) >= 12 AND won IN (0, 1))                    AS e12_total,
+                COUNT(*) FILTER (WHERE ABS(edge) >= 12 AND won = 1)                          AS e12_wins
+            FROM picks
+            WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0) {uid_filter}
+        """, params)
+        row = cursor.fetchone()
+    finally:
+        put_connection(conn)
 
     graded_picks = row['graded_picks'] or 0
     if graded_picks == 0:
