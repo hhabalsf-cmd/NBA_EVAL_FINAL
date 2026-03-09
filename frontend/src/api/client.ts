@@ -6,6 +6,16 @@ import { supabase } from '../lib/supabase'
 
 const API_BASE = (import.meta.env.VITE_API_URL ?? '') + '/api'
 
+// Cache the access token so apiFetch() doesn't await getSession() on every call.
+// The Supabase SDK handles token refresh automatically; we just track the result.
+let _accessToken: string | null = null
+supabase.auth.getSession().then(({ data }) => {
+  _accessToken = data.session?.access_token ?? null
+})
+supabase.auth.onAuthStateChange((_event, session) => {
+  _accessToken = session?.access_token ?? null
+})
+
 /** Throw a user-friendly error, with special handling for 429 rate limits. */
 async function throwResponseError(response: Response, fallback: string): Promise<never> {
   if (response.status === 429) {
@@ -21,10 +31,9 @@ async function throwResponseError(response: Response, fallback: string): Promise
  * and dispatches a global event on 401 so the auth store can log the user out.
  */
 async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
-  const { data: { session } } = await supabase.auth.getSession()
   const headers = new Headers(init.headers)
-  if (session?.access_token) {
-    headers.set('Authorization', `Bearer ${session.access_token}`)
+  if (_accessToken) {
+    headers.set('Authorization', `Bearer ${_accessToken}`)
   }
 
   const res = await fetch(input, { ...init, headers })
@@ -339,7 +348,7 @@ export async function getTodaysBestBets(minEdge = 5, limit = 10): Promise<{ bets
   return response.json()
 }
 
-export async function getPicks(pendingOnly = false): Promise<Pick[]> {
+export async function getPicks(pendingOnly = false, limit = 100): Promise<Pick[]> {
   let query = supabase
     .from('picks')
     .select('*')
@@ -347,6 +356,8 @@ export async function getPicks(pendingOnly = false): Promise<Pick[]> {
 
   if (pendingOnly) {
     query = query.is('won', null).eq('voided', 0)
+  } else {
+    query = query.limit(limit)
   }
 
   const { data, error } = await query
@@ -441,63 +452,20 @@ export async function autoGradePicks(): Promise<{ graded_count: number; parlays_
 }
 
 export async function getPerformanceStats(): Promise<PerformanceStats> {
-  const { data: picks, error } = await supabase
-    .from('picks')
-    .select('stat, edge, won, voided')
-
-  if (error) throw new Error(error.message)
-  if (!picks) return emptyPerformanceStats()
-
-  const graded = picks.filter(p => p.won !== null && p.voided !== 1)
-  const wins = graded.filter(p => p.won === 1 || p.won === true)
-  const losses = graded.filter(p => p.won === 0 || p.won === false)
-  const pushes = picks.filter(p => p.voided === 1)
-
-  const win_rate = graded.length > 0 ? wins.length / graded.length : 0
-  const roi = graded.length > 0 ? (wins.length - losses.length) / graded.length : 0
-  const avg_edge_winners = wins.length > 0
-    ? wins.reduce((sum, p) => sum + (p.edge ?? 0), 0) / wins.length
-    : 0
-
-  const by_stat: Record<string, { total: number; wins: number; win_rate: number }> = {}
-  for (const p of graded) {
-    if (!by_stat[p.stat]) by_stat[p.stat] = { total: 0, wins: 0, win_rate: 0 }
-    by_stat[p.stat].total++
-    if (p.won === 1 || p.won === true) by_stat[p.stat].wins++
-  }
-  for (const stat of Object.keys(by_stat)) {
-    const s = by_stat[stat]
-    s.win_rate = s.total > 0 ? s.wins / s.total : 0
-  }
-
-  const edgeRanges = [
-    { label: '0-5', min: 0, max: 5 },
-    { label: '5-10', min: 5, max: 10 },
-    { label: '10-15', min: 10, max: 15 },
-    { label: '15+', min: 15, max: Infinity },
-  ]
-  const by_edge_range: Record<string, { total: number; wins: number; win_rate: number }> = {}
-  for (const range of edgeRanges) {
-    const inRange = graded.filter(p => (p.edge ?? 0) >= range.min && (p.edge ?? 0) < range.max)
-    const rangeWins = inRange.filter(p => p.won === 1 || p.won === true)
-    by_edge_range[range.label] = {
-      total: inRange.length,
-      wins: rangeWins.length,
-      win_rate: inRange.length > 0 ? rangeWins.length / inRange.length : 0,
-    }
-  }
-
+  const response = await apiFetch(`${API_BASE}/picks/stats/performance`)
+  if (!response.ok) return emptyPerformanceStats()
+  const data = await response.json()
   return {
-    total_picks: picks.length,
-    graded_picks: graded.length,
-    wins: wins.length,
-    losses: losses.length,
-    pushes: pushes.length,
-    win_rate,
-    roi,
-    avg_edge_winners,
-    by_stat,
-    by_edge_range,
+    total_picks: data.total_picks ?? 0,
+    graded_picks: data.graded_picks ?? 0,
+    wins: data.wins ?? 0,
+    losses: data.losses ?? 0,
+    pushes: data.pushes ?? 0,
+    win_rate: data.win_rate ?? 0,
+    roi: data.roi ?? 0,
+    avg_edge_winners: data.avg_edge_winners ?? 0,
+    by_stat: data.by_stat ?? {},
+    by_edge_range: data.by_edge_range ?? {},
   }
 }
 
