@@ -144,12 +144,8 @@ class PredictionService:
     _current_season_players_time: float = 0
     _PLAYERS_CACHE_TTL = 60 * 60 * 6  # 6 hours
 
-    def _get_current_season_players(self) -> list:
-        """Get current season players from live API (cached 6 hours)."""
-        now = time.time()
-        if (PredictionService._current_season_players is not None
-                and now - PredictionService._current_season_players_time < self._PLAYERS_CACHE_TTL):
-            return PredictionService._current_season_players
+    def _refresh_players_sync(self) -> None:
+        """Blocking refresh of player list from NBA API. Run via executor only."""
         try:
             from nba_api.stats.endpoints import commonallplayers
             cap = commonallplayers.CommonAllPlayers(
@@ -167,11 +163,24 @@ class PredictionService:
                     'is_active': True,
                 })
             PredictionService._current_season_players = player_list
-            PredictionService._current_season_players_time = now
-            return player_list
+            PredictionService._current_season_players_time = time.time()
         except Exception:
-            from nba_api.stats.static import players
-            return players.get_active_players()
+            pass  # Keep existing cache or fallback is handled by caller
+
+    def _get_current_season_players(self) -> list:
+        """Get current season players (cached 6 hours). Never blocks — returns stale/static if cold."""
+        now = time.time()
+        if (PredictionService._current_season_players is not None
+                and now - PredictionService._current_season_players_time < self._PLAYERS_CACHE_TTL):
+            return PredictionService._current_season_players
+        # Cache cold: return fast static list immediately so search doesn't block
+        from nba_api.stats.static import players
+        static = players.get_active_players()
+        if PredictionService._current_season_players is None:
+            # Seed cache with static list so concurrent requests don't all try to refresh
+            PredictionService._current_season_players = static
+            PredictionService._current_season_players_time = 0  # still expired — executor will refresh
+        return static
 
     def search_players(self, query: str) -> list:
         """Search for players by name using live roster data."""

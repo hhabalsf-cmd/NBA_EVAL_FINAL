@@ -1,4 +1,5 @@
 """Player search and prediction endpoints."""
+import asyncio
 import json
 import logging
 from datetime import datetime, timedelta
@@ -46,7 +47,20 @@ def get_prediction_service() -> PredictionService:
 @limiter.limit("60/minute")
 async def search_players(request: Request, q: str = Query(..., min_length=2, description="Search query")):
     """Search for players by name."""
+    import time
     service = get_prediction_service()
+
+    # Trigger background cache refresh if stale (never blocks the response)
+    from ..services.prediction_service import PredictionService
+    now = time.time()
+    cache_stale = (
+        PredictionService._current_season_players_time == 0
+        or now - PredictionService._current_season_players_time >= PredictionService._PLAYERS_CACHE_TTL
+    )
+    if cache_stale:
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(None, service._refresh_players_sync)
+
     players = service.search_players(q)
 
     return PlayerSearchResult(

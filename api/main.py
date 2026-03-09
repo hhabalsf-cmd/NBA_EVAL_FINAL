@@ -2,6 +2,7 @@
 NBA Prop Evaluator API
 FastAPI backend for player prop analysis.
 """
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -45,6 +46,16 @@ async def lifespan(app: FastAPI):
         _logger.info("GamePredictionService initialized")
     except Exception as exc:
         _logger.warning("GamePredictionService warm-up failed (non-fatal): %s", exc)
+
+    # 4. Player list cache (NBA API call — run in thread so it doesn't block startup)
+    try:
+        from .routers.players import get_prediction_service
+        _svc = get_prediction_service()
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(None, _svc._refresh_players_sync)
+        _logger.info("Player cache refresh scheduled in background")
+    except Exception as exc:
+        _logger.warning("Player cache warm-up failed (non-fatal): %s", exc)
 
     yield
 
