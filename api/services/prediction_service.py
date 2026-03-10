@@ -402,43 +402,25 @@ class PredictionService:
         return static
 
     def search_players(self, query: str) -> list:
-        """Search for players by name using the local active players cache.
-        This provides instant, fuzzy matching and strictly returns current rotation players.
+        """Search for players by name.
+
+        Priority:
+        1. BDL live search — always returns only currently active players with team info.
+        2. Local game_logs cache — fallback if BDL is unavailable.
         """
         if not query or not query.strip():
             return []
 
-        active_players = self._get_current_season_players()
-        results = []
-        normalized_query = self._normalize_name(query)
-        search_terms = normalized_query.split()
+        # BDL live search: active roster only, current team data
+        bdl_results = self._search_players_bdl(query)
+        if bdl_results:
+            return bdl_results
 
-        for p in active_players:
-            # Check if all search terms are substrings of the normalized full name
-            norm_name = p.get('normalized_full_name') or self._normalize_name(p['full_name'])
-            if all(term in norm_name for term in search_terms):
-                results.append({
-                    'id': p.get('bdl_id', p['id']),
-                    'full_name': p['full_name'],
-                    'first_name': p.get('first_name', ''),
-                    'last_name': p.get('last_name', ''),
-                    'team_id': None,
-                    'team_abbreviation': '',
-                    'team_name': '',
-                    'headshot_url': None,  # frontend falls back to NBA CDN via player_id
-                })
+        # BDL unavailable — fall back to local game_logs cache
+        return self._search_players_local(query)
 
-                if len(results) >= 10:
-                    break
-
-        # Fall back to BDL live search for players missing from local cache (e.g. recent rookies)
-        if not results:
-            results = self._search_players_bdl_fallback(query)
-
-        return results
-
-    def _search_players_bdl_fallback(self, query: str) -> list:
-        """Search BallDontLie API directly — used when the local player cache misses a player."""
+    def _search_players_bdl(self, query: str) -> list:
+        """Search BallDontLie API for active players matching query."""
         try:
             from bdl_client import get_bdl_client
             bdl = get_bdl_client()
@@ -467,8 +449,33 @@ class PredictionService:
                     break
             return results
         except Exception as exc:
-            logger.warning("BDL player search fallback failed: %s", exc)
+            logger.warning("BDL player search failed: %s", exc)
             return []
+
+    def _search_players_local(self, query: str) -> list:
+        """Search local game_logs cache — fallback when BDL is unavailable."""
+        active_players = self._get_current_season_players()
+        results = []
+        normalized_query = self._normalize_name(query)
+        search_terms = normalized_query.split()
+
+        for p in active_players:
+            norm_name = p.get('normalized_full_name') or self._normalize_name(p['full_name'])
+            if all(term in norm_name for term in search_terms):
+                results.append({
+                    'id': p.get('bdl_id', p['id']),
+                    'full_name': p['full_name'],
+                    'first_name': p.get('first_name', ''),
+                    'last_name': p.get('last_name', ''),
+                    'team_id': None,
+                    'team_abbreviation': '',
+                    'team_name': '',
+                    'headshot_url': None,
+                })
+                if len(results) >= 10:
+                    break
+
+        return results
 
     def get_player_info(self, player_name: str) -> Optional[Dict]:
         """Get player info by name."""
