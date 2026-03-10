@@ -30,11 +30,11 @@ To create the parlay tables, run the following SQL in the Supabase SQL Editor:
     CREATE INDEX IF NOT EXISTS parlay_legs_pick_id_idx ON parlay_legs(pick_id);
 """
 import json
+import logging
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict
-import time
 import pandas as pd
 
 import psycopg2
@@ -253,6 +253,47 @@ def upsert_team_stats_to_supabase(team_data: dict, season: str) -> None:
         cur.executemany(sql, rows)
     conn.commit()
     put_connection(conn)
+
+
+# ── League averages (Supabase query — no external API) ────────
+
+def get_league_averages_from_supabase(season: str) -> dict:
+    """
+    Compute league-wide per-game averages from player_game_logs for the given season.
+    Returns dict with keys PTS, REB, AST, MIN (floats), or empty dict on failure.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    AVG(pts)  AS pts,
+                    AVG(reb)  AS reb,
+                    AVG(ast)  AS ast,
+                    AVG(min)  AS min
+                FROM player_game_logs
+                WHERE season = %s
+                  AND pts IS NOT NULL
+                """,
+                (season,),
+            )
+            row = cur.fetchone()
+
+        if row is None:
+            return {}
+
+        return {
+            'PTS': float(row['pts']) if row['pts'] is not None else 11.5,
+            'REB': float(row['reb']) if row['reb'] is not None else 4.2,
+            'AST': float(row['ast']) if row['ast'] is not None else 2.4,
+            'MIN': float(row['min']) if row['min'] is not None else 24.0,
+        }
+    except Exception as exc:
+        logging.getLogger(__name__).warning("get_league_averages_from_supabase error: %s", exc)
+        return {}
+    finally:
+        put_connection(conn)
 
 
 # ── User functions ────────────────────────────────────────────
@@ -577,9 +618,6 @@ def auto_grade_game_predictions() -> dict:
     if not pending:
         return {'graded_count': 0, 'errors': [], 'results': []}
 
-    from nba_api.stats.endpoints import scoreboardv2 as sb
-    import time as _time
-
     graded_count = 0
     errors = []
     results = []
@@ -599,64 +637,53 @@ def auto_grade_game_predictions() -> dict:
             if pred_date >= today:
                 continue  # Game hasn't happened yet
 
-            # Fetch scoreboard for that date
-            date_str = pred_date.strftime('%m/%d/%Y')
-            scoreboard = sb.ScoreboardV2(game_date=date_str)
-            _time.sleep(0.5)
-            games_header = scoreboard.get_data_frames()[0]
-            line_score = scoreboard.get_data_frames()[1]
+            # Fetch games for that date via BDL
+            date_iso = pred_date.strftime('%Y-%m-%d')
+            from bdl_client import get_bdl_client
+            bdl = get_bdl_client()
+            raw_games = bdl.get_games(dates=[date_iso])
 
-            if games_header.empty:
-                continue
-
-            # Find the matching game
             home_team = pred['home_team']
             away_team = pred['away_team']
 
-            for _, game in games_header.iterrows():
-                status = game.get('GAME_STATUS_ID', 1)
-                if status != 3:  # Not final
+            for g in (raw_games or []):
+                game_status = str(g.get('status') or '').lower()
+                if game_status != 'final':
                     continue
 
-                # Match by team abbreviations from line score
-                game_id = game['GAME_ID']
-                game_lines = line_score[line_score['GAME_ID'] == game_id]
+                home = g.get('home_team') or {}
+                visitor = g.get('visitor_team') or {}
+                h_abbrev = str(home.get('abbreviation') or '').upper()
+                v_abbrev = str(visitor.get('abbreviation') or '').upper()
 
-                if game_lines.empty:
+                if not ({home_team.upper(), away_team.upper()} <= {h_abbrev, v_abbrev}):
+                    continue  # Not the right game
+
+                home_pts = g.get('home_team_score')
+                away_pts = g.get('visitor_team_score')
+
+                if home_pts is None or away_pts is None:
                     continue
 
-                teams_in_game = set(game_lines['TEAM_ABBREVIATION'].values)
-                if home_team in teams_in_game and away_team in teams_in_game:
-                    # Found the game — determine winner
-                    home_line = game_lines[game_lines['TEAM_ABBREVIATION'] == home_team]
-                    away_line = game_lines[game_lines['TEAM_ABBREVIATION'] == away_team]
+                home_pts = int(home_pts)
+                away_pts = int(away_pts)
 
-                    if home_line.empty or away_line.empty:
-                        continue
+                actual_winner = h_abbrev if home_pts > away_pts else v_abbrev
 
-                    home_pts = home_line.iloc[0].get('PTS', 0)
-                    away_pts = away_line.iloc[0].get('PTS', 0)
+                grade_game_prediction(pred['id'], actual_winner)
+                correct = pred['predicted_winner'].upper() == actual_winner
 
-                    import math
-                    if home_pts is None or away_pts is None or (isinstance(home_pts, float) and math.isnan(home_pts)) or (isinstance(away_pts, float) and math.isnan(away_pts)):
-                        continue
-
-                    actual_winner = home_team if home_pts > away_pts else away_team
-
-                    grade_game_prediction(pred['id'], actual_winner)
-                    correct = pred['predicted_winner'] == actual_winner
-
-                    results.append({
-                        'home_team': home_team,
-                        'away_team': away_team,
-                        'predicted_winner': pred['predicted_winner'],
-                        'actual_winner': actual_winner,
-                        'correct': correct,
-                        'home_pts': int(home_pts),
-                        'away_pts': int(away_pts),
-                    })
-                    graded_count += 1
-                    break
+                results.append({
+                    'home_team': home_team,
+                    'away_team': away_team,
+                    'predicted_winner': pred['predicted_winner'],
+                    'actual_winner': actual_winner,
+                    'correct': correct,
+                    'home_pts': home_pts,
+                    'away_pts': away_pts,
+                })
+                graded_count += 1
+                break
 
         except Exception as e:
             errors.append(f"Error grading {pred.get('home_team')} vs {pred.get('away_team')}: {str(e)}")
@@ -1229,31 +1256,27 @@ def _check_team_played(team_abbrev: str, game_date, scraper=None) -> bool:
     if not team_abbrev:
         return False
 
-    date_str = game_date.strftime('%m/%d/%Y')
+    date_iso = game_date.strftime('%Y-%m-%d')
 
     # Check cache first
-    if date_str in _team_schedule_cache:
-        return team_abbrev.upper() in _team_schedule_cache[date_str]
+    if date_iso in _team_schedule_cache:
+        return team_abbrev.upper() in _team_schedule_cache[date_iso]
 
     try:
-        from nba_api.stats.endpoints import scoreboardv2
-        scoreboard = scoreboardv2.ScoreboardV2(game_date=date_str)
-        games = scoreboard.get_data_frames()[0]  # GameHeader
+        from bdl_client import get_bdl_client
+        bdl = get_bdl_client()
+        raw_games = bdl.get_games(dates=[date_iso])
 
         teams_that_played = set()
-        if not games.empty:
-            for _, game in games.iterrows():
-                home = str(game.get('HOME_TEAM_ID', ''))
-                away = str(game.get('VISITOR_TEAM_ID', ''))
-                # Also grab abbreviations from the line score table
-            # Use line score for abbreviations
-            line_score = scoreboard.get_data_frames()[1]
-            if not line_score.empty and 'TEAM_ABBREVIATION' in line_score.columns:
-                for abbrev in line_score['TEAM_ABBREVIATION'].unique():
-                    teams_that_played.add(str(abbrev).upper())
+        for g in (raw_games or []):
+            home = g.get('home_team') or {}
+            visitor = g.get('visitor_team') or {}
+            h_abbrev = str(home.get('abbreviation') or '').upper()
+            v_abbrev = str(visitor.get('abbreviation') or '').upper()
+            if h_abbrev: teams_that_played.add(h_abbrev)
+            if v_abbrev: teams_that_played.add(v_abbrev)
 
-        _team_schedule_cache[date_str] = teams_that_played
-        time.sleep(0.5)  # Rate limiting
+        _team_schedule_cache[date_iso] = teams_that_played
         return team_abbrev.upper() in teams_that_played
 
     except Exception:
@@ -1381,7 +1404,6 @@ def auto_grade_picks(scraper=None) -> Dict:
             if player_id not in players_processed:
                 game_log = scraper.get_player_game_log(player_id, seasons=['2025-26'])
                 players_processed[player_id] = game_log
-                time.sleep(0.5)  # Rate limiting
             else:
                 game_log = players_processed[player_id]
 
@@ -1639,6 +1661,135 @@ def get_performance_by_model_and_stat(user_id: str) -> Dict:
     return results
 
 
+# ── Daily picks helpers ───────────────────────────────────────
+
+
+def save_daily_picks(picks: list, date_str: str) -> int:
+    """
+    Replace all daily picks for a given date with new ones.
+
+    Args:
+        picks: List of dicts, each with keys matching the daily_picks columns
+        date_str: Date string in YYYY-MM-DD format
+
+    Returns:
+        Number of picks inserted
+    """
+    if not picks:
+        return 0
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            # Clear existing picks for this date
+            cur.execute("DELETE FROM daily_picks WHERE generated_date = %s", (date_str,))
+
+            # Bulk insert new picks
+            insert_sql = """
+                INSERT INTO daily_picks (
+                    generated_date, player, player_id, team_abbrev, stat,
+                    prediction, confidence, range_low, range_high,
+                    recent_avg, odds_line, edge, direction,
+                    opponent, is_home, matchup, game_date,
+                    model_type, prob_over, rank
+                ) VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s
+                )
+            """
+
+            rows = [
+                (
+                    date_str,
+                    p.get('player'),
+                    p.get('player_id'),
+                    p.get('team_abbrev'),
+                    p.get('stat'),
+                    p.get('prediction'),
+                    p.get('confidence'),
+                    p.get('range_low'),
+                    p.get('range_high'),
+                    p.get('recent_avg'),
+                    p.get('odds_line'),
+                    p.get('edge'),
+                    p.get('direction'),
+                    p.get('opponent'),
+                    p.get('is_home', False),
+                    p.get('matchup'),
+                    p.get('game_date'),
+                    p.get('model_type', 'gradient_boost'),
+                    p.get('prob_over'),
+                    p.get('rank'),
+                )
+                for p in picks
+            ]
+
+            cur.executemany(insert_sql, rows)
+            conn.commit()
+            return len(rows)
+    finally:
+        put_connection(conn)
+
+
+def get_daily_picks(date_str: str = None) -> list:
+    """
+    Get daily picks for a specific date (defaults to today).
+
+    Args:
+        date_str: Date string in YYYY-MM-DD format (defaults to today)
+
+    Returns:
+        List of pick dicts ordered by rank
+    """
+    if date_str is None:
+        date_str = datetime.now().strftime('%Y-%m-%d')
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM daily_picks
+                WHERE generated_date = %s
+                ORDER BY rank ASC NULLS LAST
+                """,
+                (date_str,)
+            )
+            rows = cur.fetchall()
+            return [dict(row) for row in rows]
+    finally:
+        put_connection(conn)
+
+
+def clear_old_daily_picks(days_to_keep: int = 7) -> int:
+    """
+    Delete daily picks older than N days.
+
+    Args:
+        days_to_keep: Number of days of picks to retain (default 7)
+
+    Returns:
+        Number of rows deleted
+    """
+    cutoff = (datetime.now() - timedelta(days=days_to_keep)).strftime('%Y-%m-%d')
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM daily_picks WHERE generated_date < %s",
+                (cutoff,)
+            )
+            deleted = cur.rowcount
+            conn.commit()
+            return deleted
+    finally:
+        put_connection(conn)
+
+
 # ── Parlay helpers ─────────────────────────────────────────────
 
 def create_parlay(user_id: str, pick_ids: list) -> dict:
@@ -1708,19 +1859,22 @@ def get_parlays(user_id: str) -> list:
         put_connection(conn)
 
 
-def void_parlay(parlay_id: int, user_id: str) -> None:
-    """Set parlay status to voided. Enforces ownership via user_id."""
+def delete_parlay(parlay_id: int, user_id: str) -> None:
+    """Hard-delete a parlay and its legs. Enforces ownership via user_id. Picks are NOT deleted."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            # Verify ownership first
             cur.execute(
-                """
-                UPDATE parlays
-                SET status = 'voided'
-                WHERE id = %s AND user_id = %s
-                """,
+                "SELECT id FROM parlays WHERE id = %s AND user_id = %s",
                 (parlay_id, user_id)
             )
+            if not cur.fetchone():
+                conn.rollback()
+                return
+            # Delete legs first (FK constraint), then the parlay
+            cur.execute("DELETE FROM parlay_legs WHERE parlay_id = %s", (parlay_id,))
+            cur.execute("DELETE FROM parlays WHERE id = %s AND user_id = %s", (parlay_id, user_id))
             conn.commit()
     finally:
         put_connection(conn)

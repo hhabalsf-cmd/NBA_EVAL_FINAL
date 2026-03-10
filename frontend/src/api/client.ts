@@ -211,6 +211,59 @@ export interface BestBet {
   home_team?: string
   away_team?: string
   confidence?: number
+  line_is_real?: boolean
+}
+
+export interface DailyPick {
+  id: number
+  generated_date: string
+  player: string
+  player_id?: number
+  team_abbrev?: string
+  stat: string
+  prediction: number
+  confidence?: number
+  range_low?: number
+  range_high?: number
+  recent_avg?: number       // L10 average (proxy line)
+  odds_line?: number        // null until new OddsAPI key
+  edge?: number
+  direction: string
+  opponent?: string
+  is_home?: boolean
+  matchup?: string
+  game_date?: string
+  model_type?: string
+  prob_over?: number
+  rank?: number
+  created_at?: string
+}
+
+/** Convert a DailyPick to a BestBet so existing BetCard works unchanged. */
+export function dailyPickToBestBet(pick: DailyPick): BestBet {
+  const lineIsReal = pick.odds_line != null
+  const displayLine = pick.odds_line ?? pick.recent_avg ?? 0
+  const recommendation = lineIsReal
+    ? `${pick.direction} ${displayLine}`
+    : `${pick.direction} ${displayLine} (avg)`
+
+  return {
+    player: pick.player,
+    player_id: pick.player_id,
+    team_abbrev: pick.team_abbrev,
+    stat: pick.stat,
+    line: displayLine,
+    prediction: pick.prediction,
+    edge: pick.edge ?? 0,
+    edge_pct: pick.edge ?? 0,
+    direction: pick.direction,
+    recommendation,
+    prob_over: pick.prob_over,
+    confidence: pick.confidence,
+    home_team: pick.is_home ? pick.team_abbrev : pick.opponent,
+    away_team: pick.is_home ? pick.opponent : pick.team_abbrev,
+    line_is_real: lineIsReal,
+  }
 }
 
 export interface PlayerOdds {
@@ -344,10 +397,43 @@ export async function evaluateLine(
   return response.json()
 }
 
-export async function getTodaysBestBets(minEdge = 5, limit = 10): Promise<{ bets: BestBet[]; generated_at: string; games_count: number }> {
-  const response = await apiFetch(`${API_BASE}/bets/today?min_edge=${minEdge}&limit=${limit}`)
-  if (!response.ok) throw new Error('Failed to fetch best bets')
-  return response.json()
+/**
+ * Fetch today's daily picks directly from Supabase (no FastAPI round-trip).
+ * Returns picks ordered by rank.
+ */
+export async function getTodaysDailyPicks(): Promise<DailyPick[]> {
+  const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+  const { data, error } = await supabase
+    .from('daily_picks')
+    .select('*')
+    .eq('generated_date', today)
+    .order('rank', { ascending: true })
+
+  if (error) throw new Error(error.message)
+  return (data ?? []) as DailyPick[]
+}
+
+/**
+ * Save a daily pick to the user's personal picks via the existing createPick API.
+ * Maps DailyPick fields to the PickCreate schema.
+ */
+export async function saveDailyPickToMyPicks(pick: DailyPick): Promise<Pick> {
+  return createPick({
+    player: pick.player,
+    player_id: pick.player_id,
+    team_abbrev: pick.team_abbrev,
+    stat: pick.stat as Pick['stat'],
+    line: pick.odds_line ?? pick.recent_avg ?? 0,
+    prediction: pick.prediction,
+    direction: pick.direction as Pick['direction'],
+    edge: pick.edge ?? 0,
+    confidence: pick.confidence,
+    opponent: pick.opponent,
+    is_home: pick.is_home,
+    model_type: pick.model_type ?? 'gradient_boost',
+    game_date: pick.game_date,
+    prob_over: pick.prob_over,
+  })
 }
 
 export async function getPicks(pendingOnly = false, limit = 100): Promise<Pick[]> {

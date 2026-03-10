@@ -145,25 +145,30 @@ class PredictionService:
     _PLAYERS_CACHE_TTL = 60 * 60 * 6  # 6 hours
 
     def _refresh_players_sync(self) -> None:
-        """Blocking refresh of player list from NBA API. Run via executor only."""
+        """Blocking refresh of player list from BallDontLie API. Run via executor only."""
         try:
-            from nba_api.stats.endpoints import commonallplayers
-            cap = commonallplayers.CommonAllPlayers(
-                is_only_current_season=1, season='2025-26', timeout=15,
-            )
-            df = cap.get_data_frames()[0]
+            from bdl_client import get_bdl_client
+            bdl = get_bdl_client()
+            raw_players = bdl.get_all('/v1/players', {'per_page': 100})
+
             player_list = []
-            for _, row in df.iterrows():
-                name_parts = str(row['DISPLAY_FIRST_LAST']).split(' ', 1)
+            for p in raw_players:
+                first = (p.get('first_name') or '').strip()
+                last = (p.get('last_name') or '').strip()
+                full_name = f"{first} {last}".strip()
+                if not full_name:
+                    continue
                 player_list.append({
-                    'id': int(row['PERSON_ID']),
-                    'full_name': str(row['DISPLAY_FIRST_LAST']),
-                    'first_name': name_parts[0] if name_parts else '',
-                    'last_name': name_parts[1] if len(name_parts) > 1 else '',
+                    'id': int(p.get('id') or 0),
+                    'full_name': full_name,
+                    'first_name': first,
+                    'last_name': last,
                     'is_active': True,
                 })
-            PredictionService._current_season_players = player_list
-            PredictionService._current_season_players_time = time.time()
+
+            if player_list:
+                PredictionService._current_season_players = player_list
+                PredictionService._current_season_players_time = time.time()
         except Exception:
             pass  # Keep existing cache or fallback is handled by caller
 
@@ -174,8 +179,39 @@ class PredictionService:
                 and now - PredictionService._current_season_players_time < self._PLAYERS_CACHE_TTL):
             return PredictionService._current_season_players
         # Cache cold: return fast static list immediately so search doesn't block
-        from nba_api.stats.static import players
-        static = players.get_active_players()
+        try:
+            import db as _db
+            ev = _load_nba_evaluator()
+            conn = _db.get_connection()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT DISTINCT player_id AS id,
+                               MAX(player_name) AS full_name
+                        FROM player_game_logs
+                        WHERE season = %s AND player_name IS NOT NULL
+                        GROUP BY player_id
+                        """,
+                        (ev.CURRENT_SEASON,),
+                    )
+                    rows = cur.fetchall()
+            finally:
+                _db.put_connection(conn)
+
+            static = []
+            for row in rows:
+                full_name = str(row['full_name'] or '')
+                parts = full_name.split(' ', 1)
+                static.append({
+                    'id': int(row['id']),
+                    'full_name': full_name,
+                    'first_name': parts[0] if parts else '',
+                    'last_name': parts[1] if len(parts) > 1 else '',
+                    'is_active': True,
+                })
+        except Exception:
+            static = []
         if PredictionService._current_season_players is None:
             # Seed cache with static list so concurrent requests don't all try to refresh
             PredictionService._current_season_players = static

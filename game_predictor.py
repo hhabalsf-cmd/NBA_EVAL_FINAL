@@ -13,8 +13,8 @@ Predicts which team will win each NBA game using:
 - Strength of schedule
 """
 
+import concurrent.futures
 import json
-import time
 import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -23,14 +23,8 @@ import numpy as np
 import pandas as pd
 import joblib
 
-from nba_api.stats.endpoints import (
-    scoreboardv2,
-    leaguedashteamstats,
-    teamgamelog,
-    leaguegamefinder,
-    leaguedashplayerstats,
-)
-from nba_api.stats.static import teams
+from bdl_client import get_bdl_client
+from bdl_id_mapper import get_team_mapper, get_player_mapper
 
 from sklearn.preprocessing import RobustScaler
 from sklearn.model_selection import TimeSeriesSplit
@@ -64,12 +58,13 @@ except ImportError:
 # Reuse from existing evaluator
 from nba_evaluator import (
     CacheManager,
-    retry_api_call,
     NBADataScraper,
     TEAM_ABBREV_TO_NAME,
     TEAM_NAME_TO_ABBREV,
     MODEL_DIR,
     CACHE_DIR,
+    _safe_float,
+    _safe_int,
 )
 
 warnings.filterwarnings("ignore")
@@ -245,57 +240,70 @@ class GamePredictor:
         self._injuries_cache = None
         self._top_scorers_cache = None
 
-        # Build team lookup
-        all_teams = teams.get_teams()
-        self.team_id_to_abbrev = {t['id']: t['abbreviation'] for t in all_teams}
-        self.team_abbrev_to_id = {t['abbreviation']: t['id'] for t in all_teams}
-        self.team_id_to_name = {t['id']: t['full_name'] for t in all_teams}
+        # Build team lookup using BDL team mapper (BDL team IDs)
+        team_mapper = get_team_mapper()
+        self.team_abbrev_to_id = {}
+        self.team_id_to_abbrev = {}
+        for abbrev in TEAM_ABBREV_TO_NAME:
+            bdl_id = team_mapper.abbrev_to_bdl_id(abbrev)
+            if bdl_id is not None:
+                self.team_abbrev_to_id[abbrev] = bdl_id
+                self.team_id_to_abbrev[bdl_id] = abbrev
+        self.team_id_to_name = {}  # Not used for critical logic
 
     # ── Data Fetching ──────────────────────────────────────────
 
     def get_todays_games(self):
-        """Fetch today's NBA games from scoreboard."""
+        """Fetch today's NBA games via BallDontLie API (FREE tier)."""
         cached = CacheManager.get('game_pred', 'todays_games', expiry_type='schedule')
         if cached is not None:
             return cached
 
         try:
-            scoreboard = retry_api_call(scoreboardv2.ScoreboardV2)
-            time.sleep(0.5)
-            games_header = scoreboard.get_data_frames()[0]
+            today_str = datetime.now().date().strftime('%Y-%m-%d')
+            bdl = get_bdl_client()
+            raw_games = bdl.get_games(dates=[today_str])
 
-            if games_header.empty:
+            if not raw_games:
                 return []
 
+            status_map = {'scheduled': 1, 'in progress': 2, 'final': 3}
             games = []
             seen_games = set()
-            for _, row in games_header.iterrows():
-                status = row.get('GAME_STATUS_ID', 1)
+
+            for g in raw_games:
+                home = g.get('home_team') or {}
+                visitor = g.get('visitor_team') or {}
+                home_id = home.get('id')
+                visitor_id = visitor.get('id')
+                home_abbrev = str(home.get('abbreviation') or '').upper()
+                visitor_abbrev = str(visitor.get('abbreviation') or '').upper()
+                game_id = g.get('id')
+                raw_status = str(g.get('status') or 'scheduled').lower().strip()
+                status = status_map.get(raw_status, 1)
+
                 if status == 3:  # Final — skip
                     continue
 
-                home_id = row['HOME_TEAM_ID']
-                away_id = row['VISITOR_TEAM_ID']
-                home_abbrev = self.team_id_to_abbrev.get(home_id, '')
-                away_abbrev = self.team_id_to_abbrev.get(away_id, '')
-                game_id = row.get('GAME_ID', '')
-
-                dedup_key = game_id if game_id else (home_abbrev, away_abbrev)
+                dedup_key = game_id if game_id else (home_abbrev, visitor_abbrev)
                 if dedup_key in seen_games:
                     continue
                 seen_games.add(dedup_key)
 
+                game_date_raw = g.get('date') or ''
+                game_date = game_date_raw[:10] if game_date_raw else today_str
+
                 games.append({
                     'game_id': game_id,
                     'home_team_id': home_id,
-                    'away_team_id': away_id,
+                    'away_team_id': visitor_id,
                     'home_team': home_abbrev,
-                    'away_team': away_abbrev,
+                    'away_team': visitor_abbrev,
                     'home_team_name': TEAM_ABBREV_TO_NAME.get(home_abbrev, home_abbrev),
-                    'away_team_name': TEAM_ABBREV_TO_NAME.get(away_abbrev, away_abbrev),
-                    'game_date': str(row.get('GAME_DATE_EST', datetime.now().strftime('%Y-%m-%d')))[:10],
-                    'game_time': str(row.get('GAME_STATUS_TEXT', '')),
-                    'status': int(status),
+                    'away_team_name': TEAM_ABBREV_TO_NAME.get(visitor_abbrev, visitor_abbrev),
+                    'game_date': game_date,
+                    'game_time': str(g.get('time') or ''),
+                    'status': status,
                 })
 
             CacheManager.set('game_pred', games, 'todays_games')
@@ -306,7 +314,11 @@ class GamePredictor:
             return []
 
     def get_team_stats(self, season='2025-26'):
-        """Get advanced team stats (off/def ratings, pace, net rating)."""
+        """Get advanced team stats via BallDontLie API."""
+        if not season or '-' not in season:
+            print(f"  ⚠️ Invalid season format '{season}', expected 'YYYY-YY'")
+            return {}
+
         if self._team_stats_cache is not None:
             return self._team_stats_cache
 
@@ -316,65 +328,90 @@ class GamePredictor:
             return cached
 
         try:
-            def fetch_advanced():
-                return leaguedashteamstats.LeagueDashTeamStats(
-                    season=season,
-                    measure_type_detailed_defense='Advanced',
-                    per_mode_detailed='PerGame'
-                ).get_data_frames()[0]
+            season_int = int(season.split('-')[0])
+            bdl = get_bdl_client()
+            team_mapper = get_team_mapper()
 
-            adv_df = retry_api_call(fetch_advanced)
-            time.sleep(0.6)
+            def fetch_advanced():
+                return bdl.get_team_season_averages("general", "advanced", season_int)
 
             def fetch_base():
-                return leaguedashteamstats.LeagueDashTeamStats(
-                    season=season,
-                    measure_type_detailed_defense='Base',
-                    per_mode_detailed='PerGame'
-                ).get_data_frames()[0]
+                return bdl.get_team_season_averages("general", "base", season_int)
 
-            base_df = retry_api_call(fetch_base)
-            time.sleep(0.6)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                f_adv = pool.submit(fetch_advanced)
+                f_base = pool.submit(fetch_base)
+                exc_adv = f_adv.exception()
+                if exc_adv is not None:
+                    print(f"  ⚠️ Advanced team stats fetch failed: {exc_adv}")
+                adv_list = f_adv.result() if exc_adv is None else []
+
+                exc_base = f_base.exception()
+                if exc_base is not None:
+                    print(f"  ⚠️ Base team stats fetch failed: {exc_base}")
+                base_list = f_base.result() if exc_base is None else []
 
             team_data = {}
 
-            for _, row in adv_df.iterrows():
-                abbrev = row.get('TEAM_ABBREVIATION')
+            for entry in (adv_list or []):
+                team_obj = entry.get('team') or {}
+                abbrev = str(team_obj.get('abbreviation') or '').upper()
                 if not abbrev:
-                    name = row.get('TEAM_NAME', '')
-                    abbrev = TEAM_NAME_TO_ABBREV.get(name)
+                    bdl_tid = team_obj.get('id')
+                    if bdl_tid is not None:
+                        abbrev = team_mapper.bdl_id_to_abbrev(int(bdl_tid)) or ''
                 if not abbrev:
                     continue
+
+                stats = entry.get('stats') or {}
+                off_rating = _safe_float(stats.get('off_rating'), 110)
+                def_rating = _safe_float(stats.get('def_rating'), 110)
+                net_rating = _safe_float(stats.get('net_rating'), 0)
+                pace = _safe_float(stats.get('pace'), 100)
+                opp_pts = round(def_rating * pace / 100, 1)
 
                 team_data[abbrev] = {
-                    'off_rating': row.get('OFF_RATING', 110),
-                    'def_rating': row.get('DEF_RATING', 110),
-                    'net_rating': row.get('NET_RATING', 0),
-                    'pace': row.get('PACE', 100),
+                    'off_rating': off_rating,
+                    'def_rating': def_rating,
+                    'net_rating': net_rating,
+                    'pace': pace,
+                    'opp_pts': opp_pts,
                 }
 
-            for _, row in base_df.iterrows():
-                abbrev = row.get('TEAM_ABBREVIATION')
+            for entry in (base_list or []):
+                team_obj = entry.get('team') or {}
+                abbrev = str(team_obj.get('abbreviation') or '').upper()
                 if not abbrev:
-                    name = row.get('TEAM_NAME', '')
-                    abbrev = TEAM_NAME_TO_ABBREV.get(name)
-                if not abbrev or abbrev not in team_data:
+                    bdl_tid = team_obj.get('id')
+                    if bdl_tid is not None:
+                        abbrev = team_mapper.bdl_id_to_abbrev(int(bdl_tid)) or ''
+                if not abbrev:
                     continue
 
+                stats = entry.get('stats') or {}
+
+                if abbrev not in team_data:
+                    team_data[abbrev] = {
+                        'off_rating': 110, 'def_rating': 110, 'net_rating': 0,
+                        'pace': 100, 'opp_pts': 110,
+                    }
+
                 team_data[abbrev].update({
-                    'w': row.get('W', 0),
-                    'l': row.get('L', 0),
-                    'pts': row.get('PTS', 110),
-                    'opp_pts': row.get('OPP_PTS', 110),
-                    'reb': row.get('REB', 44),
-                    'ast': row.get('AST', 24),
-                    'stl': row.get('STL', 7),
-                    'blk': row.get('BLK', 5),
-                    'tov': row.get('TOV', 14),
-                    'fg_pct': row.get('FG_PCT', 0.46),
-                    'fg3_pct': row.get('FG3_PCT', 0.36),
-                    'ft_pct': row.get('FT_PCT', 0.78),
+                    'w': _safe_int(stats.get('w') or stats.get('wins'), 0),
+                    'l': _safe_int(stats.get('l') or stats.get('losses'), 0),
+                    'pts': _safe_float(stats.get('pts'), 110),
+                    'reb': _safe_float(stats.get('reb'), 44),
+                    'ast': _safe_float(stats.get('ast'), 24),
+                    'stl': _safe_float(stats.get('stl'), 7),
+                    'blk': _safe_float(stats.get('blk'), 5),
+                    'tov': _safe_float(stats.get('tov'), 14),
+                    'fg_pct': _safe_float(stats.get('fg_pct'), 0.46),
+                    'fg3_pct': _safe_float(stats.get('fg3_pct'), 0.36),
+                    'ft_pct': _safe_float(stats.get('ft_pct'), 0.78),
                 })
+                # opp_pts from advanced stats; if not available use pts as proxy
+                if 'opp_pts' not in team_data[abbrev]:
+                    team_data[abbrev]['opp_pts'] = team_data[abbrev].get('pts', 110)
 
             CacheManager.set('game_pred_team', team_data, season)
             self._team_stats_cache = team_data
@@ -385,7 +422,18 @@ class GamePredictor:
             return {}
 
     def get_team_game_log(self, team_id, season='2025-26'):
-        """Get a team's game log for the season."""
+        """Get a team's game log via BallDontLie API.
+
+        team_id is a BDL team ID (as returned by get_todays_games / team_abbrev_to_id).
+        Returns DataFrame with PTS, WL, MATCHUP, PLUS_MINUS, TEAM_ABBREVIATION, GAME_DATE, GAME_ID.
+        """
+        if team_id is None:
+            return pd.DataFrame()
+
+        if not season or '-' not in season:
+            print(f"  ⚠️ Invalid season format '{season}', expected 'YYYY-YY'")
+            return pd.DataFrame()
+
         cache_key = f"{team_id}_{season}"
         if cache_key in self._team_game_logs_cache:
             return self._team_game_logs_cache[cache_key]
@@ -396,18 +444,71 @@ class GamePredictor:
             return cached
 
         try:
-            def fetch_log():
-                return teamgamelog.TeamGameLog(
-                    team_id=team_id,
-                    season=season
-                ).get_data_frames()[0]
+            season_int = int(season.split('-')[0])
+            bdl = get_bdl_client()
+            team_mapper = get_team_mapper()
+            team_abbrev = team_mapper.bdl_id_to_abbrev(int(team_id)) or ''
 
-            df = retry_api_call(fetch_log)
-            time.sleep(0.5)
+            raw_games = bdl.get_games(team_ids=[int(team_id)], seasons=[season_int])
 
-            if not df.empty:
-                df['GAME_DATE'] = pd.to_datetime(df['GAME_DATE'])
-                df = df.sort_values('GAME_DATE')
+            if not raw_games:
+                return pd.DataFrame()
+
+            rows = []
+            for g in raw_games:
+                game_status = str(g.get('status') or '').lower()
+                if game_status != 'final':
+                    continue  # Skip non-final games
+
+                home = g.get('home_team') or {}
+                visitor = g.get('visitor_team') or {}
+                home_bdl_id = home.get('id')
+                visitor_bdl_id = visitor.get('id')
+                if home_bdl_id is None or visitor_bdl_id is None:
+                    continue
+                home_abbrev = str(home.get('abbreviation') or '').upper()
+                visitor_abbrev = str(visitor.get('abbreviation') or '').upper()
+                home_score = g.get('home_team_score')
+                visitor_score = g.get('visitor_team_score')
+
+                is_home = (home_bdl_id == int(team_id))
+                team_pts = home_score if is_home else visitor_score
+                opp_pts = visitor_score if is_home else home_score
+
+                if team_pts is None or opp_pts is None:
+                    continue
+
+                team_pts = _safe_int(team_pts, None)
+                opp_pts = _safe_int(opp_pts, None)
+                if team_pts is None or opp_pts is None:
+                    continue
+
+                if is_home:
+                    matchup = f"{team_abbrev} vs. {visitor_abbrev}"
+                    wl = 'W' if team_pts > opp_pts else 'L'
+                else:
+                    matchup = f"{team_abbrev} @ {home_abbrev}"
+                    wl = 'W' if team_pts > opp_pts else 'L'
+
+                game_date_raw = g.get('date') or ''
+                game_date = game_date_raw[:10] if game_date_raw else ''
+
+                rows.append({
+                    'GAME_ID': g.get('id'),
+                    'GAME_DATE': game_date,
+                    'TEAM_ABBREVIATION': team_abbrev,
+                    'MATCHUP': matchup,
+                    'WL': wl,
+                    'PTS': team_pts,
+                    'PLUS_MINUS': team_pts - opp_pts,
+                })
+
+            if not rows:
+                return pd.DataFrame()
+
+            df = pd.DataFrame(rows)
+            df['GAME_DATE'] = pd.to_datetime(df['GAME_DATE'])
+            df = df.sort_values('GAME_DATE')
 
             CacheManager.set('game_pred_log', df, team_id, season)
             self._team_game_logs_cache[cache_key] = df
@@ -425,7 +526,11 @@ class GamePredictor:
         return self._injuries_cache
 
     def get_top_scorers(self, season='2025-26'):
-        """Get top 2 scorers per team for injury impact assessment."""
+        """Get top 2 scorers per team via BallDontLie season averages."""
+        if not season or '-' not in season:
+            print(f"  ⚠️ Invalid season format '{season}', expected 'YYYY-YY'")
+            return {}
+
         if self._top_scorers_cache is not None:
             return self._top_scorers_cache
 
@@ -435,27 +540,40 @@ class GamePredictor:
             return cached
 
         try:
-            def fetch_player_stats():
-                return leaguedashplayerstats.LeagueDashPlayerStats(
-                    season=season,
-                    per_mode_detailed='PerGame'
-                ).get_data_frames()[0]
+            season_int = int(season.split('-')[0])
+            bdl = get_bdl_client()
+            team_mapper = get_team_mapper()
 
-            df = retry_api_call(fetch_player_stats)
-            time.sleep(0.6)
+            # BDL /v1/season_averages returns player season averages
+            raw_avgs = bdl.get_season_averages("general", "base", season_int)
+
+            # raw_avgs is a list of {player: {..., team: {abbreviation}}, stats: {pts, ...}}
+            # Build per-team player list
+            team_players: dict = {}
+            for entry in (raw_avgs or []):
+                player_obj = entry.get('player') or {}
+                team_obj = player_obj.get('team') or entry.get('team') or {}
+                abbrev = str(team_obj.get('abbreviation') or '').upper()
+                if not abbrev:
+                    continue
+                stats = entry.get('stats') or {}
+                pts = _safe_float(stats.get('pts'), 0)
+                player_name = f"{(player_obj.get('first_name') or '').strip()} {(player_obj.get('last_name') or '').strip()}".strip()
+                bdl_pid = player_obj.get('id')
+
+                if abbrev not in team_players:
+                    team_players[abbrev] = []
+                team_players[abbrev].append({
+                    'name': player_name,
+                    'pts': pts,
+                    'player_id': bdl_pid,
+                })
 
             top_scorers = {}
             for abbrev in TEAM_ABBREV_TO_NAME:
-                team_players = df[df['TEAM_ABBREVIATION'] == abbrev]
-                top2 = team_players.nlargest(2, 'PTS')
-                top_scorers[abbrev] = [
-                    {
-                        'name': row['PLAYER_NAME'],
-                        'pts': row['PTS'],
-                        'player_id': row['PLAYER_ID'],
-                    }
-                    for _, row in top2.iterrows()
-                ]
+                players = team_players.get(abbrev, [])
+                sorted_players = sorted(players, key=lambda x: x['pts'], reverse=True)
+                top_scorers[abbrev] = sorted_players[:2]
 
             CacheManager.set('game_pred_scorers', top_scorers, season)
             self._top_scorers_cache = top_scorers
@@ -1243,28 +1361,79 @@ class GamePredictor:
     # ── Model Training ─────────────────────────────────────────
 
     def _get_historical_games(self, seasons=None):
-        """Fetch historical game data for training."""
+        """Fetch historical game data via BallDontLie API."""
         if seasons is None:
             seasons = ['2024-25', '2023-24', '2022-23']
 
         all_games = []
 
         for season in seasons:
+            if not season or '-' not in season:
+                print(f"  ⚠️ Invalid season format '{season}', skipping")
+                continue
             print(f"  Fetching {season} games...")
             try:
-                def fetch_games():
-                    return leaguegamefinder.LeagueGameFinder(
-                        season_nullable=season,
-                        season_type_nullable='Regular Season',
-                        league_id_nullable='00',
-                    ).get_data_frames()[0]
+                season_int = int(season.split('-')[0])
+                bdl = get_bdl_client()
 
-                df = retry_api_call(fetch_games)
-                time.sleep(0.6)
+                raw_games = bdl.get_games(seasons=[season_int])
 
-                if not df.empty:
-                    df['SEASON'] = season
+                if not raw_games:
+                    continue
+
+                rows = []
+                for g in raw_games:
+                    game_status = str(g.get('status') or '').lower()
+                    if game_status != 'final':
+                        continue
+
+                    home = g.get('home_team') or {}
+                    visitor = g.get('visitor_team') or {}
+                    home_abbrev = str(home.get('abbreviation') or '').upper()
+                    visitor_abbrev = str(visitor.get('abbreviation') or '').upper()
+                    home_score = g.get('home_team_score')
+                    visitor_score = g.get('visitor_team_score')
+
+                    if not home_abbrev or not visitor_abbrev:
+                        continue
+                    if home_score is None or visitor_score is None:
+                        continue
+
+                    home_score = _safe_int(home_score, None)
+                    visitor_score = _safe_int(visitor_score, None)
+                    if home_score is None or visitor_score is None:
+                        continue
+                    game_id = g.get('id')
+                    game_date_raw = g.get('date') or ''
+                    game_date = game_date_raw[:10] if game_date_raw else ''
+
+                    # Home team row
+                    rows.append({
+                        'GAME_ID': game_id,
+                        'GAME_DATE': game_date,
+                        'TEAM_ABBREVIATION': home_abbrev,
+                        'MATCHUP': f"{home_abbrev} vs. {visitor_abbrev}",
+                        'WL': 'W' if home_score > visitor_score else 'L',
+                        'PTS': home_score,
+                        'PLUS_MINUS': home_score - visitor_score,
+                        'SEASON': season,
+                    })
+                    # Away team row
+                    rows.append({
+                        'GAME_ID': game_id,
+                        'GAME_DATE': game_date,
+                        'TEAM_ABBREVIATION': visitor_abbrev,
+                        'MATCHUP': f"{visitor_abbrev} @ {home_abbrev}",
+                        'WL': 'W' if visitor_score > home_score else 'L',
+                        'PTS': visitor_score,
+                        'PLUS_MINUS': visitor_score - home_score,
+                        'SEASON': season,
+                    })
+
+                if rows:
+                    df = pd.DataFrame(rows)
                     all_games.append(df)
+                    print(f"  {season}: {len(rows)//2} games")
 
             except Exception as e:
                 print(f"  Error fetching {season}: {e}")

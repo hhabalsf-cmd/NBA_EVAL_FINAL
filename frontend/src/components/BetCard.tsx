@@ -1,13 +1,15 @@
-import { ArrowRight } from 'lucide-react'
+import { ArrowRight, Bookmark } from 'lucide-react'
 import { BestBet } from '../api/client'
 import { useNavigate } from 'react-router-dom'
 
 interface BetCardProps {
   bet: BestBet
   rank?: number
+  onSave?: () => void
+  isSaving?: boolean
 }
 
-export default function BetCard({ bet, rank }: BetCardProps) {
+export default function BetCard({ bet, rank, onSave, isSaving }: BetCardProps) {
   const navigate = useNavigate()
   const isOver = bet.direction === 'OVER'
 
@@ -42,7 +44,9 @@ export default function BetCard({ bet, rank }: BetCardProps) {
 
       <div className="flex items-baseline gap-3 mb-5">
         <div>
-          <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Line</div>
+          <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">
+            Line{bet.line_is_real === false && <span className="ml-1 text-text-muted/60 normal-case">(avg)</span>}
+          </div>
           <div className="font-mono text-lg font-semibold text-text-primary">
             {bet.stat} {bet.line}
           </div>
@@ -81,6 +85,22 @@ export default function BetCard({ bet, rank }: BetCardProps) {
             />
           </div>
         </div>
+      )}
+
+      {onSave && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            onSave()
+          }}
+          disabled={isSaving}
+          className="mt-4 w-full flex items-center justify-center gap-1.5 py-2 text-xs font-medium rounded-lg
+                     bg-accent/10 text-accent hover:bg-accent/20 transition-colors
+                     disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <Bookmark className="w-3.5 h-3.5" />
+          {isSaving ? 'Saving...' : 'Save Pick'}
+        </button>
       )}
     </div>
   )

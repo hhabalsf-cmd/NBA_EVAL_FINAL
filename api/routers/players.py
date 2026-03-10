@@ -29,6 +29,7 @@ from ..schemas.prediction import (
     PlayerResearchResponse,
 )
 from ..services.prediction_service import PredictionService
+from bdl_id_mapper import get_team_mapper
 
 router = APIRouter(prefix="/api/players", tags=["players"])
 
@@ -360,14 +361,13 @@ async def get_player_research(request: Request, player_name: str):
             if not team_abbrev:
                 team_abbrev = team_abbrev_from_log
             try:
-                from nba_api.stats.static import teams as nba_teams_static
-                team_list = nba_teams_static.get_teams()
-                team_match = next((t for t in team_list if t['abbreviation'] == team_abbrev_from_log), None)
-                if team_match:
+                team_mapper = get_team_mapper()
+                bdl_team_id = team_mapper.abbrev_to_bdl_id(team_abbrev_from_log)
+                if bdl_team_id is not None:
                     player_info = dict(player_info)
-                    player_info['team_id'] = team_match['id']
+                    player_info['team_id'] = bdl_team_id
                     if not player_info.get('team_abbrev'):
-                        player_info['team_abbrev'] = team_match['abbreviation']
+                        player_info['team_abbrev'] = team_abbrev_from_log
             except Exception as e:
                 logger.debug("Team ID enrichment failed for %s: %s", team_abbrev_from_log, e)
 
