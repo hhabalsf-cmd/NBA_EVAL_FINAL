@@ -723,8 +723,11 @@ class NBADataScraper:
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
                 f_advanced = pool.submit(fetch_advanced)
                 f_base = pool.submit(fetch_base)
-                advanced_list = f_advanced.result() if f_advanced.exception() is None else []
-                base_list = f_base.result() if f_base.exception() is None else []
+                advanced_list = f_advanced.result()
+                base_list = f_base.result()
+
+            if not advanced_list or not base_list:
+                raise ValueError("BDL API returned empty stats for team defensive averages")
 
             team_data = {}
 
