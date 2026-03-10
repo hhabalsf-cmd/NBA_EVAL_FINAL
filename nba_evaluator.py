@@ -499,7 +499,7 @@ class NBADataScraper:
             'fg3m': 'FG3M', 'fg3a': 'FG3A', 'fg3_pct': 'FG3_PCT',
             'ftm': 'FTM', 'fta': 'FTA', 'ft_pct': 'FT_PCT',
             'oreb': 'OREB', 'dreb': 'DREB', 'stl': 'STL', 'blk': 'BLK',
-            'tov': 'TOV', 'pf': 'PF', 'plus_minus': 'PLUS_MINUS',
+            'turnover': 'TOV', 'pf': 'PF', 'plus_minus': 'PLUS_MINUS',
         }
 
         rows = []
@@ -514,10 +514,12 @@ class NBADataScraper:
             player_team_obj_abbrev = str(player_team_obj.get('abbreviation') or '').upper()
             player_team_abbrev = stat_team_abbrev or player_team_obj_abbrev
 
-            home_team_obj = game_obj.get('home_team') or {}
-            visitor_team_obj = game_obj.get('visitor_team') or {}
-            home_abbrev = str(home_team_obj.get('abbreviation') or '').upper()
-            visitor_abbrev = str(visitor_team_obj.get('abbreviation') or '').upper()
+            # /v1/stats game objects have home_team_id/visitor_team_id (integers),
+            # not nested team objects — use team_mapper to resolve abbreviations.
+            home_team_id = game_obj.get('home_team_id')
+            visitor_team_id = game_obj.get('visitor_team_id')
+            home_abbrev = (team_mapper.bdl_id_to_abbrev(int(home_team_id)) or '') if home_team_id is not None else ''
+            visitor_abbrev = (team_mapper.bdl_id_to_abbrev(int(visitor_team_id)) or '') if visitor_team_id is not None else ''
 
             # Derive GAME_DATE from game.date
             game_date_raw = game_obj.get('date') or ''

@@ -265,7 +265,10 @@ class BDLPlayerMapper:
             return None
 
     def _match_name_in_game_logs(self, full_name: str) -> int | None:
-        """Find a nba.com player_id in player_game_logs by normalized name match.
+        """Find a nba.com player_id by normalized name match in player_id_map.
+
+        player_game_logs does not store player_name; fall back to searching
+        player_id_map by full_name for previously-cached mappings.
 
         Raises on DB errors so callers can distinguish transient failures from
         a confirmed no-match (returns None).
@@ -275,30 +278,34 @@ class BDLPlayerMapper:
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT player_id FROM player_game_logs "
-                    "WHERE lower(regexp_replace(trim(player_name), '\\s+', ' ', 'g')) = %s LIMIT 1",
+                    "SELECT nba_id FROM player_id_map "
+                    "WHERE lower(regexp_replace(trim(full_name), '\\s+', ' ', 'g')) = %s "
+                    "AND nba_id IS NOT NULL LIMIT 1",
                     (norm,),
                 )
                 row = cur.fetchone()
                 if row:
-                    return int(row["player_id"])
+                    return int(row["nba_id"])
         finally:
             conn.close()
         return None
 
     def _fetch_all_nba_players_from_logs(self) -> list[tuple[int, str]]:
-        """Return list of (player_id, player_name) from player_game_logs."""
+        """Return list of (nba_id, full_name) from player_id_map (already-cached mappings).
+
+        player_game_logs does not store player_name so we use player_id_map instead.
+        """
         try:
             conn = self._get_conn()
             try:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "SELECT DISTINCT player_id, player_name "
-                        "FROM player_game_logs "
-                        "WHERE player_id IS NOT NULL AND player_name IS NOT NULL"
+                        "SELECT DISTINCT nba_id, full_name "
+                        "FROM player_id_map "
+                        "WHERE nba_id IS NOT NULL AND full_name IS NOT NULL"
                     )
                     rows = cur.fetchall()
-                    return [(int(r["player_id"]), str(r["player_name"])) for r in rows]
+                    return [(int(r["nba_id"]), str(r["full_name"])) for r in rows]
             finally:
                 conn.close()
         except Exception as exc:
