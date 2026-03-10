@@ -425,9 +425,14 @@ class NBADataScraper:
         if seasons is None:
             seasons = [CURRENT_SEASON, '2024-25', '2023-24']
 
-        # Resolve BDL player ID once — player_id is nba.com ID coming in
+        # Resolve BDL player ID. player_id is normally an nba.com ID, but
+        # search_players falls back to using the BDL ID directly when no NBA
+        # mapping exists — in that case nba_to_bdl returns None and we use
+        # player_id itself as the BDL ID.
         player_mapper = get_player_mapper()
         bdl_id = player_mapper.nba_to_bdl(int(player_id))
+        if bdl_id is None:
+            bdl_id = int(player_id)
 
         all_games = []
 
