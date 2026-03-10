@@ -4,8 +4,9 @@ import json
 import sys
 import time
 import unicodedata
+from collections import defaultdict
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, Generator
 import asyncio
@@ -24,6 +25,121 @@ def _load_nba_evaluator():
         import nba_evaluator as _mod
         _nba_ev = _mod
     return _nba_ev
+
+
+# BDL prop_type value -> our stat abbreviation
+_BDL_PROP_TYPE_MAP: Dict[str, str] = {
+    "points": "PTS",
+    "rebounds": "REB",
+    "assists": "AST",
+    "steals": "STL",
+    "blocks": "BLK",
+    "turnovers": "TOV",
+    "three_point_field_goals_made": "FG3M",
+    "pts_reb_ast": "PRA",
+    "pts_reb": "PR",
+    "pts_ast": "PA",
+    "reb_ast": "RA",
+    "blocks_steals": "BS",
+    "minutes": "MIN",
+}
+
+
+def _fetch_bdl_todays_props() -> list:
+    """Fetch today's player props from BDL odds endpoint.
+
+    Returns a list of dicts with keys:
+        player, stat, consensus_line, home_team, away_team
+    Drop-in replacement for the old OddsAPI.get_all_todays_props().
+    """
+    import db as _db
+    from bdl_client import get_bdl_client
+
+    today = date.today().strftime("%Y-%m-%d")
+    bdl = get_bdl_client()
+
+    try:
+        games = bdl.get_games(dates=[today])
+    except Exception:
+        return []
+
+    if not games:
+        return []
+
+    # Build game_id -> {home_team, away_team} lookup
+    game_info: Dict[int, Dict[str, str]] = {}
+    for g in games:
+        gid = g.get("id")
+        if not gid:
+            continue
+        home = (g.get("home_team") or {}).get("abbreviation", "")
+        away = (g.get("visitor_team") or {}).get("abbreviation", "")
+        game_info[gid] = {"home_team": home, "away_team": away}
+
+    # Fetch raw props for every game
+    raw_props: list = []
+    for gid in game_info:
+        try:
+            raw_props.extend(bdl.get_player_props(gid))
+        except Exception:
+            pass
+
+    if not raw_props:
+        return []
+
+    # Resolve player_id -> player_name from our local db
+    try:
+        conn = _db.get_connection()
+        pid_to_name: Dict[str, str] = {}
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT DISTINCT player_id, player_name FROM player_game_logs "
+                    "WHERE player_name IS NOT NULL AND player_id IS NOT NULL"
+                )
+                for row in cur.fetchall():
+                    pid_to_name[str(row["player_id"])] = row["player_name"]
+        finally:
+            conn.close()
+    except Exception:
+        pid_to_name = {}
+
+    # Group lines by (player_id, stat, game_id) across vendors
+    grouped: Dict[tuple, list] = defaultdict(list)
+    for prop in raw_props:
+        pid = str(prop.get("player_id") or "")
+        ptype = prop.get("prop_type", "")
+        stat = _BDL_PROP_TYPE_MAP.get(ptype)
+        gid = prop.get("game_id")
+        line_val = prop.get("line_value")
+        if not pid or not stat or line_val is None:
+            continue
+        try:
+            grouped[(pid, stat, gid)].append(float(line_val))
+        except (ValueError, TypeError):
+            pass
+
+    result: list = []
+    seen: set = set()  # deduplicate (player, stat) — keep first game encountered
+    for (pid, stat, gid), lines in grouped.items():
+        key = (pid, stat)
+        if key in seen:
+            continue
+        name = pid_to_name.get(pid)
+        if not name:
+            continue
+        consensus_line = max(set(lines), key=lines.count)
+        info = game_info.get(gid or 0, {})
+        result.append({
+            "player": name,
+            "stat": stat,
+            "consensus_line": consensus_line,
+            "home_team": info.get("home_team", ""),
+            "away_team": info.get("away_team", ""),
+        })
+        seen.add(key)
+
+    return result
 
 
 PRED_CACHE_DIR = Path("./cache/predictions")
@@ -106,13 +222,12 @@ class PredictionService:
 
     def get_player_odds(self, player_name: str) -> Dict:
         """Return today's consensus prop lines for *player_name* (30-min cache)."""
-        ev = _load_nba_evaluator()
         now = time.time()
 
         # Refresh cache if stale
         if self._odds_cache is None or (now - self._odds_cache_time) > self._ODDS_CACHE_TTL:
             try:
-                props = ev.OddsAPI().get_all_todays_props()
+                props = _fetch_bdl_todays_props()
             except Exception:
                 props = []
             # Build lookup: normalized_name -> {stat -> line}
@@ -240,10 +355,8 @@ class PredictionService:
     def search_players(self, query: str) -> list:
         """Search for players by name via BDL API (FREE tier)."""
         from bdl_client import get_bdl_client
-        from bdl_id_mapper import get_player_mapper
 
         bdl = get_bdl_client()
-        player_mapper = get_player_mapper()
 
         try:
             results = bdl.get_players(search=query, per_page=20)
@@ -263,13 +376,12 @@ class PredictionService:
                 continue
             team = p.get('team') or {}
             team_abbrev = str(team.get('abbreviation') or '').upper()
-
-            # Prefer NBA ID if mapped; fall back to BDL ID so predictions still work
-            nba_id = player_mapper.bdl_to_nba(int(bdl_id), full_name)
-            resolved_id = nba_id if nba_id is not None else int(bdl_id)
+            # Skip players not on an active roster (retired / unsigned)
+            if not team_abbrev:
+                continue
 
             players.append({
-                'id': resolved_id,
+                'id': int(bdl_id),
                 'full_name': full_name,
                 'first_name': first,
                 'last_name': last,
@@ -622,16 +734,12 @@ class BestBetsService:
     """Service for finding best betting opportunities."""
 
     def __init__(self):
-        ev = _load_nba_evaluator()
-        self.odds_api = ev.OddsAPI()
         self.prediction_service = PredictionService()
 
     async def get_todays_best_bets(self, min_edge: float = 5.0, limit: int = 10) -> Dict:
         """Find the best betting opportunities for today's games."""
-        from datetime import datetime
-
-        # Get today's props from Odds API
-        props = self.odds_api.get_all_todays_props()
+        # Get today's props from BDL odds
+        props = _fetch_bdl_todays_props()
 
         if not props:
             return {
