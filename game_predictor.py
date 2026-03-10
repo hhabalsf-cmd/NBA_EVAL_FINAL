@@ -1780,6 +1780,14 @@ class GamePredictor:
             if not isinstance(loaded_model, GameStackingModel):
                 print(f"Stale model architecture ({type(loaded_model).__name__}); retraining...")
                 return False
+            # Also validate internal consistency: meta_learner must expect exactly
+            # len(base_models_) features (one per base model's OOF probability)
+            n_base = len(loaded_model.base_models_)
+            n_meta = getattr(loaded_model.meta_learner_, 'n_features_in_', n_base)
+            if n_meta != n_base:
+                print(f"Stale stacking model: {n_base} base models but meta_learner "
+                      f"expects {n_meta} features; retraining...")
+                return False
             self.model = loaded_model
             self.scaler = data['scaler']
             self.feature_names = data['feature_names']

@@ -405,11 +405,9 @@ class PredictionService:
         """Search for players by name using the local active players cache.
         This provides instant, fuzzy matching and strictly returns current rotation players.
         """
-        import sleeper_client
-        
         if not query or not query.strip():
             return []
-            
+
         active_players = self._get_current_season_players()
         results = []
         normalized_query = self._normalize_name(query)
@@ -420,14 +418,14 @@ class PredictionService:
             norm_name = p.get('normalized_full_name') or self._normalize_name(p['full_name'])
             if all(term in norm_name for term in search_terms):
                 results.append({
-                    'id': p.get('bdl_id', p['id']), # try to send correct downstream id
+                    'id': p.get('bdl_id', p['id']),
                     'full_name': p['full_name'],
                     'first_name': p.get('first_name', ''),
                     'last_name': p.get('last_name', ''),
-                    'team_id': None, # We don't have this in the cached row immediately
+                    'team_id': None,
                     'team_abbreviation': '',
                     'team_name': '',
-                    'headshot_url': sleeper_client.get_headshot_url(p['full_name']),
+                    'headshot_url': None,  # frontend falls back to NBA CDN via player_id
                 })
 
                 if len(results) >= 10:
@@ -441,13 +439,15 @@ class PredictionService:
 
     def _search_players_bdl_fallback(self, query: str) -> list:
         """Search BallDontLie API directly — used when the local player cache misses a player."""
-        import sleeper_client
         try:
             from bdl_client import get_bdl_client
             bdl = get_bdl_client()
-            players = bdl.get_players(search=query, per_page=10)
+            players = bdl.get_players(search=query, per_page=25)
             results = []
             for p in players:
+                # Skip players not currently on a team (inactive/retired)
+                if not p.get('team'):
+                    continue
                 first = p.get('first_name') or ''
                 last = p.get('last_name') or ''
                 full_name = f"{first} {last}".strip()
@@ -461,7 +461,7 @@ class PredictionService:
                     'team_id': None,
                     'team_abbreviation': (p.get('team') or {}).get('abbreviation', ''),
                     'team_name': (p.get('team') or {}).get('full_name', ''),
-                    'headshot_url': sleeper_client.get_headshot_url(full_name),
+                    'headshot_url': None,
                 })
                 if len(results) >= 10:
                     break
