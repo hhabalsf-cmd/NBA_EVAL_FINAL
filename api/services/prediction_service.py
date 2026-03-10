@@ -262,8 +262,7 @@ class PredictionService:
 
         return {'found': False}
 
-    @staticmethod
-    def _augment_with_nba_api_players(player_list: list) -> list:
+    def _augment_with_nba_api_players(self, player_list: list) -> list:
         """Merge all active players from nba_api into the given list (deduplicated)."""
         try:
             from nba_api.stats.static import players as nba_players
@@ -277,6 +276,7 @@ class PredictionService:
                     player_list.append({
                         'id': 0, # Placeholder for downstream since they have no BDL ID yet
                         'full_name': full_name,
+                        'normalized_full_name': self._normalize_name(full_name),
                         'first_name': parts[0] if parts else '',
                         'last_name': parts[1] if len(parts) > 1 else '',
                         'is_active': True,
@@ -328,6 +328,7 @@ class PredictionService:
                 player_list.append({
                     'id': int(row['id']),
                     'full_name': full_name,
+                    'normalized_full_name': self._normalize_name(full_name),
                     'first_name': parts[0] if parts else '',
                     'last_name': parts[1] if len(parts) > 1 else '',
                     'is_active': True,
@@ -377,6 +378,7 @@ class PredictionService:
                 static.append({
                     'id': int(row['id']),
                     'full_name': full_name,
+                    'normalized_full_name': self._normalize_name(full_name),
                     'first_name': parts[0] if parts else '',
                     'last_name': parts[1] if len(parts) > 1 else '',
                     'is_active': True,
@@ -401,14 +403,15 @@ class PredictionService:
         if not query or not query.strip():
             return []
             
-        search_terms = query.lower().split()
         active_players = self._get_current_season_players()
-        
         results = []
+        normalized_query = self._normalize_name(query)
+        search_terms = normalized_query.split()
+
         for p in active_players:
-            # Check if all search terms are substrings of the full name
-            full_name_lower = p['full_name'].lower()
-            if all(term in full_name_lower for term in search_terms):
+            # Check if all search terms are substrings of the normalized full name
+            norm_name = p.get('normalized_full_name') or self._normalize_name(p['full_name'])
+            if all(term in norm_name for term in search_terms):
                 results.append({
                     'id': p.get('bdl_id', p['id']), # try to send correct downstream id 
                     'full_name': p['full_name'],
@@ -420,7 +423,7 @@ class PredictionService:
                     'headshot_url': sleeper_client.get_headshot_url(p['full_name']),
                 })
                 
-                if len(results) >= 25:
+                if len(results) >= 10:
                     break
                     
         return results
