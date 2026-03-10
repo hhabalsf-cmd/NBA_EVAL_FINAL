@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
+import { useParams, useNavigate, useLocation, Link } from 'react-router-dom'
 import { ArrowLeft, Check, Loader2, Zap, PlaySquare, FlaskConical } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence, type Variants } from 'framer-motion'
@@ -8,7 +8,7 @@ import PredictionCard from '../components/PredictionCard'
 import StatChartModal from '../components/StatChartModal'
 import PlayerSearch from '../components/PlayerSearch'
 import { evaluateLine, createPick, LineEvaluation, getPlayerOdds, getTeamInjuries, TeamInjuryInfo } from '../api/client'
-import { getNbaHeadshotUrl } from '../utils/nba'
+import { getHeadshotUrl } from '../utils/nba'
 
 const STATS = ['PTS', 'REB', 'AST', 'PRA'] as const
 
@@ -30,6 +30,8 @@ const sectionFade: Variants = {
 export default function PlayerPage() {
   const { playerName } = useParams<{ playerName: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
+  const headshotUrl: string | undefined = (location.state as any)?.headshot_url
   const { isLoading, progress, message, result, error, predict } = usePrediction()
 
   const [lineInputs, setLineInputs] = useState<Record<string, string>>({})
@@ -202,10 +204,10 @@ export default function PlayerPage() {
         </div>
         <div className="flex items-center gap-4 sm:gap-5">
           <img
-            src={getNbaHeadshotUrl(result.player_id)}
+            src={getHeadshotUrl(headshotUrl, result.player_id)}
             alt={result.player_name}
             className="w-18 h-18 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-2xl object-cover bg-bg-secondary shadow-lg shadow-black/20 flex-shrink-0"
-            onError={e => { (e.target as HTMLImageElement).src = getNbaHeadshotUrl(0) }}
+            onError={e => { (e.target as HTMLImageElement).src = getHeadshotUrl(undefined, 0) }}
           />
           <div className="flex-1 min-w-0">
             <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-text-primary tracking-tight">{result.player_name}</h1>

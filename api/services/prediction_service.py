@@ -272,15 +272,16 @@ class PredictionService:
             conn = _db.get_connection()
             try:
                 with conn.cursor() as cur:
+                    seasons = (ev.CURRENT_SEASON, ev.HISTORICAL_SEASONS[0])
                     cur.execute(
                         """
                         SELECT DISTINCT player_id AS id,
                                MAX(player_name) AS full_name
                         FROM player_game_logs
-                        WHERE season = %s AND player_name IS NOT NULL
+                        WHERE season = ANY(%s) AND player_name IS NOT NULL
                         GROUP BY player_id
                         """,
-                        (ev.CURRENT_SEASON,),
+                        (list(seasons),),
                     )
                     rows = cur.fetchall()
             finally:
@@ -319,15 +320,18 @@ class PredictionService:
             conn = _db.get_connection()
             try:
                 with conn.cursor() as cur:
+                    # Include current season AND most recent historical season so
+                    # the list is populated even before current-season data accumulates
+                    seasons = (ev.CURRENT_SEASON, ev.HISTORICAL_SEASONS[0])
                     cur.execute(
                         """
                         SELECT DISTINCT player_id AS id,
                                MAX(player_name) AS full_name
                         FROM player_game_logs
-                        WHERE season = %s AND player_name IS NOT NULL
+                        WHERE season = ANY(%s) AND player_name IS NOT NULL
                         GROUP BY player_id
                         """,
-                        (ev.CURRENT_SEASON,),
+                        (list(seasons),),
                     )
                     rows = cur.fetchall()
             finally:

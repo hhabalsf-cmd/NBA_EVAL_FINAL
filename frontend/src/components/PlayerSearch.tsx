@@ -82,7 +82,10 @@ export default function PlayerSearch({
     if (onSelect) {
       onSelect(player)
     } else {
-      navigate(`/player/${encodeURIComponent(player.player_name)}`, { replace })
+      navigate(`/player/${encodeURIComponent(player.player_name)}`, {
+        replace,
+        state: { headshot_url: player.headshot_url },
+      })
     }
   }, [onSelect, navigate])
 
