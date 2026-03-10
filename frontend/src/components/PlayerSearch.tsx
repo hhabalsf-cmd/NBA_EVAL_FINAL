@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Search, ChevronRight, Loader2 } from 'lucide-react'
 import { searchPlayers, PlayerInfo } from '../api/client'
-import { getNbaHeadshotUrl } from '../utils/nba'
+import { getHeadshotUrl } from '../utils/nba'
 
 interface PlayerSearchProps {
   onSelect?: (player: PlayerInfo) => void
@@ -145,7 +145,7 @@ export default function PlayerSearch({
               }`}
             >
               <img
-                src={getNbaHeadshotUrl(player.player_id)}
+                src={getHeadshotUrl(player.headshot_url, player.player_id)}
                 alt=""
                 className="w-10 h-10 rounded-full object-cover bg-bg-secondary flex-shrink-0"
                 onError={e => {

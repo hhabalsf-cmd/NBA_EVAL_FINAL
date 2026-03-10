@@ -355,6 +355,7 @@ class PredictionService:
     def search_players(self, query: str) -> list:
         """Search for players by name via BDL API (FREE tier)."""
         from bdl_client import get_bdl_client
+        import sleeper_client
 
         bdl = get_bdl_client()
 
@@ -363,6 +364,10 @@ class PredictionService:
         except Exception as exc:
             logger.warning("BDL player search failed for %r: %s", query, exc)
             return []
+
+        # Current-season name set for freshness filter (cached 6h, no extra DB hit)
+        current_players = self._get_current_season_players()
+        current_names = {p['full_name'].lower() for p in current_players} if current_players else set()
 
         players = []
         for p in results:
@@ -376,8 +381,11 @@ class PredictionService:
                 continue
             team = p.get('team') or {}
             team_abbrev = str(team.get('abbreviation') or '').upper()
-            # Skip players not on an active roster (retired / unsigned)
+            # Skip players not on an active roster
             if not team_abbrev:
+                continue
+            # Skip players with no current-season game logs
+            if current_names and full_name.lower() not in current_names:
                 continue
 
             players.append({
@@ -388,6 +396,7 @@ class PredictionService:
                 'team_id': team.get('id'),
                 'team_abbreviation': team_abbrev,
                 'team_name': team.get('full_name') or team.get('name') or '',
+                'headshot_url': sleeper_client.get_headshot_url(full_name),
             })
 
         return players[:10]

@@ -52,6 +52,7 @@ export interface PlayerInfo {
   team_id?: number
   team_abbrev?: string
   team_name?: string
+  headshot_url?: string
 }
 
 export interface StatPrediction {

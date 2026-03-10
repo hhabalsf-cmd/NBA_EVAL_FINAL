@@ -12,6 +12,7 @@ class PlayerInfo(BaseModel):
     team_id: Optional[int] = None
     team_abbrev: Optional[str] = None
     team_name: Optional[str] = None
+    headshot_url: Optional[str] = None
 
 
 class PlayerSearchResult(BaseModel):
@@ -209,6 +210,39 @@ class BestBetsResponse(BaseModel):
     bets: List[BestBet]
     generated_at: str
     games_count: int
+
+
+# === Daily Picks Schemas ===
+
+class DailyPick(BaseModel):
+    id: int
+    generated_date: str
+    player: str
+    player_id: Optional[int] = None
+    team_abbrev: Optional[str] = None
+    stat: str
+    prediction: float
+    confidence: Optional[float] = None
+    range_low: Optional[float] = None
+    range_high: Optional[float] = None
+    recent_avg: Optional[float] = None     # L10 avg (proxy line)
+    odds_line: Optional[float] = None      # NULL until new OddsAPI key
+    edge: Optional[float] = None
+    direction: str
+    opponent: Optional[str] = None
+    is_home: Optional[bool] = None
+    matchup: Optional[str] = None
+    game_date: Optional[str] = None
+    model_type: Optional[str] = None
+    prob_over: Optional[float] = None
+    rank: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+
+class DailyPicksResponse(BaseModel):
+    picks: List[DailyPick]
+    generated_at: str
+    date: str
 
 
 # === SSE Progress Events ===

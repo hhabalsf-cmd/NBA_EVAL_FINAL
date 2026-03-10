@@ -56,7 +56,8 @@ async def search_players(request: Request, q: str = Query(..., min_length=2, des
                 player_name=p['full_name'],
                 team_id=p.get('team_id'),
                 team_abbrev=p.get('team_abbreviation'),
-                team_name=p.get('team_name')
+                team_name=p.get('team_name'),
+                headshot_url=p.get('headshot_url'),
             )
             for p in players
         ]
