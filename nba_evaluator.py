@@ -29,13 +29,6 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 
-# NBA API (remaining endpoints not yet migrated)
-from nba_api.stats.endpoints import (
-    teamgamelog,
-    playerdashboardbygeneralsplits,
-    teamdashboardbygeneralsplits,
-)
-
 # BallDontLie API client and ID mappers
 from bdl_client import get_bdl_client
 from bdl_id_mapper import get_team_mapper, get_player_mapper
@@ -125,10 +118,6 @@ CACHE_EXPIRY = {
     'league_avg': 3600,        # 1 hour
 }
 
-# API retry configuration
-MAX_RETRIES = 3
-RETRY_DELAY = 2  # seconds
-
 # Team name mappings
 TEAM_ABBREV_TO_NAME = {
     'ATL': 'Atlanta Hawks', 'BOS': 'Boston Celtics', 'BKN': 'Brooklyn Nets',
@@ -184,21 +173,6 @@ class CacheManager:
                 pickle.dump({'timestamp': datetime.now(), 'data': data}, f)
         except Exception:
             pass
-
-
-def retry_api_call(func, *args, max_retries=MAX_RETRIES, **kwargs):
-    """Retry API calls with exponential backoff"""
-    last_error = None
-    for attempt in range(max_retries):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            last_error = e
-            if attempt < max_retries - 1:
-                wait_time = RETRY_DELAY * (2 ** attempt)
-                print(f"  ⚠️ API call failed, retrying in {wait_time}s... ({attempt + 1}/{max_retries})")
-                time.sleep(wait_time)
-    raise last_error
 
 
 def _safe_float(val, default: float) -> float:
@@ -714,8 +688,8 @@ class NBADataScraper:
                 return bdl.get_team_season_averages("general", "base", season_int)
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-                f_advanced = pool.submit(retry_api_call, fetch_advanced)
-                f_base = pool.submit(retry_api_call, fetch_base)
+                f_advanced = pool.submit(fetch_advanced)
+                f_base = pool.submit(fetch_base)
                 advanced_list = f_advanced.result() if f_advanced.exception() is None else []
                 base_list = f_base.result() if f_base.exception() is None else []
 
@@ -920,7 +894,7 @@ class OddsAPI:
             game_time = event['commence_time']
 
             print(f"   Fetching props: {away_team} @ {home_team}")
-            time.sleep(0.3)  # Rate limiting
+            time.sleep(0.3)
 
             props_data = self.get_player_props(event_id)
             if not props_data or 'bookmakers' not in props_data:

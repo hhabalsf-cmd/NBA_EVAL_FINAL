@@ -58,7 +58,6 @@ except ImportError:
 # Reuse from existing evaluator
 from nba_evaluator import (
     CacheManager,
-    retry_api_call,
     NBADataScraper,
     TEAM_ABBREV_TO_NAME,
     TEAM_NAME_TO_ABBREV,
