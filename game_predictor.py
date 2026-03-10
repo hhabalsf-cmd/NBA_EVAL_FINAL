@@ -214,7 +214,7 @@ class GameStackingModel:
         for _, model in self.base_models_:
             proba = model.predict_proba(X)
             base_probas.append(proba[:, 1])
-        meta_X = np.column_stack(base_probas + [X])
+        meta_X = np.column_stack(base_probas)
         return self.meta_learner_.predict_proba(meta_X)
 
     def predict(self, X):
@@ -376,6 +376,13 @@ class GamePredictor:
                     'net_rating': net_rating,
                     'pace': pace,
                     'opp_pts': opp_pts,
+                    # Four Factors from BDL advanced stats
+                    'efg_pct': _safe_float(stats.get('efg_pct'), 0.50),
+                    'ts_pct': _safe_float(stats.get('ts_pct'), 0.56),
+                    'ast_pct': _safe_float(stats.get('ast_pct'), 0.60),
+                    'tov_pct': _safe_float(stats.get('tov_pct'), 14.0),
+                    'oreb_pct': _safe_float(stats.get('oreb_pct'), 0.27),
+                    'dreb_pct': _safe_float(stats.get('dreb_pct'), 0.73),
                 }
 
             for entry in (base_list or []):
@@ -412,6 +419,36 @@ class GamePredictor:
                 # opp_pts from advanced stats; if not available use pts as proxy
                 if 'opp_pts' not in team_data[abbrev]:
                     team_data[abbrev]['opp_pts'] = team_data[abbrev].get('pts', 110)
+
+            # Enrich with standings data (win%, conference rank, win streak)
+            try:
+                standings_list = bdl.get_standings(season_int)
+                for entry in (standings_list or []):
+                    team_obj = entry.get('team') or {}
+                    abbrev = str(team_obj.get('abbreviation') or '').upper()
+                    if not abbrev:
+                        bdl_tid = team_obj.get('id')
+                        if bdl_tid is not None:
+                            abbrev = team_mapper.bdl_id_to_abbrev(int(bdl_tid)) or ''
+                    if not abbrev or abbrev not in team_data:
+                        continue
+                    wins = _safe_float(entry.get('wins'), 0)
+                    losses = _safe_float(entry.get('losses'), 1)
+                    streak_raw = entry.get('streak') or 0
+                    # streak may be dict {'streak_type': 'W', 'streak': 5} or just int
+                    if isinstance(streak_raw, dict):
+                        streak_val = _safe_int(streak_raw.get('streak'), 0)
+                        if str(streak_raw.get('streak_type', 'W')).upper() == 'L':
+                            streak_val = -streak_val
+                    else:
+                        streak_val = _safe_int(streak_raw, 0)
+                    team_data[abbrev].update({
+                        'standings_win_pct': wins / max(wins + losses, 1),
+                        'conf_rank': _safe_int(entry.get('conference_rank') or entry.get('rank'), 15),
+                        'win_streak': streak_val,
+                    })
+            except Exception as e:
+                print(f"  ⚠️ Standings fetch failed (non-fatal): {e}")
 
             CacheManager.set('game_pred_team', team_data, season)
             self._team_stats_cache = team_data
@@ -1089,6 +1126,22 @@ class GamePredictor:
             features['def_rating_diff'] = features['home_def_rating'] - features['away_def_rating']
             features['net_rating_diff'] = features['home_net_rating'] - features['away_net_rating']
 
+        # Inject new API-sourced features (Four Factors + Standings)
+        for prefix, stats in [('home', home_stats), ('away', away_stats)]:
+            features[f'{prefix}_api_efg_pct'] = stats.get('efg_pct', 0.50)
+            features[f'{prefix}_api_tov_pct'] = stats.get('tov_pct', 14.0)
+            features[f'{prefix}_api_oreb_pct'] = stats.get('oreb_pct', 0.27)
+            features[f'{prefix}_api_ts_pct'] = stats.get('ts_pct', 0.56)
+            features[f'{prefix}_standings_win_pct'] = stats.get('standings_win_pct', 0.50)
+            features[f'{prefix}_conf_rank'] = stats.get('conf_rank', 15)
+            features[f'{prefix}_win_streak'] = stats.get('win_streak', 0)
+
+        features['api_efg_diff'] = features.get('home_api_efg_pct', 0.50) - features.get('away_api_efg_pct', 0.50)
+        features['api_tov_diff'] = features.get('home_api_tov_pct', 14.0) - features.get('away_api_tov_pct', 14.0)
+        features['standings_win_pct_diff'] = features.get('home_standings_win_pct', 0.5) - features.get('away_standings_win_pct', 0.5)
+        features['conf_rank_diff'] = features.get('home_conf_rank', 15) - features.get('away_conf_rank', 15)
+        features['win_streak_diff'] = features.get('home_win_streak', 0) - features.get('away_win_streak', 0)
+
         # Override injury features with live data
         home_inj = self._injury_impact(home_team_abbrev, injuries, top_scorers)
         away_inj = self._injury_impact(away_team_abbrev, injuries, top_scorers)
@@ -1297,8 +1350,8 @@ class GamePredictor:
                 cloned.fit(X, y)
             return cloned
 
-        # Fit meta-learner on OOF predictions + original features (passthrough)
-        meta_X = np.column_stack([meta_features[valid], X[valid]])
+        # Fit meta-learner on OOF predictions only (standard stacking, no passthrough)
+        meta_X = meta_features[valid]
         meta_learner.fit(meta_X, y.iloc[valid.nonzero()[0]], sample_weight=sample_weights[valid])
 
         # Refit all base models on full data
@@ -1354,7 +1407,7 @@ class GamePredictor:
             print("  Calibration: not enough OOF samples, skipping")
             return
 
-        self.calibrator = IsotonicRegression(y_min=0.02, y_max=0.98, out_of_bounds='clip')
+        self.calibrator = IsotonicRegression(y_min=0.15, y_max=0.85, out_of_bounds='clip')
         self.calibrator.fit(oof_probas[valid], y.values[valid])
         print("  Probability calibrator trained (isotonic regression)")
 
@@ -1795,6 +1848,10 @@ class GamePredictor:
         if self.calibrator is not None:
             home_win_prob = float(self.calibrator.predict([home_win_prob])[0])
             away_win_prob = 1.0 - home_win_prob
+
+        # Hard cap: NBA games are rarely more predictable than 85/15
+        home_win_prob = float(np.clip(home_win_prob, 0.15, 0.85))
+        away_win_prob = 1.0 - home_win_prob
 
         predicted_winner = home_team if home_win_prob > 0.5 else away_team
         confidence = max(home_win_prob, away_win_prob)
