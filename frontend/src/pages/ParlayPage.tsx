@@ -615,10 +615,16 @@ export default function ParlayPage() {
                         ? <span className="text-accent-danger text-sm font-bold">✗</span>
                         : <span className="text-text-muted text-sm">⏳</span>
 
-                      return (
-                        <div key={leg.id} className={`flex items-center gap-2 text-xs ${leg.voided ? 'opacity-40' : ''}`}>
-                          <div className="w-4 flex-shrink-0 text-center">{legIcon}</div>
-                          <span className={`font-medium truncate flex-1 ${leg.voided ? 'line-through' : 'text-text-primary'}`}>
+                        return (
+                          <div key={leg.id} className={`flex items-center gap-2 text-xs ${leg.voided ? 'opacity-40' : ''}`}>
+                            <div className="w-4 flex-shrink-0 text-center">{legIcon}</div>
+                            <img
+                              src={getNbaHeadshotUrl(leg.player_id ?? 0)}
+                              alt={leg.player}
+                              className="w-5 h-5 rounded-full object-cover bg-bg-secondary flex-shrink-0"
+                              onError={e => { (e.target as HTMLImageElement).src = getNbaHeadshotUrl(0) }}
+                            />
+                            <span className={`font-medium truncate flex-1 ${leg.voided ? 'line-through' : 'text-text-primary'}`}>
                             {leg.player}
                           </span>
                           <span className="font-mono text-text-secondary flex-shrink-0">

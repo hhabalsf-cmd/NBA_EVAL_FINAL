@@ -12,6 +12,7 @@ import {
   deletePick,
   Pick,
 } from '../api/client'
+import { getNbaHeadshotUrl } from '../utils/nba'
 import {
   LineChart,
   Line,
@@ -363,7 +364,17 @@ export default function HistoryPage() {
                   {displayedPicks.map((pick: Pick) => (
                     <tr key={pick.id}>
                       <td className="text-xs text-text-muted whitespace-nowrap">{formatDate(pick.timestamp)}</td>
-                      <td className="font-medium text-text-primary text-sm">{pick.player}</td>
+                      <td>
+                        <div className="flex items-center gap-2">
+                           <img
+                            src={getNbaHeadshotUrl(pick.player_id ?? 0)}
+                            alt={pick.player}
+                            className="w-7 h-7 rounded-lg object-cover bg-bg-secondary flex-shrink-0"
+                            onError={e => { (e.target as HTMLImageElement).src = getNbaHeadshotUrl(0) }}
+                          />
+                          <span className="font-medium text-text-primary text-sm">{pick.player}</span>
+                        </div>
+                      </td>
                       <td className="font-mono text-sm">{pick.stat}</td>
                       <td className="text-sm">{pick.line}</td>
                       <td className="text-sm">{pick.prediction.toFixed(1)}</td>
@@ -440,9 +451,17 @@ export default function HistoryPage() {
                 return (
                   <div key={pick.id} className={`p-4 border-l-2 ${isOver ? 'border-l-accent-success' : 'border-l-accent-danger'}`}>
                     <div className="flex items-start justify-between mb-2">
-                      <div>
-                        <div className="font-medium text-text-primary text-sm">{pick.player}</div>
-                        <div className="text-[11px] text-text-muted mt-0.5">{formatDate(pick.timestamp)}</div>
+                      <div className="flex items-center gap-2">
+                        <img
+                          src={getNbaHeadshotUrl(pick.player_id ?? 0)}
+                          alt={pick.player}
+                          className="w-8 h-8 rounded-lg object-cover bg-bg-secondary flex-shrink-0"
+                          onError={e => { (e.target as HTMLImageElement).src = getNbaHeadshotUrl(0) }}
+                        />
+                        <div>
+                          <div className="font-medium text-text-primary text-sm">{pick.player}</div>
+                          <div className="text-[11px] text-text-muted mt-0.5">{formatDate(pick.timestamp)}</div>
+                        </div>
                       </div>
                       <div className="flex items-center gap-2">
                         {pick.voided ? (
