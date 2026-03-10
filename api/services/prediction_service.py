@@ -238,25 +238,47 @@ class PredictionService:
         return static
 
     def search_players(self, query: str) -> list:
-        """Search for players by name using live roster data."""
-        all_players = self._get_current_season_players()
-        query_lower = query.lower()
+        """Search for players by name via BDL API (FREE tier)."""
+        from bdl_client import get_bdl_client
+        from bdl_id_mapper import get_player_mapper
 
-        # First try exact matches
-        exact_matches = [p for p in all_players if query_lower == p['full_name'].lower()]
-        if exact_matches:
-            return exact_matches[:10]
+        bdl = get_bdl_client()
+        player_mapper = get_player_mapper()
 
-        # Then try partial matches
-        matches = [p for p in all_players if query_lower in p['full_name'].lower()]
+        try:
+            results = bdl.get_players(search=query, per_page=20)
+        except Exception as exc:
+            logger.warning("BDL player search failed for %r: %s", query, exc)
+            return []
 
-        # Sort by relevance (starts with query first)
-        matches.sort(key=lambda p: (
-            0 if p['full_name'].lower().startswith(query_lower) else 1,
-            p['full_name']
-        ))
+        players = []
+        for p in results:
+            bdl_id = p.get('id')
+            if bdl_id is None:
+                continue
+            first = p.get('first_name') or ''
+            last = p.get('last_name') or ''
+            full_name = f"{first} {last}".strip()
+            if not full_name:
+                continue
+            team = p.get('team') or {}
+            team_abbrev = str(team.get('abbreviation') or '').upper()
 
-        return matches[:10]
+            # Prefer NBA ID if mapped; fall back to BDL ID so predictions still work
+            nba_id = player_mapper.bdl_to_nba(int(bdl_id), full_name)
+            resolved_id = nba_id if nba_id is not None else int(bdl_id)
+
+            players.append({
+                'id': resolved_id,
+                'full_name': full_name,
+                'first_name': first,
+                'last_name': last,
+                'team_id': team.get('id'),
+                'team_abbreviation': team_abbrev,
+                'team_name': team.get('full_name') or team.get('name') or '',
+            })
+
+        return players[:10]
 
     def get_player_info(self, player_name: str) -> Optional[Dict]:
         """Get player info by name."""
