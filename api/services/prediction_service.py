@@ -369,9 +369,6 @@ class PredictionService:
             logger.warning("BDL player search failed for %r: %s", query, exc)
             return []
 
-        # Current-season name set for freshness filter (cached 6h, no extra DB hit)
-        current_players = self._get_current_season_players()
-        current_names = {p['full_name'].lower() for p in current_players} if current_players else set()
 
         players = []
         for p in results:
@@ -387,9 +384,6 @@ class PredictionService:
             team_abbrev = str(team.get('abbreviation') or '').upper()
             # Skip players not on an active roster
             if not team_abbrev:
-                continue
-            # Skip players with no current-season game logs
-            if current_names and full_name.lower() not in current_names:
                 continue
 
             players.append({

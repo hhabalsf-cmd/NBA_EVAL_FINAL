@@ -2,7 +2,8 @@ import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, BarChart3, Search as SearchIcon, Target, Activity } from 'lucide-react'
-import { getPerformanceStats } from '../api/client'
+import { getPerformanceStats, getTodaysDailyPicks, dailyPickToBestBet } from '../api/client'
+import BetCard from '../components/BetCard'
 
 // ── Animated counter ─────────────────────────────────────────────────────────
 function AnimatedNumber({
@@ -82,6 +83,63 @@ const GHOST_CARDS = [
 ]
 
 // ── Main component ────────────────────────────────────────────────────────────
+const MAX_LANDING_PICKS = 4
+
+function HighestEdgePlays() {
+  const { data: dailyPicks, isLoading } = useQuery({
+    queryKey: ['daily-picks'],
+    queryFn: getTodaysDailyPicks,
+    staleTime: 1000 * 60 * 15,
+  })
+
+  return (
+    <section>
+      <div className="flex items-start sm:items-center justify-between mb-6 gap-3">
+        <div>
+          <h2 className="text-xl sm:text-2xl font-semibold text-text-primary tracking-tight">Highest Edge Plays</h2>
+          <p className="text-sm text-text-secondary mt-1">Today's best opportunities by model edge</p>
+        </div>
+        {dailyPicks && dailyPicks.length > MAX_LANDING_PICKS && (
+          <Link to="/login" className="text-sm text-accent hover:text-accent/80 flex items-center gap-1">
+            Sign in to see all
+            <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+        )}
+      </div>
+
+      {isLoading && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {Array.from({ length: 2 }).map((_, i) => (
+            <div key={i} className="card p-5 animate-pulse">
+              <div className="skeleton h-4 w-32 rounded mb-3" />
+              <div className="skeleton h-3 w-24 rounded mb-5" />
+              <div className="skeleton h-8 w-full rounded" />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!isLoading && dailyPicks && dailyPicks.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {dailyPicks.slice(0, MAX_LANDING_PICKS).map((pick) => (
+            <BetCard
+              key={pick.id}
+              bet={dailyPickToBestBet(pick)}
+              rank={pick.rank ?? undefined}
+            />
+          ))}
+        </div>
+      )}
+
+      {!isLoading && (!dailyPicks || dailyPicks.length === 0) && (
+        <div className="card p-10 text-center border-dashed opacity-60">
+          <p className="text-sm text-text-secondary">Daily picks are generated at 8 AM ET. Sign in to evaluate players manually.</p>
+        </div>
+      )}
+    </section>
+  )
+}
+
 export default function LandingPage() {
   const { data: stats } = useQuery({
     queryKey: ['performance-stats'],
@@ -270,18 +328,8 @@ export default function LandingPage() {
         </section>
       )}
 
-      {/* ── Highest Edge Plays (placeholder) ────────────────────────────── */}
-      <section>
-        <div className="flex items-start sm:items-center justify-between mb-6 gap-3">
-          <div>
-            <h2 className="text-xl sm:text-2xl font-semibold text-text-primary tracking-tight">Highest Edge Plays</h2>
-            <p className="text-sm text-text-secondary mt-1">Today's best opportunities by model edge</p>
-          </div>
-        </div>
-        <div className="card p-10 text-center border-dashed opacity-60">
-          <p className="text-sm text-text-secondary">Auto-generated picks coming soon. Use the search to manually evaluate players.</p>
-        </div>
-      </section>
+      {/* ── Highest Edge Plays ────────────────────────────────────────── */}
+      <HighestEdgePlays />
 
       {/* ── How It Works ─────────────────────────────────────────────────── */}
       <section className="card p-5 sm:p-8 relative overflow-hidden">

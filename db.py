@@ -104,6 +104,7 @@ _DB_TO_NBA_COLS = {
     "tov": "TOV", "pf": "PF", "pts": "PTS",
     "plus_minus": "PLUS_MINUS", "video_available": "VIDEO_AVAILABLE",
     "season": "SEASON",
+    "player_name": "PLAYER_NAME",
 }
 
 

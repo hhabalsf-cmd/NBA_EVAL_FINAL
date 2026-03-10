@@ -26,5 +26,17 @@ SELECT cron.schedule(
   $$
 );
 
+-- Daily best picks generation (8:00 AM ET = 1:00 PM UTC)
+SELECT cron.schedule(
+  'daily-best-picks',
+  '0 13 * * *',
+  $$
+  SELECT net.http_post(
+    url := '<your-fastapi-url>/api/bets/generate',
+    headers := jsonb_build_object('X-Service-Key', '<FASTAPI_SERVICE_KEY>')
+  );
+  $$
+);
+
 -- Verify
 SELECT jobname, schedule, active FROM cron.job;

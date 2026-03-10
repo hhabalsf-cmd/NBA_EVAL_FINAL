@@ -291,18 +291,19 @@ class BDLPlayerMapper:
         return None
 
     def _fetch_all_nba_players_from_logs(self) -> list[tuple[int, str]]:
-        """Return list of (nba_id, full_name) from player_id_map (already-cached mappings).
+        """Return list of (nba_id, full_name) from player_game_logs.
 
-        player_game_logs does not store player_name so we use player_id_map instead.
+        Queries player_game_logs directly so build_full_mapping() works even when
+        player_id_map is empty (the bootstrap case after initial migration).
         """
         try:
             conn = self._get_conn()
             try:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "SELECT DISTINCT nba_id, full_name "
-                        "FROM player_id_map "
-                        "WHERE nba_id IS NOT NULL AND full_name IS NOT NULL"
+                        "SELECT DISTINCT player_id AS nba_id, player_name AS full_name "
+                        "FROM player_game_logs "
+                        "WHERE player_id IS NOT NULL AND player_name IS NOT NULL"
                     )
                     rows = cur.fetchall()
                     return [(int(r["nba_id"]), str(r["full_name"])) for r in rows]

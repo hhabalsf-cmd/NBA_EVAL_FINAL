@@ -1,9 +1,12 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, BarChart3, Search as SearchIcon, Target } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { motion, type Variants } from 'framer-motion'
+import { useState } from 'react'
 import PlayerSearch from '../components/PlayerSearch'
-import { getPerformanceStats } from '../api/client'
+import BetCard from '../components/BetCard'
+import { getPerformanceStats, getTodaysDailyPicks, saveDailyPickToMyPicks, dailyPickToBestBet } from '../api/client'
+import { useAuthStore } from '../store/authStore'
 
 const fadeUp: Variants = {
   hidden: { opacity: 0, y: 16 },
@@ -20,11 +23,34 @@ const statCardVariant: Variants = {
   show:   { opacity: 1, y: 0, scale: 1 },
 }
 
+const MAX_HOME_PICKS = 6
+
 export default function HomePage() {
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['performance-stats'],
     queryFn: getPerformanceStats,
     staleTime: 1000 * 60 * 5,
+  })
+
+  const { data: dailyPicks, isLoading: picksLoading } = useQuery({
+    queryKey: ['daily-picks'],
+    queryFn: getTodaysDailyPicks,
+    staleTime: 1000 * 60 * 15, // 15 min
+  })
+
+  const user = useAuthStore(s => s.user)
+  const queryClient = useQueryClient()
+  const [savingPickId, setSavingPickId] = useState<number | null>(null)
+
+  const saveMutation = useMutation({
+    mutationFn: saveDailyPickToMyPicks,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['picks'] })
+      setSavingPickId(null)
+    },
+    onError: () => {
+      setSavingPickId(null)
+    },
   })
 
   return (
@@ -107,18 +133,68 @@ export default function HomePage() {
         </motion.section>
       )}
 
-      {/* Top Picks — temporarily unavailable */}
+      {/* Today's Top Picks */}
       <motion.section variants={fadeUp} transition={{ duration: 0.38, ease: 'easeOut' }}>
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-semibold text-text-primary tracking-tight">Top Picks</h2>
-          <span className="text-sm text-text-muted">Highest edge opportunities</span>
+          <h2 className="text-xl font-semibold text-text-primary tracking-tight">Today's Top Picks</h2>
+          {dailyPicks && dailyPicks.length > MAX_HOME_PICKS && (
+            <Link to="/picks" className="text-sm text-accent hover:text-accent/80 flex items-center gap-1">
+              View All ({dailyPicks.length})
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Link>
+          )}
+          {!dailyPicks?.length && !picksLoading && (
+            <span className="text-sm text-text-muted">Updated daily at 8 AM ET</span>
+          )}
         </div>
-        <div className="card p-10 text-center opacity-60">
-          <h3 className="text-base font-medium text-text-primary mb-2">Coming Soon</h3>
-          <p className="text-sm text-text-secondary max-w-md mx-auto leading-relaxed">
-            Auto-generated top picks will appear here. Use the search above to manually evaluate a player.
-          </p>
-        </div>
+
+        {picksLoading && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="card p-5 animate-pulse">
+                <div className="skeleton h-4 w-32 rounded mb-3" />
+                <div className="skeleton h-3 w-24 rounded mb-5" />
+                <div className="flex gap-3 mb-5">
+                  <div className="skeleton h-8 w-20 rounded" />
+                  <div className="skeleton h-8 w-20 rounded" />
+                </div>
+                <div className="skeleton h-3 w-full rounded" />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {!picksLoading && dailyPicks && dailyPicks.length > 0 && (
+          <motion.div
+            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
+            variants={stagger}
+            initial="hidden"
+            animate="show"
+          >
+            {dailyPicks.slice(0, MAX_HOME_PICKS).map((pick) => (
+              <motion.div key={pick.id} variants={fadeUp} transition={{ duration: 0.3, ease: 'easeOut' }}>
+                <BetCard
+                  bet={dailyPickToBestBet(pick)}
+                  rank={pick.rank ?? undefined}
+                  onSave={user ? () => {
+                    setSavingPickId(pick.id)
+                    saveMutation.mutate(pick)
+                  } : undefined}
+                  isSaving={savingPickId === pick.id}
+                />
+              </motion.div>
+            ))}
+          </motion.div>
+        )}
+
+        {!picksLoading && (!dailyPicks || dailyPicks.length === 0) && (
+          <div className="card p-10 text-center opacity-60">
+            <h3 className="text-base font-medium text-text-primary mb-2">No Picks Yet Today</h3>
+            <p className="text-sm text-text-secondary max-w-md mx-auto leading-relaxed">
+              Daily picks are generated at 8 AM ET. Use the search above to manually evaluate a player.
+            </p>
+          </div>
+        )}
       </motion.section>
 
       {/* Performance by Stat */}

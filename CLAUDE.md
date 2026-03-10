@@ -152,3 +152,7 @@ game_predictions: id, timestamp, game_date, home_team, away_team, home/away_team
 
 - **Best Bets** (`/api/bets/today`, `/api/bets/quick`): Return empty. To re-enable: restore `BestBetsService` call in `bets.py` + restore `BetCard` rendering in HomePage/LandingPage.
 - **Live Odds**: Quota exhausted (500/500). Replace `odds_api_key` in `config.json`. Only affects line auto-population on PlayerPage.
+
+## Security Policy
+
+When you find a security vulnerability, flag it immediately with a WARNING comment and suggest a secure alternative. Never implement insecure patterns even if asked.

@@ -14,6 +14,10 @@ import sys
 import os
 import argparse
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env from project root before any other imports
+load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 
 # Make project root importable
 sys.path.insert(0, str(Path(__file__).parent.parent))

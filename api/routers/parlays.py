@@ -85,10 +85,10 @@ async def list_parlays(current_user: dict = Depends(get_current_user)):
 
 @router.delete("/{parlay_id}")
 async def delete_parlay(parlay_id: int, current_user: dict = Depends(get_current_user)):
-    """Void a saved parlay."""
+    """Delete a saved parlay and its legs. Picks are not affected."""
     parlays = db.get_parlays(user_id=current_user["id"])
     match = next((p for p in parlays if p['id'] == parlay_id), None)
     if not match:
         raise HTTPException(status_code=404, detail="Parlay not found")
-    db.void_parlay(parlay_id=parlay_id, user_id=current_user["id"])
-    return {"message": "Parlay voided", "id": parlay_id}
+    db.delete_parlay(parlay_id=parlay_id, user_id=current_user["id"])
+    return {"message": "Parlay deleted", "id": parlay_id}

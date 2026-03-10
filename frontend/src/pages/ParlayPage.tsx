@@ -595,9 +595,9 @@ export default function ParlayPage() {
                     </div>
                     {parlay.status !== 'voided' && (
                       <button
-                        onClick={() => { if (confirm('Void this parlay?')) deleteParlayMutation.mutate(parlay.id) }}
+                        onClick={() => { if (confirm('Delete this parlay?')) deleteParlayMutation.mutate(parlay.id) }}
                         className="p-1.5 rounded text-text-muted hover:text-accent-danger transition-colors flex-shrink-0"
-                        title="Void parlay"
+                        title="Delete parlay"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>

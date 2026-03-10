@@ -550,6 +550,10 @@ class NBADataScraper:
             else:
                 wl = ''
 
+            p_first = (player_obj.get('first_name') or '').strip()
+            p_last = (player_obj.get('last_name') or '').strip()
+            player_name_str = f"{p_first} {p_last}".strip() or None
+
             row = {
                 'Player_ID': nba_player_id,
                 'Game_ID': game_obj.get('id'),
@@ -559,6 +563,7 @@ class NBADataScraper:
                 'SEASON': season_str,
                 'SEASON_ID': season_int,
                 'VIDEO_AVAILABLE': 0,
+                'PLAYER_NAME': player_name_str,
             }
 
             # Map stat fields

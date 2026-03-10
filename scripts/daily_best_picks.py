@@ -22,13 +22,14 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 # ── Project root setup ──────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from dotenv import load_dotenv
-load_dotenv(PROJECT_ROOT / '.env')
+load_dotenv(PROJECT_ROOT / '.env', override=True)
 
 import numpy as np
 import pandas as pd
@@ -225,7 +226,7 @@ def _get_players_for_teams(team_abbrevs: set[str]) -> list[dict]:
     return result
 
 
-def _compute_l10_avg(game_log_df: pd.DataFrame, stat: str) -> float | None:
+def _compute_l10_avg(game_log_df: pd.DataFrame, stat: str) -> Optional[float]:
     """Compute the last-10-game average for a stat, or None if insufficient data."""
     if game_log_df is None or game_log_df.empty:
         return None
@@ -431,7 +432,7 @@ def generate_daily_picks() -> list[dict]:
                 continue
 
             # Try to get real prop line from BDL
-            odds_line: float | None = None
+            odds_line: Optional[float] = None
             if player_mapper is not None and props_lookup:
                 try:
                     bdl_player_id = player_mapper.nba_to_bdl(int(player_id), player_name=player_name)
@@ -492,7 +493,7 @@ def generate_daily_picks() -> list[dict]:
                 'team_abbrev': team_abbrev,
                 'stat': stat,
                 'prediction': pred_value,
-                'confidence': round(confidence, 1),
+                'confidence': round(float(confidence), 1),
                 'range_low': round(float(range_low), 1),
                 'range_high': round(float(range_high), 1),
                 'recent_avg': l10_avg,
