@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Generator
 import asyncio
 import pandas as pd
+import statistics
 
 # Add parent directory to path to import existing modules
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -107,6 +108,10 @@ def _fetch_bdl_todays_props() -> list:
     # Group lines by (player_id, stat, game_id) across vendors
     grouped: Dict[tuple, list] = defaultdict(list)
     for prop in raw_props:
+        # Filter out alternative milestone lines (e.g. 30+ points)
+        if prop.get("market", {}).get("type") != "over_under":
+            continue
+
         pid = str(prop.get("player_id") or "")
         ptype = prop.get("prop_type", "")
         stat = _BDL_PROP_TYPE_MAP.get(ptype)
@@ -128,7 +133,10 @@ def _fetch_bdl_todays_props() -> list:
         name = pid_to_name.get(pid)
         if not name:
             continue
-        consensus_line = max(set(lines), key=lines.count)
+        
+        # Use median to resist extreme outliers if heavy juicing occurs
+        consensus_line = statistics.median(lines)
+        
         info = game_info.get(gid or 0, {})
         result.append({
             "player": name,
