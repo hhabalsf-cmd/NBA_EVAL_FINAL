@@ -267,20 +267,24 @@ class PredictionService:
         try:
             from nba_api.stats.static import players as nba_players
             active_list = nba_players.get_active_players()
-            existing_names = {p['full_name'].lower() for p in player_list}
+            
+            # Deduplicate by normalized name to handle accents vs plain ascii
+            seen_normalized = {p['normalized_full_name'] for p in player_list}
             
             for p in active_list:
                 full_name = p['full_name']
-                if full_name.lower() not in existing_names:
+                norm = self._normalize_name(full_name)
+                if norm not in seen_normalized:
                     parts = full_name.split(' ', 1)
                     player_list.append({
-                        'id': 0, # Placeholder for downstream since they have no BDL ID yet
+                        'id': p['id'], # Use real NBA ID instead of 0
                         'full_name': full_name,
-                        'normalized_full_name': self._normalize_name(full_name),
+                        'normalized_full_name': norm,
                         'first_name': parts[0] if parts else '',
                         'last_name': parts[1] if len(parts) > 1 else '',
                         'is_active': True,
                     })
+                    seen_normalized.add(norm)
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning("Failed to inject nba_api players: %s", exc)
