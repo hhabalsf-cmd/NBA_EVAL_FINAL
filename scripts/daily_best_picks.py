@@ -33,7 +33,7 @@ load_dotenv(PROJECT_ROOT / '.env')
 import numpy as np
 import pandas as pd
 from bdl_client import get_bdl_client
-from bdl_id_mapper import get_team_mapper
+from bdl_id_mapper import get_team_mapper, get_player_mapper
 
 import db
 from nba_evaluator import (
@@ -66,7 +66,7 @@ logger = logging.getLogger(__name__)
 def _get_teams_playing_today() -> list[dict]:
     """
     Fetch today's schedule via BallDontLie API and return game dicts:
-    [{'home_abbrev': str, 'away_abbrev': str, 'game_date': str}, ...]
+    [{'home_abbrev': str, 'away_abbrev': str, 'game_date': str, 'bdl_game_id': int}, ...]
     """
     logger.info("📅 Fetching today's NBA schedule...")
     today_str = datetime.now().strftime('%Y-%m-%d')
@@ -85,14 +85,89 @@ def _get_teams_playing_today() -> list[dict]:
         visitor_abbrev = str(visitor.get('abbreviation') or '').upper()
         if not home_abbrev or not visitor_abbrev:
             continue
+        bdl_game_id = g.get('id')
         games.append({
             'home_abbrev': home_abbrev,
             'away_abbrev': visitor_abbrev,
             'game_date': today_str,
+            'bdl_game_id': int(bdl_game_id) if bdl_game_id is not None else None,
         })
 
     logger.info(f"  Found {len(games)} games today.")
     return games
+
+
+def _fetch_player_props_lookup(games: list[dict]) -> dict:
+    """
+    Fetch player props for all of today's games from BDL.
+    Returns: {bdl_player_id: {stat: line_value}}
+
+    Prop type mapping (BDL prop_type -> our stat):
+      'points'       -> 'PTS'
+      'rebounds'     -> 'REB'
+      'assists'      -> 'AST'
+      'pts_reb_ast'  -> 'PRA'  (or any combo containing all three)
+
+    If get_player_props() raises, log warning and return {} for that game.
+    """
+    _PROP_TYPE_MAP: dict[str, str] = {
+        'points': 'PTS',
+        'rebounds': 'REB',
+        'assists': 'AST',
+        'pts_reb_ast': 'PRA',
+    }
+
+    bdl = get_bdl_client()
+    # {bdl_player_id (int): {stat (str): line_value (float)}}
+    props_lookup: dict[int, dict[str, float]] = {}
+    total_props = 0
+
+    for g in games:
+        bdl_game_id = g.get('bdl_game_id')
+        if bdl_game_id is None:
+            logger.debug("_fetch_player_props_lookup: skipping game with no bdl_game_id: %s", g)
+            continue
+
+        try:
+            raw_props = bdl.get_player_props(game_id=bdl_game_id)
+        except Exception as exc:
+            logger.warning(
+                "_fetch_player_props_lookup: failed to fetch props for game_id=%s: %s",
+                bdl_game_id, exc,
+            )
+            continue
+
+        for prop in raw_props:
+            player_obj = prop.get('player') or {}
+            bdl_player_id = player_obj.get('id')
+            if bdl_player_id is None:
+                continue
+
+            prop_type = str(prop.get('prop_type') or '').lower()
+            stat = _PROP_TYPE_MAP.get(prop_type)
+            if stat is None:
+                # Check for combo props containing all three components
+                if 'pts' in prop_type and 'reb' in prop_type and 'ast' in prop_type:
+                    stat = 'PRA'
+                else:
+                    continue
+
+            raw_line = prop.get('line')
+            if raw_line is None:
+                continue
+
+            bdl_player_id = int(bdl_player_id)
+            # Only store the first line found per player+stat (immutable: build new dict entry)
+            existing = props_lookup.get(bdl_player_id, {})
+            if stat not in existing:
+                props_lookup[bdl_player_id] = {**existing, stat: float(raw_line)}
+                total_props += 1
+
+    logger.info(
+        "_fetch_player_props_lookup: fetched %d prop lines across %d players.",
+        total_props, len(props_lookup),
+    )
+    return props_lookup
 
 
 def _get_players_for_teams(team_abbrevs: set[str]) -> list[dict]:
@@ -186,6 +261,17 @@ def generate_daily_picks() -> list[dict]:
     if not games:
         logger.info("No games today — nothing to generate.")
         return []
+
+    # Fetch real prop lines (may return {} if API unavailable)
+    props_lookup = _fetch_player_props_lookup(games)
+    logger.info(f"📊 Fetched props for {len(props_lookup)} players.")
+
+    # Initialize player mapper for nba.com ID → BDL ID lookup
+    try:
+        player_mapper = get_player_mapper()
+    except Exception as exc:
+        logger.warning("Could not initialize player mapper: %s — props will not be used.", exc)
+        player_mapper = None
 
     # Build lookup structures
     team_abbrevs_today = set()
@@ -339,19 +425,40 @@ def generate_daily_picks() -> list[dict]:
 
             pred_value = round(float(pred_value), 1)
 
-            # L10 average as proxy line
+            # L10 average (always computed as secondary reference)
             l10_avg = _compute_l10_avg(game_log, stat)
             if l10_avg is None or l10_avg == 0:
                 continue
 
-            # Edge calculation
-            edge_pct = round(((pred_value - l10_avg) / l10_avg) * 100, 1)
+            # Try to get real prop line from BDL
+            odds_line: float | None = None
+            if player_mapper is not None and props_lookup:
+                try:
+                    bdl_player_id = player_mapper.nba_to_bdl(int(player_id), player_name=player_name)
+                    if bdl_player_id is not None:
+                        player_props = props_lookup.get(int(bdl_player_id), {})
+                        raw_line = player_props.get(stat)
+                        if raw_line is not None:
+                            odds_line = round(float(raw_line), 1)
+                except Exception as exc:
+                    logger.debug(
+                        "Props lookup failed for %s stat=%s: %s", player_name, stat, exc
+                    )
+
+            # Use real line if available, else fall back to L10 average
+            line_used = odds_line if odds_line is not None else l10_avg
+            if line_used is None or line_used == 0:
+                continue
+
+            # Recompute edge against whichever line is used
+            edge_pct = round(((pred_value - line_used) / line_used) * 100, 1)
             abs_edge = abs(edge_pct)
 
             # Direction
-            direction = 'OVER' if pred_value > l10_avg else 'UNDER'
+            direction = 'OVER' if pred_value > line_used else 'UNDER'
 
             # Get confidence + range
+            conf_data: dict = {}
             try:
                 conf_data = predictor.get_confidence(df, stat, pred_value, features_df=features_df)
                 confidence = conf_data.get('confidence', 0)
@@ -389,7 +496,7 @@ def generate_daily_picks() -> list[dict]:
                 'range_low': round(float(range_low), 1),
                 'range_high': round(float(range_high), 1),
                 'recent_avg': l10_avg,
-                'odds_line': None,  # Placeholder for future OddsAPI
+                'odds_line': odds_line,  # real prop line, or None if using L10 avg
                 'edge': edge_pct,
                 'direction': direction,
                 'opponent': opponent,
@@ -397,7 +504,7 @@ def generate_daily_picks() -> list[dict]:
                 'matchup': matchup,
                 'game_date': today_str,
                 'model_type': 'gradient_boost',
-                'prob_over': round(float(prob_over), 1) if prob_over else None,
+                'prob_over': round(float(prob_over), 1) if prob_over is not None else None,
             })
 
     logger.info(
