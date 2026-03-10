@@ -6,6 +6,7 @@ Players cache: 24 h. Projections cache: 30 min.
 """
 import logging
 import time
+import unicodedata
 from typing import Optional
 
 import requests
@@ -13,7 +14,15 @@ import requests
 logger = logging.getLogger(__name__)
 
 _SLEEPER_BASE = "https://api.sleeper.app/v1"
+
+
 _CDN_BASE = "https://sleepercdn.com/content/nba/players"
+
+
+def _norm(s: str) -> str:
+    """Lowercase + strip diacritics (e.g. 'Dončić' → 'doncic')."""
+    nfkd = unicodedata.normalize('NFKD', s)
+    return ''.join(c for c in nfkd if not unicodedata.combining(c)).lower().strip()
 
 # ---------------------------------------------------------------------------
 # Player cache — name -> sleeper player_id
@@ -39,8 +48,8 @@ def _load_players() -> None:
 
         mapping: dict[str, str] = {}
         for pid, p in data.items():
-            fn = (p.get("first_name") or "").strip().lower()
-            ln = (p.get("last_name") or "").strip().lower()
+            fn = _norm(p.get("first_name") or "")
+            ln = _norm(p.get("last_name") or "")
             full = f"{fn} {ln}".strip()
             if full:
                 mapping[full] = pid
@@ -53,7 +62,7 @@ def _load_players() -> None:
 def get_headshot_url(player_name: str) -> Optional[str]:
     """Return Sleeper CDN headshot URL for a player by full name, or None."""
     _load_players()
-    norm = player_name.strip().lower()
+    norm = _norm(player_name)
     pid = _name_to_id.get(norm)
     if pid:
         return f"{_CDN_BASE}/{pid}.jpg"
@@ -138,7 +147,7 @@ def get_projections(season: int = 2024) -> dict[str, dict]:
 def get_player_projections(player_name: str, season: int = 2024) -> Optional[dict]:
     """Return Sleeper projected stats for a player by name, or None."""
     _load_players()
-    norm = player_name.strip().lower()
+    norm = _norm(player_name)
     pid = _name_to_id.get(norm)
     if not pid:
         for name, p in _name_to_id.items():

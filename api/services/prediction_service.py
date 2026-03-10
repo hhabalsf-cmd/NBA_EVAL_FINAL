@@ -267,7 +267,7 @@ class PredictionService:
         try:
             from nba_api.stats.static import players as nba_players
             active_list = nba_players.get_active_players()
-            
+            before = len(player_list)
             # Deduplicate by normalized name to handle accents vs plain ascii
             seen_normalized = {p['normalized_full_name'] for p in player_list}
             
@@ -285,9 +285,9 @@ class PredictionService:
                         'is_active': True,
                     })
                     seen_normalized.add(norm)
+            logger.info("nba_api augmented %d additional players", len(player_list) - before)
         except Exception as exc:
-            import logging
-            logging.getLogger(__name__).warning("Failed to inject nba_api players: %s", exc)
+            logger.warning("Failed to inject nba_api players: %s", exc)
         return player_list
 
     # Class-level cache for current season players
@@ -417,7 +417,7 @@ class PredictionService:
             norm_name = p.get('normalized_full_name') or self._normalize_name(p['full_name'])
             if all(term in norm_name for term in search_terms):
                 results.append({
-                    'id': p.get('bdl_id', p['id']), # try to send correct downstream id 
+                    'id': p.get('bdl_id', p['id']), # try to send correct downstream id
                     'full_name': p['full_name'],
                     'first_name': p.get('first_name', ''),
                     'last_name': p.get('last_name', ''),
@@ -426,11 +426,46 @@ class PredictionService:
                     'team_name': '',
                     'headshot_url': sleeper_client.get_headshot_url(p['full_name']),
                 })
-                
+
                 if len(results) >= 10:
                     break
-                    
+
+        # Fall back to BDL live search for players missing from local cache (e.g. recent rookies)
+        if not results:
+            results = self._search_players_bdl_fallback(query)
+
         return results
+
+    def _search_players_bdl_fallback(self, query: str) -> list:
+        """Search BallDontLie API directly — used when the local player cache misses a player."""
+        import sleeper_client
+        try:
+            from bdl_client import get_bdl_client
+            bdl = get_bdl_client()
+            players = bdl.get_players(search=query, per_page=10)
+            results = []
+            for p in players:
+                first = p.get('first_name') or ''
+                last = p.get('last_name') or ''
+                full_name = f"{first} {last}".strip()
+                if not full_name:
+                    continue
+                results.append({
+                    'id': p.get('id', 0),
+                    'full_name': full_name,
+                    'first_name': first,
+                    'last_name': last,
+                    'team_id': None,
+                    'team_abbreviation': (p.get('team') or {}).get('abbreviation', ''),
+                    'team_name': (p.get('team') or {}).get('full_name', ''),
+                    'headshot_url': sleeper_client.get_headshot_url(full_name),
+                })
+                if len(results) >= 10:
+                    break
+            return results
+        except Exception as exc:
+            logger.warning("BDL player search fallback failed: %s", exc)
+            return []
 
     def get_player_info(self, player_name: str) -> Optional[Dict]:
         """Get player info by name."""
