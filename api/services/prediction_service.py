@@ -145,24 +145,43 @@ class PredictionService:
     _PLAYERS_CACHE_TTL = 60 * 60 * 6  # 6 hours
 
     def _refresh_players_sync(self) -> None:
-        """Blocking refresh of player list from BallDontLie API. Run via executor only."""
+        """Refresh player list from Supabase current-season game logs. Run via executor only.
+
+        Uses the same current-season query as _get_current_season_players so the
+        cache always contains only players who have actually logged stats this season
+        (i.e. no historical/inactive players from old BDL data).
+        """
         try:
-            from bdl_client import get_bdl_client
-            bdl = get_bdl_client()
-            raw_players = bdl.get_all('/v1/players', {'per_page': 100})
+            import db as _db
+            ev = _load_nba_evaluator()
+            conn = _db.get_connection()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT DISTINCT player_id AS id,
+                               MAX(player_name) AS full_name
+                        FROM player_game_logs
+                        WHERE season = %s AND player_name IS NOT NULL
+                        GROUP BY player_id
+                        """,
+                        (ev.CURRENT_SEASON,),
+                    )
+                    rows = cur.fetchall()
+            finally:
+                _db.put_connection(conn)
 
             player_list = []
-            for p in raw_players:
-                first = (p.get('first_name') or '').strip()
-                last = (p.get('last_name') or '').strip()
-                full_name = f"{first} {last}".strip()
+            for row in rows:
+                full_name = str(row['full_name'] or '')
                 if not full_name:
                     continue
+                parts = full_name.split(' ', 1)
                 player_list.append({
-                    'id': int(p.get('id') or 0),
+                    'id': int(row['id']),
                     'full_name': full_name,
-                    'first_name': first,
-                    'last_name': last,
+                    'first_name': parts[0] if parts else '',
+                    'last_name': parts[1] if len(parts) > 1 else '',
                     'is_active': True,
                 })
 
@@ -170,7 +189,7 @@ class PredictionService:
                 PredictionService._current_season_players = player_list
                 PredictionService._current_season_players_time = time.time()
         except Exception:
-            pass  # Keep existing cache or fallback is handled by caller
+            pass  # Keep existing cache; _get_current_season_players handles fallback
 
     def _get_current_season_players(self) -> list:
         """Get current season players (cached 6 hours). Never blocks — returns stale/static if cold."""

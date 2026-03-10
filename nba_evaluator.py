@@ -203,12 +203,33 @@ class NBADataScraper:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
     
+    @staticmethod
+    def _bdl_last_name(player_name: str) -> str:
+        """Extract the searchable last name from a full name, stripping Jr./Sr./II/III suffixes."""
+        _SUFFIXES = {'jr', 'sr', 'ii', 'iii', 'iv', 'v'}
+        parts = player_name.strip().split()
+        for part in reversed(parts):
+            if part.lower().rstrip('.') not in _SUFFIXES:
+                return part
+        return parts[-1] if parts else player_name
+
     def get_player_info(self, player_name):
-        """Get player ID and team info via BallDontLie API (FREE tier)."""
+        """Get player ID and team info via BallDontLie API (FREE tier).
+
+        BDL's ``search`` param filters by *last name* only — so we first try
+        the full name string (in case BDL ever supports it), then fall back to
+        last-name extraction so "Jaylen Brown" → search "Brown".
+        """
         print(f"🔍 Looking up player: {player_name}")
         try:
             bdl = get_bdl_client()
             results = bdl.get_players(search=player_name)
+            if not results:
+                # BDL search is last-name based — retry with extracted last name
+                last_name = self._bdl_last_name(player_name)
+                if last_name.lower() != player_name.lower().strip():
+                    print(f"🔄 Retrying BDL search with last name: {last_name}")
+                    results = bdl.get_players(search=last_name)
             if not results:
                 print(f"⚠️ No BDL results for: {player_name}")
                 return None
