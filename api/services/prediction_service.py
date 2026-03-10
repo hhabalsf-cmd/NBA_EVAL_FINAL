@@ -365,62 +365,37 @@ class PredictionService:
         return static
 
     def search_players(self, query: str) -> list:
-        """Search for players by name via BDL API (FREE tier)."""
-        from bdl_client import get_bdl_client
+        """Search for players by name using the local active players cache.
+        This provides instant, fuzzy matching and strictly returns current rotation players.
+        """
         import sleeper_client
-
-        bdl = get_bdl_client()
-
-        try:
-            results = bdl.get_players(search=query, per_page=20)
-        except Exception as exc:
-            logger.warning("BDL player search failed for %r: %s", query, exc)
+        
+        if not query or not query.strip():
             return []
-
-
-        # Load active players from nba_api to filter out retired players (like Kobe)
-        # who still have a team listed in BDL's historical database.
-        try:
-            from nba_api.stats.static import players as nba_players
-            active_list = nba_players.get_active_players()
-            active_names = {p['full_name'].lower() for p in active_list}
-        except Exception as exc:
-            import logging
-            logging.getLogger(__name__).warning("Failed to fetch active players list: %s", exc)
-            active_names = set()
-
-        players = []
-        for p in results:
-            bdl_id = p.get('id')
-            if bdl_id is None:
-                continue
-            first = p.get('first_name') or ''
-            last = p.get('last_name') or ''
-            full_name = f"{first} {last}".strip()
-            if not full_name:
-                continue
-            team = p.get('team') or {}
-            team_abbrev = str(team.get('abbreviation') or '').upper()
-            # Skip players not on an active roster
-            if not team_abbrev:
-                continue
-
-            # Skip players who are retired/inactive but still have a team in BDL
-            if active_names and full_name.lower() not in active_names:
-                continue
-
-            players.append({
-                'id': int(bdl_id),
-                'full_name': full_name,
-                'first_name': first,
-                'last_name': last,
-                'team_id': team.get('id'),
-                'team_abbreviation': team_abbrev,
-                'team_name': team.get('full_name') or team.get('name') or '',
-                'headshot_url': sleeper_client.get_headshot_url(full_name),
-            })
-
-        return players[:10]
+            
+        search_terms = query.lower().split()
+        active_players = self._get_current_season_players()
+        
+        results = []
+        for p in active_players:
+            # Check if all search terms are substrings of the full name
+            full_name_lower = p['full_name'].lower()
+            if all(term in full_name_lower for term in search_terms):
+                results.append({
+                    'id': p.get('bdl_id', p['id']), # try to send correct downstream id 
+                    'full_name': p['full_name'],
+                    'first_name': p.get('first_name', ''),
+                    'last_name': p.get('last_name', ''),
+                    'team_id': None, # We don't have this in the cached row immediately
+                    'team_abbreviation': '',
+                    'team_name': '',
+                    'headshot_url': sleeper_client.get_headshot_url(p['full_name']),
+                })
+                
+                if len(results) >= 10:
+                    break
+                    
+        return results
 
     def get_player_info(self, player_name: str) -> Optional[Dict]:
         """Get player info by name."""
