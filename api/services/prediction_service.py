@@ -358,6 +358,29 @@ class PredictionService:
                 })
         except Exception:
             static = []
+            
+        # Guarantee all active players are included, even if they have no DB model yet.
+        # This allows 0-latency searches for rookies and other unmodeled players.
+        try:
+            from nba_api.stats.static import players as nba_players
+            active_list = nba_players.get_active_players()
+            existing_names = {p['full_name'].lower() for p in static}
+            
+            for p in active_list:
+                full_name = p['full_name']
+                if full_name.lower() not in existing_names:
+                    parts = full_name.split(' ', 1)
+                    static.append({
+                        'id': 0, # Placeholder for downstream since they have no BDL ID yet
+                        'full_name': full_name,
+                        'first_name': parts[0] if parts else '',
+                        'last_name': parts[1] if len(parts) > 1 else '',
+                        'is_active': True,
+                    })
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to inject nba_api players: %s", exc)
+            
         if PredictionService._current_season_players is None:
             # Seed cache with static list so concurrent requests don't all try to refresh
             PredictionService._current_season_players = static
