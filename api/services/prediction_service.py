@@ -370,6 +370,17 @@ class PredictionService:
             return []
 
 
+        # Load active players from nba_api to filter out retired players (like Kobe)
+        # who still have a team listed in BDL's historical database.
+        try:
+            from nba_api.stats.static import players as nba_players
+            active_list = nba_players.get_active_players()
+            active_names = {p['full_name'].lower() for p in active_list}
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to fetch active players list: %s", exc)
+            active_names = set()
+
         players = []
         for p in results:
             bdl_id = p.get('id')
@@ -384,6 +395,10 @@ class PredictionService:
             team_abbrev = str(team.get('abbreviation') or '').upper()
             # Skip players not on an active roster
             if not team_abbrev:
+                continue
+
+            # Skip players who are retired/inactive but still have a team in BDL
+            if active_names and full_name.lower() not in active_names:
                 continue
 
             players.append({
