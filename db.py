@@ -35,7 +35,6 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict
-import time
 import pandas as pd
 
 import psycopg2
@@ -619,9 +618,6 @@ def auto_grade_game_predictions() -> dict:
     if not pending:
         return {'graded_count': 0, 'errors': [], 'results': []}
 
-    from nba_api.stats.endpoints import scoreboardv2 as sb
-    import time as _time
-
     graded_count = 0
     errors = []
     results = []
@@ -641,64 +637,53 @@ def auto_grade_game_predictions() -> dict:
             if pred_date >= today:
                 continue  # Game hasn't happened yet
 
-            # Fetch scoreboard for that date
-            date_str = pred_date.strftime('%m/%d/%Y')
-            scoreboard = sb.ScoreboardV2(game_date=date_str)
-            _time.sleep(0.5)
-            games_header = scoreboard.get_data_frames()[0]
-            line_score = scoreboard.get_data_frames()[1]
+            # Fetch games for that date via BDL
+            date_iso = pred_date.strftime('%Y-%m-%d')
+            from bdl_client import get_bdl_client
+            bdl = get_bdl_client()
+            raw_games = bdl.get_games(dates=[date_iso])
 
-            if games_header.empty:
-                continue
-
-            # Find the matching game
             home_team = pred['home_team']
             away_team = pred['away_team']
 
-            for _, game in games_header.iterrows():
-                status = game.get('GAME_STATUS_ID', 1)
-                if status != 3:  # Not final
+            for g in (raw_games or []):
+                game_status = str(g.get('status') or '').lower()
+                if game_status != 'final':
                     continue
 
-                # Match by team abbreviations from line score
-                game_id = game['GAME_ID']
-                game_lines = line_score[line_score['GAME_ID'] == game_id]
+                home = g.get('home_team') or {}
+                visitor = g.get('visitor_team') or {}
+                h_abbrev = str(home.get('abbreviation') or '').upper()
+                v_abbrev = str(visitor.get('abbreviation') or '').upper()
 
-                if game_lines.empty:
+                if not ({home_team.upper(), away_team.upper()} <= {h_abbrev, v_abbrev}):
+                    continue  # Not the right game
+
+                home_pts = g.get('home_team_score')
+                away_pts = g.get('visitor_team_score')
+
+                if home_pts is None or away_pts is None:
                     continue
 
-                teams_in_game = set(game_lines['TEAM_ABBREVIATION'].values)
-                if home_team in teams_in_game and away_team in teams_in_game:
-                    # Found the game — determine winner
-                    home_line = game_lines[game_lines['TEAM_ABBREVIATION'] == home_team]
-                    away_line = game_lines[game_lines['TEAM_ABBREVIATION'] == away_team]
+                home_pts = int(home_pts)
+                away_pts = int(away_pts)
 
-                    if home_line.empty or away_line.empty:
-                        continue
+                actual_winner = h_abbrev if home_pts > away_pts else v_abbrev
 
-                    home_pts = home_line.iloc[0].get('PTS', 0)
-                    away_pts = away_line.iloc[0].get('PTS', 0)
+                grade_game_prediction(pred['id'], actual_winner)
+                correct = pred['predicted_winner'].upper() == actual_winner
 
-                    import math
-                    if home_pts is None or away_pts is None or (isinstance(home_pts, float) and math.isnan(home_pts)) or (isinstance(away_pts, float) and math.isnan(away_pts)):
-                        continue
-
-                    actual_winner = home_team if home_pts > away_pts else away_team
-
-                    grade_game_prediction(pred['id'], actual_winner)
-                    correct = pred['predicted_winner'] == actual_winner
-
-                    results.append({
-                        'home_team': home_team,
-                        'away_team': away_team,
-                        'predicted_winner': pred['predicted_winner'],
-                        'actual_winner': actual_winner,
-                        'correct': correct,
-                        'home_pts': int(home_pts),
-                        'away_pts': int(away_pts),
-                    })
-                    graded_count += 1
-                    break
+                results.append({
+                    'home_team': home_team,
+                    'away_team': away_team,
+                    'predicted_winner': pred['predicted_winner'],
+                    'actual_winner': actual_winner,
+                    'correct': correct,
+                    'home_pts': home_pts,
+                    'away_pts': away_pts,
+                })
+                graded_count += 1
+                break
 
         except Exception as e:
             errors.append(f"Error grading {pred.get('home_team')} vs {pred.get('away_team')}: {str(e)}")
@@ -1271,31 +1256,27 @@ def _check_team_played(team_abbrev: str, game_date, scraper=None) -> bool:
     if not team_abbrev:
         return False
 
-    date_str = game_date.strftime('%m/%d/%Y')
+    date_iso = game_date.strftime('%Y-%m-%d')
 
     # Check cache first
-    if date_str in _team_schedule_cache:
-        return team_abbrev.upper() in _team_schedule_cache[date_str]
+    if date_iso in _team_schedule_cache:
+        return team_abbrev.upper() in _team_schedule_cache[date_iso]
 
     try:
-        from nba_api.stats.endpoints import scoreboardv2
-        scoreboard = scoreboardv2.ScoreboardV2(game_date=date_str)
-        games = scoreboard.get_data_frames()[0]  # GameHeader
+        from bdl_client import get_bdl_client
+        bdl = get_bdl_client()
+        raw_games = bdl.get_games(dates=[date_iso])
 
         teams_that_played = set()
-        if not games.empty:
-            for _, game in games.iterrows():
-                home = str(game.get('HOME_TEAM_ID', ''))
-                away = str(game.get('VISITOR_TEAM_ID', ''))
-                # Also grab abbreviations from the line score table
-            # Use line score for abbreviations
-            line_score = scoreboard.get_data_frames()[1]
-            if not line_score.empty and 'TEAM_ABBREVIATION' in line_score.columns:
-                for abbrev in line_score['TEAM_ABBREVIATION'].unique():
-                    teams_that_played.add(str(abbrev).upper())
+        for g in (raw_games or []):
+            home = g.get('home_team') or {}
+            visitor = g.get('visitor_team') or {}
+            h_abbrev = str(home.get('abbreviation') or '').upper()
+            v_abbrev = str(visitor.get('abbreviation') or '').upper()
+            if h_abbrev: teams_that_played.add(h_abbrev)
+            if v_abbrev: teams_that_played.add(v_abbrev)
 
-        _team_schedule_cache[date_str] = teams_that_played
-        time.sleep(0.5)  # Rate limiting
+        _team_schedule_cache[date_iso] = teams_that_played
         return team_abbrev.upper() in teams_that_played
 
     except Exception:
@@ -1423,7 +1404,6 @@ def auto_grade_picks(scraper=None) -> Dict:
             if player_id not in players_processed:
                 game_log = scraper.get_player_game_log(player_id, seasons=['2025-26'])
                 players_processed[player_id] = game_log
-                time.sleep(0.5)  # Rate limiting
             else:
                 game_log = players_processed[player_id]
 

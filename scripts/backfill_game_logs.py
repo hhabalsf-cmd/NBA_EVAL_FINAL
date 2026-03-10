@@ -12,7 +12,6 @@ Safe to re-run: uses ON CONFLICT DO NOTHING, skips players already stored.
 """
 import sys
 import os
-import time
 import argparse
 from pathlib import Path
 
@@ -82,12 +81,11 @@ def backfill(dry_run: bool = False, seasons=None):
                 continue
 
             try:
-                from nba_api.stats.endpoints import playergamelog
-                import pandas as pd
-                log = playergamelog.PlayerGameLog(player_id=player_id, season=season)
-                time.sleep(0.6)
-                df = log.get_data_frames()[0]
-                df['SEASON'] = season
+                df = scraper.get_player_game_log(player_id, seasons=[season])
+                if df is None or df.empty:
+                    print("no data")
+                    skipped += 1
+                    continue
                 db.insert_game_logs_to_supabase(df, player_id, season)
                 print(f"{len(df)} rows stored")
                 stored += 1
