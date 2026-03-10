@@ -1,9 +1,12 @@
 """Service layer wrapping existing ML prediction classes."""
 import fcntl
 import json
+import logging
 import sys
 import time
 import unicodedata
+
+logger = logging.getLogger(__name__)
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import date, datetime
