@@ -1775,7 +1775,12 @@ class GamePredictor:
 
         try:
             data = joblib.load(model_path)
-            self.model = data['model']
+            loaded_model = data['model']
+            # Reject stale pkl files that used a different architecture
+            if not isinstance(loaded_model, GameStackingModel):
+                print(f"Stale model architecture ({type(loaded_model).__name__}); retraining...")
+                return False
+            self.model = loaded_model
             self.scaler = data['scaler']
             self.feature_names = data['feature_names']
             self.selected_feature_idx = data.get('selected_feature_idx')
