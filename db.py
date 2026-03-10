@@ -30,6 +30,7 @@ To create the parlay tables, run the following SQL in the Supabase SQL Editor:
     CREATE INDEX IF NOT EXISTS parlay_legs_pick_id_idx ON parlay_legs(pick_id);
 """
 import json
+import logging
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -253,6 +254,47 @@ def upsert_team_stats_to_supabase(team_data: dict, season: str) -> None:
         cur.executemany(sql, rows)
     conn.commit()
     put_connection(conn)
+
+
+# ── League averages (Supabase query — no external API) ────────
+
+def get_league_averages_from_supabase(season: str) -> dict:
+    """
+    Compute league-wide per-game averages from player_game_logs for the given season.
+    Returns dict with keys PTS, REB, AST, MIN (floats), or empty dict on failure.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    AVG(pts)  AS pts,
+                    AVG(reb)  AS reb,
+                    AVG(ast)  AS ast,
+                    AVG(min)  AS min
+                FROM player_game_logs
+                WHERE season = %s
+                  AND pts IS NOT NULL
+                """,
+                (season,),
+            )
+            row = cur.fetchone()
+
+        if row is None:
+            return {}
+
+        return {
+            'PTS': float(row['pts']) if row['pts'] is not None else 11.5,
+            'REB': float(row['reb']) if row['reb'] is not None else 4.2,
+            'AST': float(row['ast']) if row['ast'] is not None else 2.4,
+            'MIN': float(row['min']) if row['min'] is not None else 24.0,
+        }
+    except Exception as exc:
+        logging.getLogger(__name__).warning("get_league_averages_from_supabase error: %s", exc)
+        return {}
+    finally:
+        put_connection(conn)
 
 
 # ── User functions ────────────────────────────────────────────
@@ -1639,6 +1681,135 @@ def get_performance_by_model_and_stat(user_id: str) -> Dict:
     return results
 
 
+# ── Daily picks helpers ───────────────────────────────────────
+
+
+def save_daily_picks(picks: list, date_str: str) -> int:
+    """
+    Replace all daily picks for a given date with new ones.
+
+    Args:
+        picks: List of dicts, each with keys matching the daily_picks columns
+        date_str: Date string in YYYY-MM-DD format
+
+    Returns:
+        Number of picks inserted
+    """
+    if not picks:
+        return 0
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            # Clear existing picks for this date
+            cur.execute("DELETE FROM daily_picks WHERE generated_date = %s", (date_str,))
+
+            # Bulk insert new picks
+            insert_sql = """
+                INSERT INTO daily_picks (
+                    generated_date, player, player_id, team_abbrev, stat,
+                    prediction, confidence, range_low, range_high,
+                    recent_avg, odds_line, edge, direction,
+                    opponent, is_home, matchup, game_date,
+                    model_type, prob_over, rank
+                ) VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s
+                )
+            """
+
+            rows = [
+                (
+                    date_str,
+                    p.get('player'),
+                    p.get('player_id'),
+                    p.get('team_abbrev'),
+                    p.get('stat'),
+                    p.get('prediction'),
+                    p.get('confidence'),
+                    p.get('range_low'),
+                    p.get('range_high'),
+                    p.get('recent_avg'),
+                    p.get('odds_line'),
+                    p.get('edge'),
+                    p.get('direction'),
+                    p.get('opponent'),
+                    p.get('is_home', False),
+                    p.get('matchup'),
+                    p.get('game_date'),
+                    p.get('model_type', 'gradient_boost'),
+                    p.get('prob_over'),
+                    p.get('rank'),
+                )
+                for p in picks
+            ]
+
+            cur.executemany(insert_sql, rows)
+            conn.commit()
+            return len(rows)
+    finally:
+        put_connection(conn)
+
+
+def get_daily_picks(date_str: str = None) -> list:
+    """
+    Get daily picks for a specific date (defaults to today).
+
+    Args:
+        date_str: Date string in YYYY-MM-DD format (defaults to today)
+
+    Returns:
+        List of pick dicts ordered by rank
+    """
+    if date_str is None:
+        date_str = datetime.now().strftime('%Y-%m-%d')
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM daily_picks
+                WHERE generated_date = %s
+                ORDER BY rank ASC NULLS LAST
+                """,
+                (date_str,)
+            )
+            rows = cur.fetchall()
+            return [dict(row) for row in rows]
+    finally:
+        put_connection(conn)
+
+
+def clear_old_daily_picks(days_to_keep: int = 7) -> int:
+    """
+    Delete daily picks older than N days.
+
+    Args:
+        days_to_keep: Number of days of picks to retain (default 7)
+
+    Returns:
+        Number of rows deleted
+    """
+    cutoff = (datetime.now() - timedelta(days=days_to_keep)).strftime('%Y-%m-%d')
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM daily_picks WHERE generated_date < %s",
+                (cutoff,)
+            )
+            deleted = cur.rowcount
+            conn.commit()
+            return deleted
+    finally:
+        put_connection(conn)
+
+
 # ── Parlay helpers ─────────────────────────────────────────────
 
 def create_parlay(user_id: str, pick_ids: list) -> dict:
@@ -1708,19 +1879,22 @@ def get_parlays(user_id: str) -> list:
         put_connection(conn)
 
 
-def void_parlay(parlay_id: int, user_id: str) -> None:
-    """Set parlay status to voided. Enforces ownership via user_id."""
+def delete_parlay(parlay_id: int, user_id: str) -> None:
+    """Hard-delete a parlay and its legs. Enforces ownership via user_id. Picks are NOT deleted."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            # Verify ownership first
             cur.execute(
-                """
-                UPDATE parlays
-                SET status = 'voided'
-                WHERE id = %s AND user_id = %s
-                """,
+                "SELECT id FROM parlays WHERE id = %s AND user_id = %s",
                 (parlay_id, user_id)
             )
+            if not cur.fetchone():
+                conn.rollback()
+                return
+            # Delete legs first (FK constraint), then the parlay
+            cur.execute("DELETE FROM parlay_legs WHERE parlay_id = %s", (parlay_id,))
+            cur.execute("DELETE FROM parlays WHERE id = %s AND user_id = %s", (parlay_id, user_id))
             conn.commit()
     finally:
         put_connection(conn)
