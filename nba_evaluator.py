@@ -1027,6 +1027,10 @@ class FeatureEngineer:
             if ':' in str(x) else float(x) if pd.notna(x) else 0
         )
 
+        # Drop games where the player did not play (DNP) or played 0 minutes
+        # so these games do not drag down rolling averages or feature calculations.
+        df = df[df['MIN_NUMERIC'] > 0].copy()
+
         # =====================
         # ADVANCED STATS
         # =====================
