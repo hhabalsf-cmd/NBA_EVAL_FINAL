@@ -1,6 +1,7 @@
 import { ArrowRight, Bookmark } from 'lucide-react'
 import { BestBet } from '../api/client'
 import { useNavigate } from 'react-router-dom'
+import { getHeadshotUrl } from '../utils/nba'
 
 interface BetCardProps {
   bet: BestBet
@@ -30,16 +31,29 @@ export default function BetCard({ bet, rank, onSave, isSaving }: BetCardProps) {
         </div>
       )}
 
-      <div className="mb-5">
-        <div className="font-medium text-text-primary truncate">{bet.player}</div>
-        {bet.game_info && (
-          <div className="text-sm text-text-secondary mt-0.5 truncate">{bet.game_info.matchup}</div>
-        )}
-        {!bet.game_info && bet.home_team && bet.away_team && (
-          <div className="text-sm text-text-secondary mt-0.5 truncate">
-            {bet.away_team} @ {bet.home_team}
-          </div>
-        )}
+      <div className="flex items-center gap-3 mb-5">
+        <img
+          src={getHeadshotUrl(undefined, bet.player_id ?? 0)}
+          alt={bet.player}
+          className="w-10 h-10 rounded-full object-cover bg-bg-secondary flex-shrink-0 shadow-sm"
+          onError={e => {
+            const img = e.target as HTMLImageElement
+            // Same fallback silhouette used in PlayerSearch
+            img.src = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Ccircle cx='20' cy='20' r='20' fill='%23333'/%3E%3Ccircle cx='20' cy='15' r='7' fill='%23666'/%3E%3Cellipse cx='20' cy='36' rx='11' ry='8' fill='%23666'/%3E%3C/svg%3E`
+            img.onerror = null
+          }}
+        />
+        <div className="flex-1 min-w-0">
+          <div className="font-medium text-text-primary truncate">{bet.player}</div>
+          {bet.game_info && (
+            <div className="text-sm text-text-secondary mt-0.5 truncate">{bet.game_info.matchup}</div>
+          )}
+          {!bet.game_info && bet.home_team && bet.away_team && (
+            <div className="text-sm text-text-secondary mt-0.5 truncate">
+              {bet.away_team} @ {bet.home_team}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="flex items-baseline gap-3 mb-5">
