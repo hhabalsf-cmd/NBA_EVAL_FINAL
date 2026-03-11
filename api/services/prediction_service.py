@@ -420,14 +420,24 @@ class PredictionService:
         return self._search_players_local(query)
 
     def _search_players_bdl(self, query: str) -> list:
-        """Search BallDontLie API for active players matching query."""
+        """Search BallDontLie API for active players matching query.
+
+        Uses a single-page request so we only get BDL's top-ranked results,
+        avoiding pagination through thousands of historical records.
+        """
         try:
             from bdl_client import get_bdl_client
             bdl = get_bdl_client()
-            players = bdl.get_players(search=query, per_page=25)
+            # Single-page request — BDL ranks by relevance; don't paginate
+            resp = bdl._request_with_retry(
+                'GET',
+                'https://api.balldontlie.io/v1/players',
+                bdl._build_params({'search': query, 'per_page': 10}),
+            )
+            players = resp.get('data', [])
             results = []
             for p in players:
-                # Skip players not currently on a team (inactive/retired)
+                # Skip players not currently on a team (free agents / retired)
                 if not p.get('team'):
                     continue
                 first = p.get('first_name') or ''
@@ -445,8 +455,6 @@ class PredictionService:
                     'team_name': (p.get('team') or {}).get('full_name', ''),
                     'headshot_url': None,
                 })
-                if len(results) >= 10:
-                    break
             return results
         except Exception as exc:
             logger.warning("BDL player search failed: %s", exc)
