@@ -404,61 +404,13 @@ class PredictionService:
     def search_players(self, query: str) -> list:
         """Search for players by name.
 
-        Priority:
-        1. BDL live search — always returns only currently active players with team info.
-        2. Local game_logs cache — fallback if BDL is unavailable.
+        Uses solely the local game_logs cache (augmented with nba_api active players)
+        to ensure zero latency and only surface players we have data for.
         """
         if not query or not query.strip():
             return []
 
-        # BDL live search: active roster only, current team data
-        bdl_results = self._search_players_bdl(query)
-        if bdl_results:
-            return bdl_results
-
-        # BDL unavailable — fall back to local game_logs cache
         return self._search_players_local(query)
-
-    def _search_players_bdl(self, query: str) -> list:
-        """Search BallDontLie API for active players matching query.
-
-        Uses a single-page request so we only get BDL's top-ranked results,
-        avoiding pagination through thousands of historical records.
-        """
-        try:
-            from bdl_client import get_bdl_client
-            bdl = get_bdl_client()
-            # Single-page request — BDL ranks by relevance; don't paginate
-            resp = bdl._request_with_retry(
-                'GET',
-                'https://api.balldontlie.io/v1/players',
-                bdl._build_params({'search': query, 'per_page': 10}),
-            )
-            players = resp.get('data', [])
-            results = []
-            for p in players:
-                # Skip players not currently on a team (free agents / retired)
-                if not p.get('team'):
-                    continue
-                first = p.get('first_name') or ''
-                last = p.get('last_name') or ''
-                full_name = f"{first} {last}".strip()
-                if not full_name:
-                    continue
-                results.append({
-                    'id': p.get('id', 0),
-                    'full_name': full_name,
-                    'first_name': first,
-                    'last_name': last,
-                    'team_id': None,
-                    'team_abbreviation': (p.get('team') or {}).get('abbreviation', ''),
-                    'team_name': (p.get('team') or {}).get('full_name', ''),
-                    'headshot_url': None,
-                })
-            return results
-        except Exception as exc:
-            logger.warning("BDL player search failed: %s", exc)
-            return []
 
     def _search_players_local(self, query: str) -> list:
         """Search local game_logs cache — fallback when BDL is unavailable."""
