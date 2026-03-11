@@ -203,14 +203,27 @@ class PredictionService:
     """Wraps MLPredictor and FeatureEngineer for API use."""
 
     def __init__(self):
-        ev = _load_nba_evaluator()
-        self.scraper = ev.NBADataScraper()
-        self.evaluator = ev.LineEvaluator()
+        self._scraper = None
+        self._evaluator = None
         self._team_stats_cache = None
         self._injuries_cache = None
         self._odds_cache: Optional[Dict] = None
         self._odds_cache_time: float = 0
         self._ODDS_CACHE_TTL = 30 * 60  # 30 minutes
+
+    @property
+    def scraper(self):
+        if self._scraper is None:
+            ev = _load_nba_evaluator()
+            self._scraper = ev.NBADataScraper()
+        return self._scraper
+
+    @property
+    def evaluator(self):
+        if self._evaluator is None:
+            ev = _load_nba_evaluator()
+            self._evaluator = ev.LineEvaluator()
+        return self._evaluator
 
     def get_team_stats(self) -> Dict:
         """Get cached team defensive stats."""
@@ -307,11 +320,10 @@ class PredictionService:
         """
         try:
             import db as _db
-            ev = _load_nba_evaluator()
             conn = _db.get_connection()
             try:
                 with conn.cursor() as cur:
-                    seasons = (ev.CURRENT_SEASON, ev.HISTORICAL_SEASONS[0])
+                    seasons = ('2025-26', '2024-25')
                     cur.execute(
                         """
                         SELECT DISTINCT player_id AS id,
@@ -357,13 +369,12 @@ class PredictionService:
         # Cache cold: return fast static list immediately so search doesn't block
         try:
             import db as _db
-            ev = _load_nba_evaluator()
             conn = _db.get_connection()
             try:
                 with conn.cursor() as cur:
                     # Include current season AND most recent historical season so
                     # the list is populated even before current-season data accumulates
-                    seasons = (ev.CURRENT_SEASON, ev.HISTORICAL_SEASONS[0])
+                    seasons = ('2025-26', '2024-25')
                     cur.execute(
                         """
                         SELECT DISTINCT player_id AS id,
