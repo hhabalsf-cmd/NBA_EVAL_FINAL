@@ -1103,7 +1103,7 @@ def get_performance_stats(user_id: str = None) -> dict:
 
     wins = row['wins'] or 0
     losses = row['losses'] or 0
-    pushes = row['pushes'] or 0
+    pushes = graded_picks - wins - losses
     decided = wins + losses
     win_rate = (wins / decided * 100) if decided > 0 else 0.0
     profit = (wins * 1.0) - (losses * 1.1)
