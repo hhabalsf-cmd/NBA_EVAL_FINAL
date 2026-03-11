@@ -2166,8 +2166,8 @@ class MLPredictor:
                 shift_z = abs(new_mean - old_mean) / (old_std + 0.1)
 
                 if shift_z > 1.5:
-                    print(f"  {stat}: Major distribution shift detected (z={shift_z:.1f}) — full retrain")
-                    return self.train(df, stats)
+                    n_add = 40
+                    print(f"  {stat}: Major distribution shift detected (z={shift_z:.1f}) — aggressive update (+{n_add})")
                 elif shift_z > 0.7:
                     n_add = 30
                     print(f"  {stat}: Moderate shift (z={shift_z:.1f}) — aggressive update (+{n_add})")
