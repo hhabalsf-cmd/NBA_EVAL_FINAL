@@ -68,14 +68,27 @@ def _get_teams_playing_today() -> list[dict]:
     """
     Fetch today's schedule via BallDontLie API and return game dicts:
     [{'home_abbrev': str, 'away_abbrev': str, 'game_date': str, 'bdl_game_id': int}, ...]
+    If no games are found for today, falls back to checking tomorrow.
     """
     logger.info("📅 Fetching today's NBA schedule...")
-    today_str = datetime.now().strftime('%Y-%m-%d')
+    from datetime import timedelta
+    
+    target_date = datetime.now().date()
+    today_str = target_date.strftime('%Y-%m-%d')
     bdl = get_bdl_client()
     raw_games = bdl.get_games(dates=[today_str])
 
+    # Fallback to tomorrow if no games today
     if not raw_games:
-        logger.warning("No games on today's schedule.")
+        tomorrow_date = target_date + timedelta(days=1)
+        tomorrow_str = tomorrow_date.strftime('%Y-%m-%d')
+        logger.info(f"No games found for today ({today_str}). Falling back to tomorrow ({tomorrow_str}).")
+        target_date = tomorrow_date
+        today_str = tomorrow_str
+        raw_games = bdl.get_games(dates=[today_str])
+
+    if not raw_games:
+        logger.warning(f"No games on schedule for {today_str} either.")
         return []
 
     games = []
@@ -101,7 +114,7 @@ def _get_teams_playing_today() -> list[dict]:
 def _fetch_player_props_lookup(games: list[dict]) -> dict:
     """
     Fetch player props for all of today's games from BDL.
-    Returns: {bdl_player_id: {stat: line_value}}
+    Returns: {bdl_player_id: {stat: line_value}, 'by_name': {lowercase_name: {stat: line_value}}}
 
     Prop type mapping (BDL prop_type -> our stat):
       'points'       -> 'PTS'
@@ -121,6 +134,7 @@ def _fetch_player_props_lookup(games: list[dict]) -> dict:
     bdl = get_bdl_client()
     # {bdl_player_id (int): {stat (str): line_value (float)}}
     props_lookup: dict[int, dict[str, float]] = {}
+    props_by_name: dict[str, dict[str, float]] = {}
     total_props = 0
 
     for g in games:
@@ -163,6 +177,15 @@ def _fetch_player_props_lookup(games: list[dict]) -> dict:
             if stat not in existing:
                 props_lookup[bdl_player_id] = {**existing, stat: float(raw_line)}
                 total_props += 1
+                
+            # Store by name for fallback lookup
+            first_name = player_obj.get('first_name', '')
+            last_name = player_obj.get('last_name', '')
+            player_name_lower = f"{first_name} {last_name}".strip().lower()
+            if player_name_lower:
+                existing_name = props_by_name.get(player_name_lower, {})
+                if stat not in existing_name:
+                    props_by_name[player_name_lower] = {**existing_name, stat: float(raw_line)}
 
     logger.info(
         "_fetch_player_props_lookup: fetched %d prop lines across %d players.",
@@ -255,13 +278,14 @@ def generate_daily_picks() -> list[dict]:
     Main entry point: evaluate all eligible players and return
     the top picks sorted by abs(edge) descending.
     """
-    today_str = datetime.now().strftime('%Y-%m-%d')
-
-    # 1. Get today's games
+    # 1. Get today's games (or tomorrow's if none today)
     games = _get_teams_playing_today()
     if not games:
         logger.info("No games today — nothing to generate.")
         return []
+        
+    # Use the actual date of the games we fetched (could be today or tomorrow)
+    active_date_str = games[0]['game_date']
 
     # Fetch real prop lines (may return {} if API unavailable)
     props_lookup = _fetch_player_props_lookup(games)
@@ -299,6 +323,7 @@ def generate_daily_picks() -> list[dict]:
     players_evaluated = 0
     models_trained = 0
     players_skipped = 0
+    skipped_missing_lines = 0
 
     for player in eligible_players:
         player_name = player['player_name']
@@ -432,19 +457,40 @@ def generate_daily_picks() -> list[dict]:
                 continue
 
             # Try to get real prop line from BDL
-            odds_line: Optional[float] = None
-            if player_mapper is not None and props_lookup:
+            prediction = predictions.get(stat)
+            if prediction is None:
+                continue
+
+            # Need odds line to evaluate edge
+            # 1. Try BDL ID first
+            bdl_id = None
+            if player_mapper is not None:
                 try:
-                    bdl_player_id = player_mapper.nba_to_bdl(int(player_id), player_name=player_name)
-                    if bdl_player_id is not None:
-                        player_props = props_lookup.get(int(bdl_player_id), {})
-                        raw_line = player_props.get(stat)
-                        if raw_line is not None:
-                            odds_line = round(float(raw_line), 1)
+                    bdl_id = player_mapper.nba_to_bdl(int(player_id), player_name=player_name)
                 except Exception as exc:
-                    logger.debug(
-                        "Props lookup failed for %s stat=%s: %s", player_name, stat, exc
-                    )
+                    logger.debug(f"BDL ID lookup failed for {player_name} (NBA ID: {player_id}): {exc}")
+            
+            # 2. Extract props
+            player_props = None
+            if bdl_id is not None:
+                player_props = props_lookup.get('by_id', {}).get(bdl_id, {})
+                
+            # 3. Fallback to name search if ID failed or no props
+            if not player_props:
+                player_name_lower = str(player_name or '').strip().lower()
+                player_props = props_lookup.get('by_name', {}).get(player_name_lower, {})
+                if player_props:
+                    logger.debug(f"Used name fallback for props lookup on {player_name}")
+
+            if not player_props:
+                skipped_missing_lines += 1
+                continue
+
+            odds_line = player_props.get(stat)
+            if odds_line is None:
+                skipped_missing_lines += 1
+                continue
+            odds_line = round(float(odds_line), 1) # Ensure odds_line is rounded float
 
             # Use real line if available, else fall back to L10 average
             line_used = odds_line if odds_line is not None else l10_avg
@@ -503,7 +549,7 @@ def generate_daily_picks() -> list[dict]:
                 'opponent': opponent,
                 'is_home': is_home,
                 'matchup': matchup,
-                'game_date': today_str,
+                'game_date': active_date_str,
                 'model_type': 'gradient_boost',
                 'prob_over': round(float(prob_over), 1) if prob_over is not None else None,
             })
@@ -542,9 +588,12 @@ def run() -> dict:
         logger.error(f"❌ Generation failed: {e}", exc_info=True)
         return {'success': False, 'error': str(e), 'picks_count': 0}
 
+    # Use the date from the first pick if available, otherwise today
+    target_date_str = picks[0]['game_date'] if picks else today_str
+
     # Save to Supabase
-    saved_count = db.save_daily_picks(picks, today_str)
-    logger.info(f"💾 Saved {saved_count} picks to daily_picks table.")
+    saved_count = db.save_daily_picks(picks, target_date_str)
+    logger.info(f"💾 Saved {saved_count} picks to daily_picks table for {target_date_str}.")
 
     # Housekeeping: remove picks older than 7 days
     deleted = db.clear_old_daily_picks(days_to_keep=7)

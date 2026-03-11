@@ -55,17 +55,29 @@ def _fetch_bdl_todays_props() -> list:
     Returns a list of dicts with keys:
         player, stat, consensus_line, home_team, away_team
     Drop-in replacement for the old OddsAPI.get_all_todays_props().
+    If no games are found for today, falls back to checking tomorrow.
     """
     import db as _db
     from bdl_client import get_bdl_client
+    from datetime import timedelta
 
-    today = date.today().strftime("%Y-%m-%d")
+    target_date = date.today()
+    today_str = target_date.strftime("%Y-%m-%d")
     bdl = get_bdl_client()
 
     try:
-        games = bdl.get_games(dates=[today])
+        games = bdl.get_games(dates=[today_str])
     except Exception:
-        return []
+        games = []
+
+    # Fallback to tomorrow if no games
+    if not games:
+        tomorrow_date = target_date + timedelta(days=1)
+        tomorrow_str = tomorrow_date.strftime("%Y-%m-%d")
+        try:
+            games = bdl.get_games(dates=[tomorrow_str])
+        except Exception:
+            games = []
 
     if not games:
         return []

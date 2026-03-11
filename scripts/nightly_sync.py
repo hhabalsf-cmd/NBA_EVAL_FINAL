@@ -34,27 +34,20 @@ CURRENT_SEASON = '2025-26'
 
 
 def get_active_player_ids():
-    """Get player IDs from Supabase game logs for the current season."""
-    print("📋 Fetching active players for current season...")
+    """Get all active NBA players using nba_api."""
+    print("📋 Fetching active players from NBA API...")
     try:
-        conn = db.get_connection()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT DISTINCT player_id, MAX(player_name) AS name
-                    FROM player_game_logs
-                    WHERE season = %s
-                    GROUP BY player_id
-                    """,
-                    (CURRENT_SEASON,),
-                )
-                rows = cur.fetchall()
-        finally:
-            db.put_connection(conn)
-
-        player_list = [{'id': int(row['player_id']), 'name': str(row['name'] or '')} for row in rows]
-        print(f"  ✅ Found {len(player_list)} players in Supabase for {CURRENT_SEASON}")
+        from nba_api.stats.static import players as nba_players
+        active_list = nba_players.get_active_players()
+        
+        player_list = []
+        for p in active_list:
+            player_list.append({
+                'id': p['id'],
+                'name': p['full_name']
+            })
+            
+        print(f"  ✅ Found {len(player_list)} active players")
         return player_list
     except Exception as e:
         print(f"  ❌ Failed to get active players: {e}")
