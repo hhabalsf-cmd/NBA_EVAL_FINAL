@@ -17,6 +17,7 @@ import os
 import pickle
 import sys
 import time
+import threading
 import warnings
 import hashlib
 from datetime import datetime, timedelta, timezone
@@ -74,6 +75,35 @@ CACHE_DIR = Path("./cache")
 
 for d in [DATA_DIR, MODEL_DIR, HISTORY_DIR, CACHE_DIR]:
     d.mkdir(exist_ok=True)
+
+# ── In-memory model cache (avoids repeated pickle.load from disk) ──
+_MODEL_CACHE: dict = {}          # player_name -> (data_dict, loaded_at)
+_MODEL_CACHE_LOCK = threading.Lock()
+_MODEL_CACHE_MAX = 30            # keep at most 30 players in memory
+_MODEL_CACHE_TTL = 3600          # 1 hour before re-reading from disk
+
+
+def _model_cache_get(player_name: str) -> 'dict | None':
+    """Return cached model data dict if fresh, or None."""
+    with _MODEL_CACHE_LOCK:
+        entry = _MODEL_CACHE.get(player_name)
+        if entry is None:
+            return None
+        data, loaded_at = entry
+        if time.time() - loaded_at > _MODEL_CACHE_TTL:
+            del _MODEL_CACHE[player_name]
+            return None
+        return data
+
+
+def _model_cache_put(player_name: str, data: dict) -> None:
+    """Store model data dict in the in-memory cache, evicting oldest if full."""
+    with _MODEL_CACHE_LOCK:
+        _MODEL_CACHE[player_name] = (data, time.time())
+        if len(_MODEL_CACHE) > _MODEL_CACHE_MAX:
+            oldest_key = min(_MODEL_CACHE, key=lambda k: _MODEL_CACHE[k][1])
+            del _MODEL_CACHE[oldest_key]
+
 
 # Timezone for NBA game completion check
 _ET = ZoneInfo('America/New_York')
@@ -136,7 +166,13 @@ TEAM_NAME_TO_ABBREV = {v: k for k, v in TEAM_ABBREV_TO_NAME.items()}
 
 
 class CacheManager:
-    """Manages caching of API responses to reduce rate limiting"""
+    """Manages caching of API responses to reduce rate limiting.
+
+    Uses an in-memory L1 dict to avoid pickle I/O on every cache hit.
+    Falls back to the file-based L2 cache on memory miss.
+    """
+    _mem: dict = {}          # cache_key -> (data, timestamp)
+    _MEM_MAX = 100           # max entries in L1
 
     @staticmethod
     def get_cache_key(prefix, *args):
@@ -146,17 +182,33 @@ class CacheManager:
 
     @staticmethod
     def get(prefix, *args, expiry_type='game_log'):
-        """Get cached data if valid"""
+        """Get cached data if valid (memory L1 → file L2)."""
         cache_key = CacheManager.get_cache_key(prefix, *args)
-        cache_file = CACHE_DIR / f"{cache_key}.pkl"
+        ttl = CACHE_EXPIRY.get(expiry_type, 3600)
 
+        # L1: in-memory check
+        mem_entry = CacheManager._mem.get(cache_key)
+        if mem_entry is not None:
+            data, ts = mem_entry
+            if (datetime.now() - ts).total_seconds() < ttl:
+                return data
+            else:
+                del CacheManager._mem[cache_key]
+
+        # L2: file-based check
+        cache_file = CACHE_DIR / f"{cache_key}.pkl"
         if cache_file.exists():
             try:
                 with open(cache_file, 'rb') as f:
                     cached = pickle.load(f)
 
                 age = (datetime.now() - cached['timestamp']).total_seconds()
-                if age < CACHE_EXPIRY.get(expiry_type, 3600):
+                if age < ttl:
+                    # Promote to L1
+                    CacheManager._mem[cache_key] = (cached['data'], cached['timestamp'])
+                    if len(CacheManager._mem) > CacheManager._MEM_MAX:
+                        oldest = min(CacheManager._mem, key=lambda k: CacheManager._mem[k][1])
+                        del CacheManager._mem[oldest]
                     return cached['data']
             except Exception:
                 pass
@@ -164,13 +216,21 @@ class CacheManager:
 
     @staticmethod
     def set(prefix, data, *args):
-        """Cache data with timestamp"""
+        """Cache data with timestamp (writes to both L1 memory and L2 file)."""
         cache_key = CacheManager.get_cache_key(prefix, *args)
-        cache_file = CACHE_DIR / f"{cache_key}.pkl"
+        now = datetime.now()
 
+        # L1: in-memory
+        CacheManager._mem[cache_key] = (data, now)
+        if len(CacheManager._mem) > CacheManager._MEM_MAX:
+            oldest = min(CacheManager._mem, key=lambda k: CacheManager._mem[k][1])
+            del CacheManager._mem[oldest]
+
+        # L2: file-based
+        cache_file = CACHE_DIR / f"{cache_key}.pkl"
         try:
             with open(cache_file, 'wb') as f:
-                pickle.dump({'timestamp': datetime.now(), 'data': data}, f)
+                pickle.dump({'timestamp': now, 'data': data}, f)
         except Exception:
             pass
 
@@ -2910,10 +2970,60 @@ class MLPredictor:
 
         with open(filename, 'wb') as f:
             pickle.dump(data, f)
+
+        # Update in-memory cache so the next load() skips disk I/O
+        _model_cache_put(player_name, data)
         print(f"💾 Model saved to {filename}")
 
+    def _restore_from_dict(self, data: dict, player_name: str) -> bool:
+        """Restore model state from a data dict (shared by load and cache hit)."""
+        self.scalers = data['scalers']
+        self.feature_names = data['feature_names']
+        self.model_type = data['model_type']
+        self.use_ensemble = data.get('use_ensemble', False)
+        self.training_history = data.get('training_history', [])
+        self.feature_importance = data.get('feature_importance', {})
+        self.recent_averages = data.get('recent_averages', {})
+        self.last_game_date = data.get('last_game_date', None)
+        self.trained_at = data.get('trained_at', None)
+        self.games_trained_on = data.get('games_trained_on', 0)
+
+        # Load v3.0 artifacts (backward compatible)
+        self.selected_features = data.get('selected_features', None)
+        self.quantile_models = data.get('quantile_models', {})
+        self.residual_models = data.get('residual_models', {})
+        self.probability_calibrator = data.get('probability_calibrator', {})
+        self.optimized_params = data.get('optimized_params', {})
+        self.performance_history = data.get('performance_history', [])
+
+        if data['models']:
+            self.models = data['models']
+        elif self.model_type == 'neural' and TF_AVAILABLE:
+            for stat in ['PTS', 'REB', 'AST', 'PRA']:
+                nn_path = MODEL_DIR / f"{player_name.replace(' ', '_')}_{stat}_nn"
+                if nn_path.exists():
+                    self.models[stat] = keras.models.load_model(nn_path)
+
+        if data.get('ensemble_models'):
+            self.ensemble_models = data['ensemble_models']
+
+        # Check version compatibility
+        version = data.get('version', '1.0')
+        if version not in ['2.0', '2.1', '3.0']:
+            print(f"  ⚠️ Model version {version} - consider retraining with --retrain for improved accuracy")
+
+        return True
+
     def load(self, player_name):
-        """Load model from disk"""
+        """Load model from in-memory cache or disk."""
+        # L1: in-memory cache (avoids pickle I/O)
+        cached = _model_cache_get(player_name)
+        if cached is not None:
+            self._restore_from_dict(cached, player_name)
+            print(f"⚡ Loaded model from memory cache")
+            return True
+
+        # L2: disk
         filename = MODEL_DIR / f"{player_name.replace(' ', '_')}_model.pkl"
         if not filename.exists():
             return False
@@ -2922,41 +3032,10 @@ class MLPredictor:
             with open(filename, 'rb') as f:
                 data = pickle.load(f)
 
-            self.scalers = data['scalers']
-            self.feature_names = data['feature_names']
-            self.model_type = data['model_type']
-            self.use_ensemble = data.get('use_ensemble', False)
-            self.training_history = data.get('training_history', [])
-            self.feature_importance = data.get('feature_importance', {})
-            self.recent_averages = data.get('recent_averages', {})
-            self.last_game_date = data.get('last_game_date', None)
-            self.trained_at = data.get('trained_at', None)
-            self.games_trained_on = data.get('games_trained_on', 0)
+            self._restore_from_dict(data, player_name)
 
-            # Load v3.0 artifacts (backward compatible)
-            self.selected_features = data.get('selected_features', None)
-            self.quantile_models = data.get('quantile_models', {})
-            self.residual_models = data.get('residual_models', {})
-            self.probability_calibrator = data.get('probability_calibrator', {})
-            self.optimized_params = data.get('optimized_params', {})
-            self.performance_history = data.get('performance_history', [])
-
-            if data['models']:
-                self.models = data['models']
-            elif self.model_type == 'neural' and TF_AVAILABLE:
-                for stat in ['PTS', 'REB', 'AST', 'PRA']:
-                    nn_path = MODEL_DIR / f"{player_name.replace(' ', '_')}_{stat}_nn"
-                    if nn_path.exists():
-                        self.models[stat] = keras.models.load_model(nn_path)
-
-            if data.get('ensemble_models'):
-                self.ensemble_models = data['ensemble_models']
-
-            # Check version compatibility
-            version = data.get('version', '1.0')
-            if version not in ['2.0', '2.1', '3.0']:
-                print(f"  ⚠️ Model version {version} - consider retraining with --retrain for improved accuracy")
-
+            # Promote to L1 cache
+            _model_cache_put(player_name, data)
             print(f"📂 Loaded model from {filename}")
             return True
         except Exception as e:

@@ -512,16 +512,22 @@ class PredictionService:
                 }
                 return
 
-        await asyncio.sleep(0.1)  # Yield control
-
         yield {
             "stage": "fetching_data",
             "progress": 20,
-            "message": "Fetching game log..."
+            "message": "Fetching player data..."
         }
 
-        # Get game log
-        game_log = self.scraper.get_player_game_log(player_info['player_id'])
+        # Fetch game log, next game, team stats, and injuries in parallel
+        # All four are independent after player_info is resolved
+        loop = asyncio.get_event_loop()
+        game_log, game_info, team_stats, injuries = await asyncio.gather(
+            loop.run_in_executor(None, self.scraper.get_player_game_log, player_info['player_id']),
+            loop.run_in_executor(None, self.scraper.get_player_next_game, player_info),
+            loop.run_in_executor(None, self.get_team_stats),
+            loop.run_in_executor(None, self.get_injuries),
+        )
+
         if game_log is None or game_log.empty:
             yield {
                 "stage": "error",
@@ -531,56 +537,28 @@ class PredictionService:
             }
             return
 
-        await asyncio.sleep(0.1)
-
-        yield {
-            "stage": "fetching_data",
-            "progress": 30,
-            "message": "Fetching game schedule..."
-        }
-
-        # Get game info
-        game_info = self.scraper.get_player_next_game(player_info)
-
-        await asyncio.sleep(0.1)
-
-        yield {
-            "stage": "fetching_data",
-            "progress": 40,
-            "message": "Fetching team stats and injuries..."
-        }
-
-        # Get context data — fetch in parallel (independent calls)
-        loop = asyncio.get_event_loop()
-        team_stats, injuries = await asyncio.gather(
-            loop.run_in_executor(None, self.get_team_stats),
-            loop.run_in_executor(None, self.get_injuries),
-        )
-
-        await asyncio.sleep(0.1)
-
-        # Stage 2: Creating features
         yield {
             "stage": "training_model",
-            "progress": 50,
+            "progress": 45,
             "message": "Engineering features..."
         }
 
-        # Create features
-        df_features = ev.FeatureEngineer.create_features(
-            game_log,
-            player_info=player_info,
-            game_info=game_info,
-            injuries=injuries,
-            team_stats=team_stats
+        # Create features (CPU-bound, offload to thread pool)
+        df_features = await loop.run_in_executor(
+            None,
+            lambda: ev.FeatureEngineer.create_features(
+                game_log,
+                player_info=player_info,
+                game_info=game_info,
+                injuries=injuries,
+                team_stats=team_stats
+            )
         )
-
-        await asyncio.sleep(0.1)
 
         # Stage 3: Training/loading model
         yield {
             "stage": "training_model",
-            "progress": 60,
+            "progress": 55,
             "message": "Loading or training model..."
         }
 
@@ -592,20 +570,22 @@ class PredictionService:
             retrain = False
             retrain_skipped = True
 
-        # Acquire an exclusive per-player file lock so concurrent worker
-        # processes can't overwrite each other's trained model.
-        train_failed = False
-        with _player_model_lock(player_info['player_name']):
-            loaded = not retrain and predictor.load(player_info['player_name'])
-            if loaded:
-                predictor.update(df_features)
-            else:
-                if not predictor.train(df_features):
-                    train_failed = True
-            if not train_failed:
+        # Offload blocking model load/train/save to thread pool so the
+        # event loop stays responsive for SSE and other requests.
+        def _load_or_train():
+            with _player_model_lock(player_info['player_name']):
+                loaded = not retrain and predictor.load(player_info['player_name'])
+                if loaded:
+                    predictor.update(df_features)
+                else:
+                    if not predictor.train(df_features):
+                        return False, False  # train_failed, loaded
                 predictor.save(player_info['player_name'])
+            return True, loaded  # success, loaded
 
-        if train_failed:
+        success, loaded = await loop.run_in_executor(None, _load_or_train)
+
+        if not success:
             yield {
                 "stage": "error",
                 "progress": 100,
@@ -621,8 +601,6 @@ class PredictionService:
                 "Updating model with recent games..." if loaded else "Training new model..."
             )
         }
-
-        await asyncio.sleep(0.1)
 
         # Stage 4: Making predictions
         yield {
@@ -646,44 +624,45 @@ class PredictionService:
 
         # Calculate actual days rest from last game date
         try:
-            import pandas as pd
             last_game = pd.to_datetime(df_features['GAME_DATE'].iloc[-1])
             days_rest = min((datetime.now() - last_game).days, 7)
         except Exception:
             days_rest = 2  # Fallback if date parsing fails
 
-        # Create prediction features
-        pred_features = ev.FeatureEngineer.get_prediction_features(
-            df_features,
-            is_home=is_home,
-            opponent=opponent,
-            injuries_team=injuries_team,
-            injuries_opp=injuries_opp,
-            days_rest=days_rest,
-            vs_stats=vs_stats,
-            player_info=player_info,
-            **opp_ctx,
-        )
+        # Offload prediction to thread pool (matrix operations)
+        def _run_prediction():
+            pred_features = ev.FeatureEngineer.get_prediction_features(
+                df_features,
+                is_home=is_home,
+                opponent=opponent,
+                injuries_team=injuries_team,
+                injuries_opp=injuries_opp,
+                days_rest=days_rest,
+                vs_stats=vs_stats,
+                player_info=player_info,
+                **opp_ctx,
+            )
+            estimated_minutes = ev.FeatureEngineer.estimate_minutes(
+                df_features, is_home, days_rest, injuries_team
+            )
+            predictor._update_recent_averages(df_features)
+            preds = predictor.predict(pred_features, estimated_minutes=estimated_minutes)
+            preds = predictor.apply_injury_boost(preds, injuries_team, injuries_opp)
+            return pred_features, preds
 
-        # Estimate minutes for this game context
-        estimated_minutes = ev.FeatureEngineer.estimate_minutes(
-            df_features, is_home, days_rest, injuries_team
-        )
-
-        # Refresh recent_averages from live game log so bias correction and L10 display are always current
-        predictor._update_recent_averages(df_features)
-
-        # Make predictions with minutes-based scaling
-        predictions = predictor.predict(pred_features, estimated_minutes=estimated_minutes)
-        predictions = predictor.apply_injury_boost(predictions, injuries_team, injuries_opp)
-
-        await asyncio.sleep(0.1)
+        pred_features, predictions = await loop.run_in_executor(None, _run_prediction)
 
         yield {
             "stage": "predicting",
             "progress": 90,
             "message": "Calculating confidence intervals..."
         }
+
+        # Pre-compute L10 averages once instead of per-stat
+        l10 = df_features.tail(10)
+        l10_avgs = {col: round(l10[col].mean(), 1) for col in ['PTS', 'REB', 'AST'] if col in l10.columns}
+        if all(c in l10.columns for c in ['PTS', 'REB', 'AST']):
+            l10_avgs['PRA'] = round((l10['PTS'] + l10['REB'] + l10['AST']).mean(), 1)
 
         # Build response
         stat_predictions = {}
@@ -698,11 +677,7 @@ class PredictionService:
                 "range_low": round(confidence_info.get('low', pred * 0.8), 1),
                 "range_high": round(confidence_info.get('high', pred * 1.2), 1),
                 "uncertainty_std": round(uncertainty['std'], 1) if uncertainty else None,
-                "recent_avg": round(
-                    (df_features['PTS'] + df_features['REB'] + df_features['AST']).tail(10).mean()
-                    if stat == 'PRA'
-                    else df_features[stat].tail(10).mean()
-                , 1) if stat in df_features.columns or stat == 'PRA' else None
+                "recent_avg": l10_avgs.get(stat),
             }
 
         # Build opponent context
