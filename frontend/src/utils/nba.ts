@@ -3,7 +3,7 @@
  * Uses the NBA CDN press day photos (1040x760).
  */
 export function getNbaHeadshotUrl(playerId: number): string {
-  return `https://cdn.nba.com/headshots/nba/latest/1040x760/${playerId}.png`
+  return `https://cdn.nba.com/headshots/nba/latest/260x190/${playerId}.png`
 }
 
 /**

@@ -19,6 +19,8 @@ import statistics
 # Add parent directory to path to import existing modules
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from sleeper_client import get_headshot_url as get_sleeper_headshot
+
 # Lazy import cache — nba_evaluator (and TensorFlow) only loads on first prediction
 _nba_ev = None
 
@@ -453,7 +455,7 @@ class PredictionService:
                     'team_id': None,
                     'team_abbreviation': '',
                     'team_name': '',
-                    'headshot_url': None,
+                    'headshot_url': get_sleeper_headshot(p['full_name']),
                 })
                 if len(results) >= 10:
                     break
