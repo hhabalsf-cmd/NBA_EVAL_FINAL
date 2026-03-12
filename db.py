@@ -1716,13 +1716,13 @@ def save_daily_picks(picks: list, date_str: str) -> int:
                     prediction, confidence, range_low, range_high,
                     recent_avg, odds_line, edge, direction,
                     opponent, is_home, matchup, game_date,
-                    model_type, prob_over, rank
+                    model_type, prob_over, rank, headshot_url
                 ) VALUES (
                     %s, %s, %s, %s, %s,
                     %s, %s, %s, %s,
                     %s, %s, %s, %s,
                     %s, %s, %s, %s,
-                    %s, %s, %s
+                    %s, %s, %s, %s
                 )
             """
 
@@ -1748,6 +1748,7 @@ def save_daily_picks(picks: list, date_str: str) -> int:
                     p.get('model_type', 'gradient_boost'),
                     p.get('prob_over'),
                     p.get('rank'),
+                    p.get('headshot_url'),
                 )
                 for p in picks
             ]

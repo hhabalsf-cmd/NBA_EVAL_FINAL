@@ -35,6 +35,7 @@ import numpy as np
 import pandas as pd
 from bdl_client import get_bdl_client
 from bdl_id_mapper import get_team_mapper, get_player_mapper
+from sleeper_client import get_headshot_url as get_sleeper_headshot
 
 import db
 from nba_evaluator import (
@@ -585,6 +586,7 @@ def generate_daily_picks() -> list[dict]:
             all_candidates.append({
                 'player': player_name,
                 'player_id': player_id,
+                'headshot_url': get_sleeper_headshot(player_name),
                 'team_abbrev': team_abbrev,
                 'stat': stat,
                 'prediction': pred_value,

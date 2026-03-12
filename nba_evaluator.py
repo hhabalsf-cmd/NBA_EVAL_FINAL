@@ -67,6 +67,8 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
 warnings.filterwarnings("ignore", module="sklearn")
 
+import model_storage
+
 # === CONFIGURATION ===
 DATA_DIR = Path("./data")
 MODEL_DIR = Path("./models")
@@ -120,6 +122,8 @@ def should_retrain(player_name: str) -> bool:
     blocked so no one can overwrite a fresh model with stale mid-day data.
     """
     model_path = MODEL_DIR / f"{player_name.replace(' ', '_')}_model.pkl"
+    if not model_path.exists():
+        model_storage.download_player_model(player_name, model_path)
     if not model_path.exists():
         return True
 
@@ -2973,6 +2977,10 @@ class MLPredictor:
 
         # Update in-memory cache so the next load() skips disk I/O
         _model_cache_put(player_name, data)
+
+        # L3: upload to Supabase Storage
+        model_storage.upload_player_model(player_name, filename)
+
         print(f"💾 Model saved to {filename}")
 
     def _restore_from_dict(self, data: dict, player_name: str) -> bool:
@@ -3015,7 +3023,7 @@ class MLPredictor:
         return True
 
     def load(self, player_name):
-        """Load model from in-memory cache or disk."""
+        """Load model from L1 memory -> L2 disk -> L3 Supabase Storage."""
         # L1: in-memory cache (avoids pickle I/O)
         cached = _model_cache_get(player_name)
         if cached is not None:
@@ -3025,22 +3033,34 @@ class MLPredictor:
 
         # L2: disk
         filename = MODEL_DIR / f"{player_name.replace(' ', '_')}_model.pkl"
-        if not filename.exists():
-            return False
+        if filename.exists():
+            try:
+                with open(filename, 'rb') as f:
+                    data = pickle.load(f)
 
-        try:
-            with open(filename, 'rb') as f:
-                data = pickle.load(f)
+                self._restore_from_dict(data, player_name)
 
-            self._restore_from_dict(data, player_name)
+                # Promote to L1 cache
+                _model_cache_put(player_name, data)
+                print(f"📂 Loaded model from {filename}")
+                return True
+            except Exception as e:
+                print(f"⚠️ Error loading model from disk: {e}")
 
-            # Promote to L1 cache
-            _model_cache_put(player_name, data)
-            print(f"📂 Loaded model from {filename}")
-            return True
-        except Exception as e:
-            print(f"⚠️ Error loading model: {e}")
-            return False
+        # L3: Supabase Storage -> download to L2, then load
+        if model_storage.download_player_model(player_name, filename):
+            try:
+                with open(filename, 'rb') as f:
+                    data = pickle.load(f)
+
+                self._restore_from_dict(data, player_name)
+                _model_cache_put(player_name, data)
+                print(f"☁️ Loaded model from Supabase Storage")
+                return True
+            except Exception as e:
+                print(f"⚠️ Error loading model after Supabase download: {e}")
+
+        return False
 
 
 class ProbabilityCalculator:

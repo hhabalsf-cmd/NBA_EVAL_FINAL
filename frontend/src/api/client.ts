@@ -202,6 +202,7 @@ export interface CumulativeProfitPoint {
 export interface BestBet {
   player: string
   player_id?: number
+  headshot_url?: string
   team_abbrev?: string
   stat: string
   line: number
@@ -223,6 +224,7 @@ export interface DailyPick {
   generated_date: string
   player: string
   player_id?: number
+  headshot_url?: string
   team_abbrev?: string
   stat: string
   prediction: number
@@ -254,6 +256,7 @@ export function dailyPickToBestBet(pick: DailyPick): BestBet {
   return {
     player: pick.player,
     player_id: pick.player_id,
+    headshot_url: pick.headshot_url,
     team_abbrev: pick.team_abbrev,
     stat: pick.stat,
     line: displayLine,

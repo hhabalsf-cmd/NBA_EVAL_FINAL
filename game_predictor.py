@@ -67,6 +67,8 @@ from nba_evaluator import (
     _safe_int,
 )
 
+import model_storage
+
 warnings.filterwarnings("ignore")
 
 # Model path
@@ -1715,6 +1717,8 @@ class GamePredictor:
         """Check if the model should be retrained."""
         model_path = GAME_MODEL_DIR / 'game_predictor.pkl'
         if not model_path.exists():
+            model_storage.download_game_model(model_path)
+        if not model_path.exists():
             return True
 
         try:
@@ -1765,11 +1769,17 @@ class GamePredictor:
             'graded_count_at_train': graded_count,
             'model_version': 'v2.0',
         }, model_path)
+
+        # L3: upload to Supabase Storage
+        model_storage.upload_game_model(model_path)
+
         print(f"  Model saved to {model_path}")
 
     def load_model(self):
-        """Load saved model."""
+        """Load saved model from disk or Supabase Storage."""
         model_path = GAME_MODEL_DIR / 'game_predictor.pkl'
+        if not model_path.exists():
+            model_storage.download_game_model(model_path)
         if not model_path.exists():
             return False
 
@@ -1802,6 +1812,8 @@ class GamePredictor:
     def get_model_info(self):
         """Get info about the current saved model."""
         model_path = GAME_MODEL_DIR / 'game_predictor.pkl'
+        if not model_path.exists():
+            model_storage.download_game_model(model_path)
         if not model_path.exists():
             return None
 

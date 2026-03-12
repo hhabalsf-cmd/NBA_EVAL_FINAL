@@ -57,6 +57,20 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         _logger.warning("Player cache warm-up failed (non-fatal): %s", exc)
 
+    # 5. Pre-download game model from Supabase if not on local disk
+    try:
+        import model_storage
+        from nba_evaluator import MODEL_DIR
+        game_model_path = MODEL_DIR / "games" / "game_predictor.pkl"
+        if not game_model_path.exists():
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None, model_storage.download_game_model, game_model_path
+            )
+            _logger.info("Game model pre-downloaded from Supabase")
+    except Exception as exc:
+        _logger.warning("Game model pre-download failed (non-fatal): %s", exc)
+
     yield
 
 

@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import db
 
+from ..limiter import limiter
 from ..schemas.prediction import (
     PickCreate,
     PickResponse,
@@ -49,7 +50,9 @@ def _pick_to_response(p: dict) -> PickResponse:
 
 
 @router.get("", response_model=List[PickResponse])
+@limiter.limit("60/minute")
 async def get_picks(
+    request: Request,
     days: int = Query(default=3650, ge=1, le=3650, description="Number of days to look back"),
     limit: Optional[int] = Query(default=None, ge=1, le=5000, description="Return most recent N picks (overrides days)"),
     pending_only: bool = Query(default=False, description="Only return ungraded picks"),
@@ -66,7 +69,8 @@ async def get_picks(
 
 
 @router.post("", response_model=PickResponse)
-async def create_pick(pick: PickCreate, current_user: dict = Depends(get_current_user)):
+@limiter.limit("30/minute")
+async def create_pick(request: Request, pick: PickCreate, current_user: dict = Depends(get_current_user)):
     """Save a new pick."""
     pick_data = {
         'player': pick.player,
@@ -99,7 +103,8 @@ async def create_pick(pick: PickCreate, current_user: dict = Depends(get_current
 
 
 @router.get("/{pick_id}", response_model=PickResponse)
-async def get_pick(pick_id: int, current_user: dict = Depends(get_current_user)):
+@limiter.limit("60/minute")
+async def get_pick(request: Request, pick_id: int, current_user: dict = Depends(get_current_user)):
     """Get a specific pick by ID."""
     pick = db.get_pick_by_id(pick_id)
 
@@ -113,7 +118,8 @@ async def get_pick(pick_id: int, current_user: dict = Depends(get_current_user))
 
 
 @router.put("/{pick_id}/grade", response_model=PickResponse)
-async def grade_pick(pick_id: int, grade: PickGradeRequest, current_user: dict = Depends(get_current_user)):
+@limiter.limit("20/minute")
+async def grade_pick(request: Request, pick_id: int, grade: PickGradeRequest, current_user: dict = Depends(get_current_user)):
     """Grade a pick with the actual result."""
     pick = db.get_pick_by_id(pick_id)
 
@@ -132,7 +138,8 @@ async def grade_pick(pick_id: int, grade: PickGradeRequest, current_user: dict =
 
 
 @router.delete("/{pick_id}")
-async def delete_pick(pick_id: int, current_user: dict = Depends(get_current_user)):
+@limiter.limit("20/minute")
+async def delete_pick(request: Request, pick_id: int, current_user: dict = Depends(get_current_user)):
     """Delete a pick."""
     pick = db.get_pick_by_id(pick_id)
 
