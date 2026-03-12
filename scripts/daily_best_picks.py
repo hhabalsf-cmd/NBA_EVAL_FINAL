@@ -460,6 +460,13 @@ def generate_daily_picks() -> list[dict]:
                 logger.warning(f"  ⚠️ Training error for {player_name}: {e}")
                 players_skipped += 1
                 continue
+        else:
+            # Warm-start update with latest game data
+            try:
+                predictor.update(df)
+                predictor.save(player_name)
+            except Exception as e:
+                logger.warning(f"  ⚠️ Update error for {player_name}: {e}")
 
         # Get prediction features for today's game
         try:
