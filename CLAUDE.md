@@ -38,7 +38,7 @@ Both servers must run simultaneously. Vite proxies `/api/*` → `localhost:8000`
 ```
 **CRITICAL:** Always use **lowercase** keys (`def_rating`, `pace`, `opp_ast`). Uppercase (`DEF_RATING`) silently returns fallback. API failure fallback: `def_rating: 110, pace: 100`.
 
-**`FeatureEngineer`** — 57 canonical features (`FEATURE_COLS`): rolling avgs (3/5/7/10/15/20 + EMA), efficiency metrics, opponent defensive features (`OPP_DEF_RATING_NORM`, `OPP_PACE_NORM`), pace-adjusted stats, matchup history, home/away splits, B2B/rest, hot/cold streak, usage proxy.
+**`FeatureEngineer`** — 100 canonical features (`FEATURE_COLS`): rolling avgs (3/5/7/10/15/20 + EMA), efficiency metrics, opponent defensive features (`OPP_DEF_RATING_NORM`, `OPP_PACE_NORM`), enhanced opponent context (off_rating, net_rating, eFG%, TOV%, OREB%, DREB%), pace-adjusted stats, matchup history, home/away splits, B2B/rest, hot/cold streak, usage proxy, rebound splits (OREB/DREB), 3PT shooting features, FT rate, foul trouble, pace/elite opponent interaction flags. `extract_opp_stats()` helper extracts all opponent context from team_stats dict.
 
 **`OddsAPI`** — Key lookup: function param → `ODDS_API_KEY` env var → `config.json`. Market map: `player_points→PTS`, `player_rebounds→REB`, `player_assists→AST`, `player_points_rebounds_assists→PRA`. **Status: quota exhausted** — replace key in `config.json` to re-enable (only affects line auto-population on PlayerPage).
 

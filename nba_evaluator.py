@@ -755,7 +755,16 @@ class NBADataScraper:
                     'opp_pts': opp_pts,
                     'pace': pace,
                     'pts_rank': _safe_int(stats.get('def_rating_rank'), 15),
-                    'opp_ast': 25,    # BDL advanced does not expose opp_ast; use neutral default
+                    'opp_ast': 25,    # Overridden by base stats if available
+                    # Enhanced opponent context (from BDL advanced stats)
+                    'off_rating': _safe_float(stats.get('off_rating'), 110),
+                    'net_rating': _safe_float(stats.get('net_rating'), 0),
+                    'efg_pct': _safe_float(stats.get('efg_pct'), 0.50),
+                    'ts_pct': _safe_float(stats.get('ts_pct'), 0.56),
+                    'ast_pct': _safe_float(stats.get('ast_pct'), 0.60),
+                    'tov_pct': _safe_float(stats.get('tov_pct'), 14.0),
+                    'oreb_pct': _safe_float(stats.get('oreb_pct'), 0.27),
+                    'dreb_pct': _safe_float(stats.get('dreb_pct'), 0.73),
                 }
 
             # Process base stats — enrich with pts_rank (opponent points allowed rank)
@@ -778,10 +787,16 @@ class NBADataScraper:
                     team_data[team_abbrev] = {
                         'def_rating': 110, 'opp_pts': 110, 'pace': 100,
                         'pts_rank': 15, 'opp_ast': 25,
+                        'off_rating': 110, 'net_rating': 0,
+                        'efg_pct': 0.50, 'ts_pct': 0.56, 'ast_pct': 0.60,
+                        'tov_pct': 14.0, 'oreb_pct': 0.27, 'dreb_pct': 0.73,
                     }
 
-                # Use opponent assists approximation from team's own assists allowed (opp_ast)
-                # BDL base gives own ast; opp_ast not available — leave at default 25
+                # Derive opp_ast from team's actual assists per game (better than hardcoded 25)
+                team_ast = _safe_float(stats.get('ast'), None)
+                if team_ast is not None:
+                    team_data[team_abbrev]['opp_ast'] = team_ast
+
                 # If def_rating_rank was not in advanced, fall back to pts_rank from base
                 if team_data[team_abbrev].get('pts_rank', 15) == 15:
                     pts_rank = stats.get('pts_rank')
@@ -798,8 +813,11 @@ class NBADataScraper:
 
         except Exception as e:
             print(f"⚠️ Error fetching team defensive stats: {e}")
-            return {abbrev: {'def_rating': 110, 'pace': 100, 'opp_pts': 110, 'pts_rank': 15, 'opp_ast': 25}
-                    for abbrev in TEAM_ABBREV_TO_NAME}
+            return {abbrev: {
+                'def_rating': 110, 'pace': 100, 'opp_pts': 110, 'pts_rank': 15, 'opp_ast': 25,
+                'off_rating': 110, 'net_rating': 0, 'efg_pct': 0.50, 'ts_pct': 0.56,
+                'ast_pct': 0.60, 'tov_pct': 14.0, 'oreb_pct': 0.27, 'dreb_pct': 0.73,
+            } for abbrev in TEAM_ABBREV_TO_NAME}
 
     def get_league_averages(self, season='2025-26'):
         """Get league average stats for normalization.
@@ -1016,6 +1034,26 @@ class FeatureEngineer:
     """Creates features for ML models"""
 
     @staticmethod
+    def extract_opp_stats(team_stats, opponent):
+        """Extract all opponent context stats from team_stats dict.
+
+        Returns a dict of keyword arguments suitable for passing to
+        ``get_prediction_features(**opp_ctx)``.
+        """
+        opp = (team_stats or {}).get(opponent, {})
+        return {
+            'opp_def_rating': opp.get('def_rating', 110),
+            'opp_pace': opp.get('pace', 100),
+            'opp_ast_allowed': opp.get('opp_ast', 25),
+            'opp_off_rating': opp.get('off_rating', 110),
+            'opp_net_rating': opp.get('net_rating', 0),
+            'opp_efg_pct': opp.get('efg_pct', 0.50),
+            'opp_tov_pct': opp.get('tov_pct', 14.0),
+            'opp_oreb_pct': opp.get('oreb_pct', 0.27),
+            'opp_dreb_pct': opp.get('dreb_pct', 0.73),
+        }
+
+    @staticmethod
     def create_features(game_log, player_info=None, game_info=None, injuries=None, team_stats=None):
         """Create comprehensive feature set from game log"""
         df = game_log.copy()
@@ -1066,6 +1104,38 @@ class FeatureEngineer:
         df['FANTASY_PTS'] = (df['PTS'] + 1.2 * df['REB'] + 1.5 * df['AST'] +
                             3 * df['STL'] + 3 * df['BLK'] - df['TOV'])
 
+        # =====================
+        # REBOUND SPLIT FEATURES
+        # =====================
+        if 'OREB' in df.columns and 'DREB' in df.columns:
+            df['OREB_RATE'] = df.apply(
+                lambda x: x['OREB'] / x['REB'] if x['REB'] > 0 else 0.0, axis=1
+            )
+
+        # =====================
+        # THREE-POINT SHOOTING RATE
+        # =====================
+        if 'FG3A' in df.columns and 'FGA' in df.columns:
+            df['FG3_RATE'] = df.apply(
+                lambda x: x['FG3A'] / x['FGA'] if x['FGA'] > 0 else 0.0, axis=1
+            )
+
+        # =====================
+        # FREE THROW RATE (foul-drawing ability)
+        # =====================
+        if 'FTA' in df.columns and 'FGA' in df.columns:
+            df['FT_RATE'] = df.apply(
+                lambda x: x['FTA'] / x['FGA'] if x['FGA'] > 0 else 0.0, axis=1
+            )
+
+        # =====================
+        # FOULS PER MINUTE (foul trouble risk)
+        # =====================
+        if 'PF' in df.columns:
+            df['PF_PER_MIN'] = df.apply(
+                lambda x: x['PF'] / x['MIN_NUMERIC'] if x['MIN_NUMERIC'] > 5 else 0.0, axis=1
+            )
+
         # Home/Away indicator
         df['IS_HOME'] = df['MATCHUP'].apply(lambda x: 1 if 'vs.' in str(x) else 0)
 
@@ -1075,7 +1145,10 @@ class FeatureEngineer:
         # Rolling averages (multiple windows) with exponential weighting for recent form
         # Include new advanced stats in rolling calculations
         stats_for_rolling = ['PTS', 'REB', 'AST', 'MIN_NUMERIC', 'FGA', 'FG_PCT', 'FTA',
-                             'TS_PCT', 'EFG_PCT', 'PTS_PER_FGA', 'STOCKS', 'FANTASY_PTS']
+                             'TS_PCT', 'EFG_PCT', 'PTS_PER_FGA', 'STOCKS', 'FANTASY_PTS',
+                             # New: rebound splits, 3PT, FT, fouls, rates
+                             'OREB', 'DREB', 'FG3M', 'FG3A', 'FTM', 'PF',
+                             'FG3_RATE', 'FT_RATE']
         for stat in stats_for_rolling:
             if stat in df.columns:
                 # Standard rolling averages
@@ -1092,9 +1165,11 @@ class FeatureEngineer:
         # PER-36-MINUTE NORMALIZATION
         # =====================
         # Normalize stats to per-36-minute basis to account for minutes variation
-        for stat in ['PTS', 'REB', 'AST']:
+        for stat in ['PTS', 'REB', 'AST', 'OREB', 'DREB']:
+            if stat not in df.columns:
+                continue
             df[f'{stat}_PER36'] = df.apply(
-                lambda x: (x[stat] / x['MIN_NUMERIC'] * 36) if x['MIN_NUMERIC'] > 10 else 0, axis=1
+                lambda x, s=stat: (x[s] / x['MIN_NUMERIC'] * 36) if x['MIN_NUMERIC'] > 10 else 0, axis=1
             )
             df[f'ROLL_5_{stat}_PER36'] = df[f'{stat}_PER36'].rolling(5, min_periods=1).mean().shift(1)
             df[f'ROLL_10_{stat}_PER36'] = df[f'{stat}_PER36'].rolling(10, min_periods=1).mean().shift(1)
@@ -1125,6 +1200,10 @@ class FeatureEngineer:
         df['REB_TREND'] = df['ROLL_5_REB'] - df['ROLL_20_REB']
         df['AST_TREND'] = df['ROLL_5_AST'] - df['ROLL_20_AST']
         df['MIN_TREND'] = df['ROLL_5_MIN_NUMERIC'] - df['ROLL_20_MIN_NUMERIC']
+
+        # Three-point trend (recent 3PT form vs longer term)
+        if 'ROLL_5_FG3M' in df.columns and 'ROLL_20_FG3M' in df.columns:
+            df['FG3_TREND'] = df['ROLL_5_FG3M'] - df['ROLL_20_FG3M']
 
         # Days rest (if we have date info)
         df['GAME_DATE'] = pd.to_datetime(df['GAME_DATE'])
@@ -1189,6 +1268,45 @@ class FeatureEngineer:
             df['OPP_PACE_ROLL10'] = df['OPP_PACE'].rolling(10, min_periods=3).mean().shift(1)
 
             # =====================
+            # ENHANCED OPPONENT CONTEXT (from BDL advanced stats)
+            # =====================
+            # Opponent offensive rating (scoring environment context)
+            df['OPP_OFF_RATING'] = df['OPPONENT'].map(
+                lambda x: team_stats.get(x, {}).get('off_rating', 110)
+            )
+            df['OPP_OFF_RATING_NORM'] = (df['OPP_OFF_RATING'] - 110) / 5
+
+            # Opponent net rating (overall team quality)
+            df['OPP_NET_RATING'] = df['OPPONENT'].map(
+                lambda x: team_stats.get(x, {}).get('net_rating', 0)
+            )
+            df['OPP_NET_RATING_NORM'] = df['OPP_NET_RATING'] / 5
+
+            # Opponent eFG% (scoring efficiency context)
+            df['OPP_EFG_PCT'] = df['OPPONENT'].map(
+                lambda x: team_stats.get(x, {}).get('efg_pct', 0.50)
+            )
+            df['OPP_EFG_PCT_NORM'] = (df['OPP_EFG_PCT'] - 0.50) / 0.03
+
+            # Opponent turnover rate (transition opportunity indicator)
+            df['OPP_TOV_PCT'] = df['OPPONENT'].map(
+                lambda x: team_stats.get(x, {}).get('tov_pct', 14.0)
+            )
+            df['OPP_TOV_PCT_NORM'] = (df['OPP_TOV_PCT'] - 14.0) / 2.0
+
+            # Opponent offensive rebound rate (second chance pts context)
+            df['OPP_OREB_PCT'] = df['OPPONENT'].map(
+                lambda x: team_stats.get(x, {}).get('oreb_pct', 0.27)
+            )
+            df['OPP_OREB_PCT_NORM'] = (df['OPP_OREB_PCT'] - 0.27) / 0.05
+
+            # Opponent defensive rebound rate (rebound availability for player)
+            df['OPP_DREB_PCT'] = df['OPPONENT'].map(
+                lambda x: team_stats.get(x, {}).get('dreb_pct', 0.73)
+            )
+            df['OPP_DREB_PCT_NORM'] = (df['OPP_DREB_PCT'] - 0.73) / 0.05
+
+            # =====================
             # PACE-ADJUSTED STATS
             # =====================
             # Normalize stats to per-100-possessions equivalent
@@ -1241,6 +1359,25 @@ class FeatureEngineer:
             df['RESTED_HOME'] = df['EXTENDED_REST'] * df['IS_HOME']
 
         # =====================
+        # REBOUND SPLIT INTERACTION
+        # =====================
+        if 'OREB_RATE' in df.columns and 'OPP_OREB_PCT_NORM' in df.columns:
+            df['OREB_RATE_x_OPP_OREB'] = df['OREB_RATE'] * df['OPP_OREB_PCT_NORM']
+
+        # =====================
+        # PACE BUCKET FLAGS
+        # =====================
+        if 'OPP_PACE' in df.columns:
+            df['HIGH_PACE_GAME'] = (df['OPP_PACE'] > 103).astype(int)
+            df['LOW_PACE_GAME'] = (df['OPP_PACE'] < 97).astype(int)
+
+        # =====================
+        # ELITE OPPONENT FLAG
+        # =====================
+        if 'OPP_NET_RATING' in df.columns:
+            df['ELITE_OPP'] = (df['OPP_NET_RATING'] > 5.0).astype(int)
+
+        # =====================
         # POSITION FEATURES
         # =====================
         _POSITION_ORD = {
@@ -1287,12 +1424,22 @@ class FeatureEngineer:
     @staticmethod
     def get_prediction_features(df, is_home, opponent, injuries_team=0, injuries_opp=0,
                                  opp_def_rating=110, opp_pace=100, opp_ast_allowed=25, days_rest=2, vs_stats=None,
-                                 player_info=None):
+                                 player_info=None,
+                                 # Enhanced opponent context (from BDL advanced stats)
+                                 opp_off_rating=110, opp_net_rating=0,
+                                 opp_efg_pct=0.50, opp_tov_pct=14.0,
+                                 opp_oreb_pct=0.27, opp_dreb_pct=0.73):
         """Get feature vector for prediction
 
         Args:
             vs_stats: Dict with head-to-head stats (avg_pts, avg_reb, avg_ast, games)
             player_info: Dict with player metadata including 'position'
+            opp_off_rating: Opponent offensive rating (pts per 100 poss)
+            opp_net_rating: Opponent net rating (off - def)
+            opp_efg_pct: Opponent effective FG%
+            opp_tov_pct: Opponent turnover percentage
+            opp_oreb_pct: Opponent offensive rebound percentage
+            opp_dreb_pct: Opponent defensive rebound percentage
         """
         latest = df.iloc[-1]
 
@@ -1411,6 +1558,60 @@ class FeatureEngineer:
             'POSITION_ORD': latest.get('POSITION_ORD', 2),
             'POSITION_x_OPP_DEF': latest.get('POSITION_x_OPP_DEF', 0),
             'POSITION_x_OPP_PACE': latest.get('POSITION_x_OPP_PACE', 0),
+
+            # =====================
+            # ENHANCED OPPONENT CONTEXT (from BDL advanced stats)
+            # =====================
+            'OPP_OFF_RATING_NORM': (opp_off_rating - 110) / 5,
+            'OPP_NET_RATING_NORM': opp_net_rating / 5,
+            'OPP_EFG_PCT_NORM': (opp_efg_pct - 0.50) / 0.03,
+            'OPP_TOV_PCT_NORM': (opp_tov_pct - 14.0) / 2.0,
+            'OPP_OREB_PCT_NORM': (opp_oreb_pct - 0.27) / 0.05,
+            'OPP_DREB_PCT_NORM': (opp_dreb_pct - 0.73) / 0.05,
+
+            # =====================
+            # REBOUND SPLIT FEATURES
+            # =====================
+            'OREB_RATE': latest.get('OREB_RATE', 0.25),
+            'ROLL_5_OREB': latest.get('ROLL_5_OREB', 1.0),
+            'ROLL_10_OREB': latest.get('ROLL_10_OREB', 1.0),
+            'ROLL_5_DREB': latest.get('ROLL_5_DREB', 3.0),
+            'ROLL_10_DREB': latest.get('ROLL_10_DREB', 3.0),
+
+            # =====================
+            # THREE-POINT SHOOTING FEATURES
+            # =====================
+            'FG3_RATE': latest.get('FG3_RATE', 0.35),
+            'ROLL_5_FG3M': latest.get('ROLL_5_FG3M', 1.5),
+            'ROLL_10_FG3M': latest.get('ROLL_10_FG3M', 1.5),
+            'ROLL_5_FG3A': latest.get('ROLL_5_FG3A', 4.0),
+            'FG3_TREND': latest.get('FG3_TREND', 0),
+            'ROLL_5_FG3_RATE': latest.get('ROLL_5_FG3_RATE', 0.35),
+
+            # =====================
+            # FREE THROW FEATURES
+            # =====================
+            'FT_RATE': latest.get('FT_RATE', 0.25),
+            'ROLL_5_FT_RATE': latest.get('ROLL_5_FT_RATE', 0.25),
+            'ROLL_5_FTM': latest.get('ROLL_5_FTM', 2.0),
+
+            # =====================
+            # FOUL TROUBLE / GAME FLOW
+            # =====================
+            'ROLL_5_PF': latest.get('ROLL_5_PF', 2.5),
+            'PF_PER_MIN': latest.get('PF_PER_MIN', 0.08),
+
+            # =====================
+            # ENHANCED INTERACTION FEATURES
+            # =====================
+            'OREB_RATE_x_OPP_OREB': latest.get('OREB_RATE', 0.25) * ((opp_oreb_pct - 0.27) / 0.05),
+            'HIGH_PACE_GAME': 1 if opp_pace > 103 else 0,
+            'LOW_PACE_GAME': 1 if opp_pace < 97 else 0,
+            'ELITE_OPP': 1 if opp_net_rating > 5.0 else 0,
+
+            # Per-36 rebound splits
+            'ROLL_5_OREB_PER36': latest.get('ROLL_5_OREB_PER36', 0),
+            'ROLL_5_DREB_PER36': latest.get('ROLL_5_DREB_PER36', 0),
         }
 
         # Add head-to-head stats if available
@@ -1542,6 +1743,43 @@ class MLPredictor:
         'INJURIES_TEAM', 'INJURIES_OPP',
         # Position features
         'POSITION_ORD', 'POSITION_x_OPP_DEF', 'POSITION_x_OPP_PACE',
+
+        # =====================
+        # NEW FEATURES (BDL advanced stats integration)
+        # =====================
+
+        # Enhanced Opponent Context (from team advanced stats)
+        'OPP_OFF_RATING_NORM', 'OPP_NET_RATING_NORM', 'OPP_EFG_PCT_NORM',
+        'OPP_TOV_PCT_NORM', 'OPP_OREB_PCT_NORM', 'OPP_DREB_PCT_NORM',
+
+        # Rebound Split Features
+        'OREB_RATE',
+        'ROLL_5_OREB', 'ROLL_10_OREB',
+        'ROLL_5_DREB', 'ROLL_10_DREB',
+
+        # Three-Point Shooting Features
+        'FG3_RATE',
+        'ROLL_5_FG3M', 'ROLL_10_FG3M',
+        'ROLL_5_FG3A',
+        'FG3_TREND',
+        'ROLL_5_FG3_RATE',
+
+        # Free Throw Features
+        'FT_RATE',
+        'ROLL_5_FT_RATE',
+        'ROLL_5_FTM',
+
+        # Foul Trouble / Game Flow
+        'ROLL_5_PF',
+        'PF_PER_MIN',
+
+        # Enhanced Interaction Features
+        'OREB_RATE_x_OPP_OREB',
+        'HIGH_PACE_GAME', 'LOW_PACE_GAME',
+        'ELITE_OPP',
+
+        # Per-36 Rebound Splits
+        'ROLL_5_OREB_PER36', 'ROLL_5_DREB_PER36',
     ]
 
     # Per-stat optimized hyperparameters for Gradient Boosting
@@ -3073,9 +3311,7 @@ def find_best_bets(min_edge=5.0, max_edge=55.0, max_results=20, select_games=Fal
             df = FeatureEngineer.create_features(game_log, player_info, game_info, injuries, team_stats)
 
             # Get opponent stats
-            opp_def_rating = team_stats.get(opponent, {}).get('def_rating', 110)
-            opp_pace = team_stats.get(opponent, {}).get('pace', 100)
-            opp_ast_allowed = team_stats.get(opponent, {}).get('opp_ast', 25)
+            opp_ctx = FeatureEngineer.extract_opp_stats(team_stats, opponent)
 
             # Calculate days rest
             last_game = pd.to_datetime(df['GAME_DATE'].iloc[-1])
@@ -3090,8 +3326,10 @@ def find_best_bets(min_edge=5.0, max_edge=55.0, max_results=20, select_games=Fal
 
             # Generate features for prediction
             features_df = FeatureEngineer.get_prediction_features(
-                df, is_home, opponent, injuries_team, injuries_opp,
-                opp_def_rating, opp_pace, opp_ast_allowed, days_rest, vs_stats
+                df, is_home, opponent,
+                injuries_team=injuries_team, injuries_opp=injuries_opp,
+                days_rest=days_rest, vs_stats=vs_stats,
+                **opp_ctx,
             )
 
             # Load or train model
@@ -3794,9 +4032,7 @@ def interactive_mode():
         # Get opponent context
         is_home = game_info.get('is_home', 0) if game_info else 0
         opponent = game_info.get('opponent', '') if game_info else ''
-        opp_def_rating = team_stats.get(opponent, {}).get('def_rating', 110)
-        opp_pace = team_stats.get(opponent, {}).get('pace', 100)
-        opp_ast_allowed = team_stats.get(opponent, {}).get('opp_ast', 25)
+        opp_ctx = FeatureEngineer.extract_opp_stats(team_stats, opponent)
 
         # Get injury counts for teams
         team_abbrev = player_info.get('team_abbrev', '')
@@ -3808,10 +4044,8 @@ def interactive_mode():
             df, is_home, opponent,
             injuries_team=injuries_team,
             injuries_opp=injuries_opp,
-            opp_def_rating=opp_def_rating,
-            opp_pace=opp_pace,
-            opp_ast_allowed=opp_ast_allowed,
-            vs_stats=vs_stats
+            vs_stats=vs_stats,
+            **opp_ctx,
         )
 
         # Estimate minutes for this game context
@@ -4149,9 +4383,7 @@ Examples:
     # Get opponent context
     is_home = game_info.get('is_home', 0) if game_info else 0
     opponent = game_info.get('opponent', '') if game_info else ''
-    opp_def_rating = team_stats.get(opponent, {}).get('def_rating', 110)
-    opp_pace = team_stats.get(opponent, {}).get('pace', 100)
-    opp_ast_allowed = team_stats.get(opponent, {}).get('opp_ast', 25)
+    opp_ctx = FeatureEngineer.extract_opp_stats(team_stats, opponent)
 
     # Get injury counts
     team_abbrev = player_info.get('team_abbrev', '')
@@ -4163,10 +4395,8 @@ Examples:
         df, is_home, opponent,
         injuries_team=injuries_team,
         injuries_opp=injuries_opp,
-        opp_def_rating=opp_def_rating,
-        opp_pace=opp_pace,
-        opp_ast_allowed=opp_ast_allowed,
-        vs_stats=vs_stats
+        vs_stats=vs_stats,
+        **opp_ctx,
     )
 
     # Estimate minutes for this game

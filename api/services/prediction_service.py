@@ -634,10 +634,7 @@ class PredictionService:
         # Get opponent context
         opponent = game_info.get('opponent', '') if game_info else ''
         is_home = game_info.get('is_home', 0) if game_info else 0
-        opp_stats = team_stats.get(opponent, {}) if team_stats else {}
-        opp_def_rating = opp_stats.get('def_rating', 110)
-        opp_pace = opp_stats.get('pace', 100)
-        opp_ast_allowed = opp_stats.get('opp_ast', 25)
+        opp_ctx = ev.FeatureEngineer.extract_opp_stats(team_stats, opponent)
 
         # Get injuries context
         team_abbrev = player_info.get('team_abbrev', '')
@@ -662,12 +659,10 @@ class PredictionService:
             opponent=opponent,
             injuries_team=injuries_team,
             injuries_opp=injuries_opp,
-            opp_def_rating=opp_def_rating,
-            opp_pace=opp_pace,
-            opp_ast_allowed=opp_ast_allowed,
             days_rest=days_rest,
             vs_stats=vs_stats,
             player_info=player_info,
+            **opp_ctx,
         )
 
         # Estimate minutes for this game context

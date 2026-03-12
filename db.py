@@ -216,6 +216,15 @@ def get_team_stats_from_supabase(season: str):
             "opp_pts":    row["opp_pts"],
             "pts_rank":   row["pts_rank"],
             "opp_ast":    row["opp_ast"],
+            # Advanced stats (added for enhanced opponent context)
+            "off_rating": row.get("off_rating") or 110,
+            "net_rating": row.get("net_rating") or 0,
+            "efg_pct":    row.get("efg_pct") or 0.50,
+            "ts_pct":     row.get("ts_pct") or 0.56,
+            "ast_pct":    row.get("ast_pct") or 0.60,
+            "tov_pct":    row.get("tov_pct") or 14.0,
+            "oreb_pct":   row.get("oreb_pct") or 0.27,
+            "dreb_pct":   row.get("dreb_pct") or 0.73,
         }
         for row in rows
     }
@@ -232,20 +241,33 @@ def upsert_team_stats_to_supabase(team_data: dict, season: str) -> None:
     rows = [
         (abbrev, season,
          stats.get("def_rating"), stats.get("pace"), stats.get("opp_pts"),
-         stats.get("pts_rank"), stats.get("opp_ast"))
+         stats.get("pts_rank"), stats.get("opp_ast"),
+         stats.get("off_rating"), stats.get("net_rating"),
+         stats.get("efg_pct"), stats.get("ts_pct"), stats.get("ast_pct"),
+         stats.get("tov_pct"), stats.get("oreb_pct"), stats.get("dreb_pct"))
         for abbrev, stats in team_data.items()
     ]
 
     sql = """
         INSERT INTO team_defensive_stats
-            (team_abbrev, season, def_rating, pace, opp_pts, pts_rank, opp_ast, fetched_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+            (team_abbrev, season, def_rating, pace, opp_pts, pts_rank, opp_ast,
+             off_rating, net_rating, efg_pct, ts_pct, ast_pct,
+             tov_pct, oreb_pct, dreb_pct, fetched_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
         ON CONFLICT (team_abbrev, season) DO UPDATE SET
             def_rating = EXCLUDED.def_rating,
             pace       = EXCLUDED.pace,
             opp_pts    = EXCLUDED.opp_pts,
             pts_rank   = EXCLUDED.pts_rank,
             opp_ast    = EXCLUDED.opp_ast,
+            off_rating = EXCLUDED.off_rating,
+            net_rating = EXCLUDED.net_rating,
+            efg_pct    = EXCLUDED.efg_pct,
+            ts_pct     = EXCLUDED.ts_pct,
+            ast_pct    = EXCLUDED.ast_pct,
+            tov_pct    = EXCLUDED.tov_pct,
+            oreb_pct   = EXCLUDED.oreb_pct,
+            dreb_pct   = EXCLUDED.dreb_pct,
             fetched_at = NOW()
     """
 
