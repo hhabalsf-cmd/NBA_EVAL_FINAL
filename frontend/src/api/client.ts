@@ -282,7 +282,67 @@ export interface ProgressEvent {
   data?: PredictionResult
 }
 
+// === Live Parlay Status Types ===
+
+export interface LiveGameStatus {
+  home_team: string
+  visitor_team: string
+  home_score: number
+  visitor_score: number
+  status: string
+  period: number
+  time_remaining: string
+}
+
+export type LiveLegStatusValue =
+  | 'pending'
+  | 'in_progress'
+  | 'hit'
+  | 'miss'
+  | 'final_hit'
+  | 'final_miss'
+  | 'voided'
+
+export interface LiveLegStatus {
+  pick_id: number
+  player_name: string
+  player_id: number
+  stat: string
+  line: number
+  direction: string
+  prediction: number
+  edge: number
+  current_value: number | null
+  leg_status: LiveLegStatusValue
+  game: LiveGameStatus | null
+}
+
+export interface LiveParlayStatus {
+  parlay_id: number
+  status: string
+  created_at: string
+  legs_count: number
+  legs: LiveLegStatus[]
+  legs_hit: number
+  legs_miss: number
+  legs_pending: number
+  legs_in_progress: number
+}
+
+export interface LiveParlaysResponse {
+  parlays: LiveParlayStatus[]
+  fetched_at: string
+  has_live_games: boolean
+  next_refresh_seconds: number
+}
+
 // API Functions
+
+export async function getLiveParlayStatus(): Promise<LiveParlaysResponse> {
+  const response = await apiFetch(`${API_BASE}/live/parlay-status`)
+  if (!response.ok) await throwResponseError(response, 'Failed to fetch live parlay status')
+  return response.json()
+}
 
 export async function getPlayerOdds(playerName: string): Promise<PlayerOdds> {
   const response = await apiFetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/odds`)

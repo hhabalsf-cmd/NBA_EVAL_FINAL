@@ -2,9 +2,12 @@ import { useState, useMemo } from 'react'
 import { X, Trash2, RefreshCw, BookmarkCheck, ArrowUpDown, ArrowUp, ArrowDown, BookmarkPlus } from 'lucide-react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParlaysRealtime } from '../hooks/useParlaysRealtime'
+import { useLiveParlayStatus } from '../hooks/useLiveParlayStatus'
 import { getPicks, deletePick, Pick, createParlay, getParlays, deleteParlay, SavedParlay, autoGradePicks } from '../api/client'
+import type { LiveParlayStatus } from '../api/client'
 import { useNavigate } from 'react-router-dom'
 import { getNbaHeadshotUrl } from '../utils/nba'
+import LiveParlayCard from '../components/LiveParlayCard'
 
 const DECIMAL_PER_LEG = 1.909 // standard -110
 
@@ -76,6 +79,22 @@ export default function ParlayPage() {
     queryFn: getParlays,
     staleTime: 1000 * 30,
   })
+
+  const hasPendingParlays = savedParlays.some(p => p.status === 'pending')
+  const { data: liveData } = useLiveParlayStatus(activeTab === 'saved' && hasPendingParlays)
+
+  // Build a lookup from parlay_id → LiveParlayStatus
+  const liveParlayMap = useMemo(() => {
+    const map = new Map<number, LiveParlayStatus>()
+    if (liveData?.parlays) {
+      for (const lp of liveData.parlays) {
+        map.set(lp.parlay_id, lp)
+      }
+    }
+    return map
+  }, [liveData])
+
+  const hasLiveGames = liveData?.has_live_games ?? false
 
   const saveParlayMutation = useMutation({
     mutationFn: () => createParlay(Array.from(selectedIds)),
@@ -217,6 +236,9 @@ export default function ParlayPage() {
             }`}
           >
             Saved Parlays
+            {hasLiveGames && pendingParlayCount > 0 && (
+              <span className="ml-1 w-1.5 h-1.5 rounded-full bg-accent-success animate-pulse-live inline-block" />
+            )}
             {pendingParlayCount > 0 && (
               <span className="ml-1.5 text-[10px] bg-accent text-white rounded-full px-1.5 py-0.5 font-mono">
                 {pendingParlayCount}
@@ -563,6 +585,19 @@ export default function ParlayPage() {
             </div>
           ) : (
             savedParlays.map((parlay: SavedParlay) => {
+              // Use LiveParlayCard for pending parlays when live data is available
+              const liveParlay = liveParlayMap.get(parlay.id)
+              if (parlay.status === 'pending' && liveParlay) {
+                return (
+                  <LiveParlayCard
+                    key={parlay.id}
+                    parlay={liveParlay}
+                    onDelete={(id) => deleteParlayMutation.mutate(id)}
+                  />
+                )
+              }
+
+              // Static rendering for graded or non-live parlays
               const activeLegs = parlay.legs.filter(l => !l.voided)
               const effectiveLegs = activeLegs.length
               const payout = effectiveLegs > 0 ? Math.pow(DECIMAL_PER_LEG, effectiveLegs) : 0

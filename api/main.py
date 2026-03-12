@@ -15,7 +15,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from slowapi.errors import RateLimitExceeded
 
 from .limiter import limiter
-from .routers import players_router, bets_router, picks_router, games_router, auth_router, parlays_router, sync_router
+from .routers import players_router, bets_router, picks_router, games_router, auth_router, parlays_router, sync_router, live_router
 
 _logger = logging.getLogger(__name__)
 
@@ -128,6 +128,7 @@ app.include_router(games_router)
 app.include_router(auth_router)
 app.include_router(parlays_router)
 app.include_router(sync_router)
+app.include_router(live_router)
 
 
 @app.get("/api/health")

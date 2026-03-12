@@ -495,3 +495,24 @@ select {
     padding-bottom: 0;
   }
 }
+
+/* ── Live parlay animations ──────────────────────────────────────────────────── */
+
+@keyframes pulse-live {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.animate-pulse-live {
+  animation: pulse-live 2s ease-in-out infinite;
+}
+
+@keyframes stat-update {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+
+.animate-stat-update {
+  animation: stat-update 0.4s ease-out;
+}
