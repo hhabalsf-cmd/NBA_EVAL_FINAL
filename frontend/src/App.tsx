@@ -102,13 +102,13 @@ function App() {
         {/* Top Navigation */}
         <nav className="sticky top-0 z-50 bg-bg-secondary/80 backdrop-blur-xl border-b border-border-subtle">
           <div className="max-w-5xl mx-auto px-4 sm:px-8">
-            <div className="flex items-center justify-between h-14 sm:h-16">
+            <div className="flex items-center justify-between h-20 sm:h-24">
               {/* Logo */}
               <NavLink to="/" className="flex items-center group">
                 <img
                   src="/logo-full.png"
                   alt="Bettin' Jrys"
-                  className="h-12 sm:h-14 object-contain group-hover:opacity-80 transition-opacity duration-150"
+                  className="h-16 sm:h-20 object-contain group-hover:opacity-80 transition-opacity duration-150"
                 />
               </NavLink>
 
