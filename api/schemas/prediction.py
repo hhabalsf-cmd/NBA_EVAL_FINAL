@@ -53,6 +53,14 @@ class OpponentContext(BaseModel):
     pace: float
     def_rank: str
     pace_desc: str
+    off_rating: Optional[float] = None
+    net_rating: Optional[float] = None
+    efg_pct: Optional[float] = None
+    ts_pct: Optional[float] = None
+    ast_pct: Optional[float] = None
+    tov_pct: Optional[float] = None
+    oreb_pct: Optional[float] = None
+    dreb_pct: Optional[float] = None
 
 
 class VsStats(BaseModel):
@@ -345,13 +353,17 @@ class FullGameLogEntry(BaseModel):
     reb: float
     ast: float
     pra: float           # pts + reb + ast
+    pr: float = 0.0      # pts + reb
+    pa: float = 0.0      # pts + ast
     fg_pct: float
     fg3_pct: float
     ft_pct: float
+    fg3m: float = 0.0    # 3-pointers made
     stl: float
     blk: float
     tov: float
     plus_minus: float
+    result: Optional[str] = None  # "W" or "L"
 
 
 class StatSplits(BaseModel):
@@ -360,6 +372,12 @@ class StatSplits(BaseModel):
     reb: float
     ast: float
     pra: float
+    pr: float = 0.0
+    pa: float = 0.0
+    stl: float = 0.0
+    blk: float = 0.0
+    tov: float = 0.0
+    fg3m: float = 0.0
     min: float
 
 
@@ -369,6 +387,17 @@ class RollingAverages(BaseModel):
     L10: StatSplits
     L15: StatSplits
     L20: StatSplits
+
+
+class StatAnalysis(BaseModel):
+    """Per-stat deviation and consistency metrics."""
+    std_dev: float
+    consistency_score: float   # 100 - (CV * 100), higher = more consistent
+    ceiling: float             # max in sample
+    floor: float               # min in sample
+    median: float
+    over_streak: int = 0       # consecutive games >= season avg
+    under_streak: int = 0      # consecutive games < season avg
 
 
 class PlayerResearchResponse(BaseModel):
@@ -385,8 +414,11 @@ class PlayerResearchResponse(BaseModel):
     rest_splits: StatSplits
     vs_elite_def: StatSplits
     vs_weak_def: StatSplits
+    win_splits: Optional[StatSplits] = None
+    loss_splits: Optional[StatSplits] = None
     opponent_context: Optional[OpponentContext] = None
     vs_stats: Optional[VsStats] = None
+    analysis: Optional[Dict[str, StatAnalysis]] = None  # keyed by stat name
 
 
 # === Parlay Schemas ===

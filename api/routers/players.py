@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 import pandas as pd
 
+import statistics as _statistics
 from ..schemas.prediction import (
     PlayerSearchResult,
     PlayerInfo,
@@ -23,6 +24,7 @@ from ..schemas.prediction import (
     VsStats,
     FullGameLogEntry,
     StatSplits,
+    StatAnalysis,
     RollingAverages,
     PlayerResearchResponse,
 )
@@ -280,6 +282,7 @@ async def get_player_research(request: Request, player_name: str):
         opp_raw = _opp_abbrev(matchup)
         is_home = _is_home(matchup)
         opp_display = f"vs {opp_raw}" if is_home else f"@ {opp_raw}"
+        wl = str(row.get('WL', '')).strip().upper()
 
         game_log_entries.append(FullGameLogEntry(
             game_date=gd_str,
@@ -290,13 +293,17 @@ async def get_player_research(request: Request, player_name: str):
             reb=reb,
             ast=ast,
             pra=round(pts + reb + ast, 1),
+            pr=round(pts + reb, 1),
+            pa=round(pts + ast, 1),
             fg_pct=round(_f(row, 'FG_PCT') * 100, 1),
             fg3_pct=round(_f(row, 'FG3_PCT') * 100, 1),
             ft_pct=round(_f(row, 'FT_PCT') * 100, 1),
+            fg3m=_f(row, 'FG3M'),
             stl=_f(row, 'STL'),
             blk=_f(row, 'BLK'),
             tov=_f(row, 'TOV'),
             plus_minus=_f(row, 'PLUS_MINUS'),
+            result=wl if wl in ('W', 'L') else None,
         ))
     game_log_entries = list(reversed(game_log_entries))  # most recent first
 
@@ -308,13 +315,27 @@ async def get_player_research(request: Request, player_name: str):
         pts_vals = [_f(r, 'PTS') for _, r in sub.iterrows()]
         reb_vals = [_f(r, 'REB') for _, r in sub.iterrows()]
         ast_vals = [_f(r, 'AST') for _, r in sub.iterrows()]
+        stl_vals = [_f(r, 'STL') for _, r in sub.iterrows()]
+        blk_vals = [_f(r, 'BLK') for _, r in sub.iterrows()]
+        tov_vals = [_f(r, 'TOV') for _, r in sub.iterrows()]
+        fg3m_vals = [_f(r, 'FG3M') for _, r in sub.iterrows()]
         min_vals = [_f(r, 'MIN') for _, r in sub.iterrows()]
         avg_pts = round(sum(pts_vals) / n, 1)
         avg_reb = round(sum(reb_vals) / n, 1)
         avg_ast = round(sum(ast_vals) / n, 1)
         avg_pra = round(sum(p + r + a for p, r, a in zip(pts_vals, reb_vals, ast_vals)) / n, 1)
+        avg_pr = round(sum(p + r for p, r in zip(pts_vals, reb_vals)) / n, 1)
+        avg_pa = round(sum(p + a for p, a in zip(pts_vals, ast_vals)) / n, 1)
         avg_min = round(sum(min_vals) / n, 1)
-        return StatSplits(games=n, pts=avg_pts, reb=avg_reb, ast=avg_ast, pra=avg_pra, min=avg_min)
+        return StatSplits(
+            games=n, pts=avg_pts, reb=avg_reb, ast=avg_ast,
+            pra=avg_pra, pr=avg_pr, pa=avg_pa,
+            stl=round(sum(stl_vals) / n, 1),
+            blk=round(sum(blk_vals) / n, 1),
+            tov=round(sum(tov_vals) / n, 1),
+            fg3m=round(sum(fg3m_vals) / n, 1),
+            min=avg_min,
+        )
 
     # --- Season averages (all 40 games) ---
     season_averages = _splits(df)
@@ -340,6 +361,80 @@ async def get_player_research(request: Request, player_name: str):
     weak_mask = df['MATCHUP'].apply(lambda m: _opp_abbrev(str(m)) in weak_teams)
     vs_elite_def = _splits(df[elite_mask])
     vs_weak_def = _splits(df[weak_mask])
+
+    # Win / Loss splits
+    win_splits = None
+    loss_splits = None
+    if 'WL' in df.columns:
+        win_mask = df['WL'].apply(lambda w: str(w).strip().upper() == 'W')
+        loss_mask = df['WL'].apply(lambda w: str(w).strip().upper() == 'L')
+        if win_mask.sum() > 0:
+            win_splits = _splits(df[win_mask])
+        if loss_mask.sum() > 0:
+            loss_splits = _splits(df[loss_mask])
+
+    # --- Analysis: per-stat deviation, consistency, ceiling/floor/median, streaks ---
+    def _compute_analysis(sub_df: pd.DataFrame, season_avg: StatSplits) -> dict:
+        """Compute StatAnalysis for each stat from last 20 games."""
+        last20 = sub_df.tail(20)
+        stat_cols = {
+            'PTS': ('PTS', season_avg.pts),
+            'REB': ('REB', season_avg.reb),
+            'AST': ('AST', season_avg.ast),
+            'PRA': (None, season_avg.pra),
+            'PR': (None, season_avg.pr),
+            'PA': (None, season_avg.pa),
+            'STL': ('STL', season_avg.stl),
+            'BLK': ('BLK', season_avg.blk),
+            'TOV': ('TOV', season_avg.tov),
+            'FG3M': ('FG3M', season_avg.fg3m),
+        }
+        result = {}
+        for stat_name, (col, avg) in stat_cols.items():
+            if col is not None:
+                vals = [_f(r, col) for _, r in last20.iterrows()]
+            elif stat_name == 'PRA':
+                vals = [_f(r, 'PTS') + _f(r, 'REB') + _f(r, 'AST') for _, r in last20.iterrows()]
+            elif stat_name == 'PR':
+                vals = [_f(r, 'PTS') + _f(r, 'REB') for _, r in last20.iterrows()]
+            else:  # PA
+                vals = [_f(r, 'PTS') + _f(r, 'AST') for _, r in last20.iterrows()]
+
+            if len(vals) < 2:
+                continue
+
+            std = round(_statistics.stdev(vals), 2)
+            mean = sum(vals) / len(vals)
+            cv = (std / mean) if mean > 0 else 1.0
+            consistency = round(max(0, 100 - cv * 100), 1)
+
+            # Streaks (most recent first — last20 is chronological, reverse)
+            over_streak = 0
+            under_streak = 0
+            for v in reversed(vals):
+                if v >= avg:
+                    over_streak += 1
+                else:
+                    break
+            if over_streak == 0:
+                for v in reversed(vals):
+                    if v < avg:
+                        under_streak += 1
+                    else:
+                        break
+
+            result[stat_name] = StatAnalysis(
+                std_dev=std,
+                consistency_score=consistency,
+                ceiling=round(max(vals), 1),
+                floor=round(min(vals), 1),
+                median=round(_statistics.median(vals), 1),
+                over_streak=over_streak,
+                under_streak=under_streak,
+            )
+        return result
+
+    analysis = _compute_analysis(df, season_averages)
 
     # --- Enrich player_info with team data from game log if team_id is missing ---
     # CommonPlayerInfo NBA API call can silently fail; MATCHUP column always has team data
@@ -403,6 +498,14 @@ async def get_player_research(request: Request, player_name: str):
                     pace=round(pace, 1),
                     def_rank=def_rank,
                     pace_desc=pace_desc,
+                    off_rating=round(opp_data.get('off_rating', 110.0), 1),
+                    net_rating=round(opp_data.get('net_rating', 0.0), 1),
+                    efg_pct=round(opp_data.get('efg_pct', 0.50), 3),
+                    ts_pct=round(opp_data.get('ts_pct', 0.56), 3),
+                    ast_pct=round(opp_data.get('ast_pct', 0.60), 3),
+                    tov_pct=round(opp_data.get('tov_pct', 14.0), 1),
+                    oreb_pct=round(opp_data.get('oreb_pct', 0.27), 3),
+                    dreb_pct=round(opp_data.get('dreb_pct', 0.73), 3),
                 )
 
             # vs_stats: H2H history
@@ -434,8 +537,11 @@ async def get_player_research(request: Request, player_name: str):
         rest_splits=rest_splits,
         vs_elite_def=vs_elite_def,
         vs_weak_def=vs_weak_def,
+        win_splits=win_splits,
+        loss_splits=loss_splits,
         opponent_context=opponent_context,
         vs_stats=vs_stats_obj,
+        analysis=analysis,
     )
 
 

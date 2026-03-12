@@ -78,6 +78,14 @@ export interface OpponentContext {
   pace: number
   def_rank: string
   pace_desc: string
+  off_rating?: number
+  net_rating?: number
+  efg_pct?: number
+  ts_pct?: number
+  ast_pct?: number
+  tov_pct?: number
+  oreb_pct?: number
+  dreb_pct?: number
 }
 
 export interface VsStats {
@@ -925,13 +933,17 @@ export interface FullGameLogEntry {
   reb: number
   ast: number
   pra: number
+  pr: number             // pts + reb
+  pa: number             // pts + ast
   fg_pct: number
   fg3_pct: number
   ft_pct: number
+  fg3m: number           // 3-pointers made
   stl: number
   blk: number
   tov: number
   plus_minus: number
+  result?: string        // "W" or "L"
 }
 
 export interface StatSplits {
@@ -940,7 +952,23 @@ export interface StatSplits {
   reb: number
   ast: number
   pra: number
+  pr: number
+  pa: number
+  stl: number
+  blk: number
+  tov: number
+  fg3m: number
   min: number
+}
+
+export interface StatAnalysis {
+  std_dev: number
+  consistency_score: number
+  ceiling: number
+  floor: number
+  median: number
+  over_streak: number
+  under_streak: number
 }
 
 export interface RollingAverages {
@@ -965,8 +993,11 @@ export interface PlayerResearchData {
   rest_splits: StatSplits
   vs_elite_def: StatSplits
   vs_weak_def: StatSplits
+  win_splits?: StatSplits
+  loss_splits?: StatSplits
   opponent_context?: OpponentContext
   vs_stats?: VsStats
+  analysis?: Record<string, StatAnalysis>
 }
 
 export async function getPlayerResearch(playerName: string): Promise<PlayerResearchData> {
