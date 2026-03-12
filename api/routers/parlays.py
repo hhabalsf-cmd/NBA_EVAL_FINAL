@@ -1,12 +1,13 @@
 """Parlay persistence endpoints."""
 import sys
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from typing import List
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 import db
 
+from ..limiter import limiter
 from ..schemas.prediction import ParlayCreate, ParlayResponse, ParlayLegDetail
 from ..routers.auth import get_current_user
 
@@ -47,7 +48,9 @@ def _parlay_to_response(p: dict) -> ParlayResponse:
 
 
 @router.post("", response_model=ParlayResponse, status_code=201)
+@limiter.limit("20/minute")
 async def create_parlay(
+    request: Request,
     body: ParlayCreate,
     current_user: dict = Depends(get_current_user),
 ):
@@ -77,14 +80,16 @@ async def create_parlay(
 
 
 @router.get("", response_model=List[ParlayResponse])
-async def list_parlays(current_user: dict = Depends(get_current_user)):
+@limiter.limit("60/minute")
+async def list_parlays(request: Request, current_user: dict = Depends(get_current_user)):
     """List the authenticated user's saved parlays."""
     parlays = db.get_parlays(user_id=current_user["id"])
     return [_parlay_to_response(p) for p in parlays]
 
 
 @router.delete("/{parlay_id}")
-async def delete_parlay(parlay_id: int, current_user: dict = Depends(get_current_user)):
+@limiter.limit("20/minute")
+async def delete_parlay(request: Request, parlay_id: int, current_user: dict = Depends(get_current_user)):
     """Delete a saved parlay and its legs. Picks are not affected."""
     parlays = db.get_parlays(user_id=current_user["id"])
     match = next((p for p in parlays if p['id'] == parlay_id), None)

@@ -154,14 +154,14 @@ async def delete_pick(request: Request, pick_id: int, current_user: dict = Depen
 
 
 @router.post("/auto-grade")
+@limiter.limit("3/minute")
 async def auto_grade_picks(request: Request):
     """
     Automatically grade pending picks by fetching actual results,
     then derive and store results for any pending parlays whose picks are all resolved.
 
-    Accepts either a logged-in user (Bearer JWT) or a service key (X-Service-Key header).
+    Accepts either a service key (X-Service-Key) or authenticated user (Bearer JWT).
     """
-    # Try service key first, then fall back to user auth
     service_key = request.headers.get("X-Service-Key")
     if service_key:
         verify_service_key(request)
@@ -179,7 +179,8 @@ async def auto_grade_picks(request: Request):
 
 
 @router.get("/stats/performance", response_model=PerformanceStats)
-async def get_performance_stats(current_user: dict = Depends(get_current_user)):
+@limiter.limit("30/minute")
+async def get_performance_stats(request: Request, current_user: dict = Depends(get_current_user)):
     """Get overall performance statistics."""
     stats = db.get_performance_stats(user_id=current_user["id"])
     return PerformanceStats(
@@ -197,7 +198,8 @@ async def get_performance_stats(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/stats/profit", response_model=List[CumulativeProfitPoint])
-async def get_cumulative_profit(current_user: dict = Depends(get_current_user)):
+@limiter.limit("30/minute")
+async def get_cumulative_profit(request: Request, current_user: dict = Depends(get_current_user)):
     """Get cumulative profit over time for charting."""
     profit_data = db.get_cumulative_profit(user_id=current_user["id"])
     return [
@@ -211,12 +213,14 @@ async def get_cumulative_profit(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/stats/by-model")
-async def get_performance_by_model(current_user: dict = Depends(get_current_user)):
+@limiter.limit("30/minute")
+async def get_performance_by_model(request: Request, current_user: dict = Depends(get_current_user)):
     """Get performance statistics broken down by model type."""
     return db.get_performance_by_model(current_user["id"])
 
 
 @router.get("/stats/by-model-stat")
-async def get_performance_by_model_and_stat(current_user: dict = Depends(get_current_user)):
+@limiter.limit("30/minute")
+async def get_performance_by_model_and_stat(request: Request, current_user: dict = Depends(get_current_user)):
     """Get detailed performance breakdown by model type AND stat type."""
     return db.get_performance_by_model_and_stat(current_user["id"])

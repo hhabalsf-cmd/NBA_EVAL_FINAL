@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 
+from ..limiter import limiter
 from ..routers.auth import verify_service_key
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 @router.post("/nightly")
+@limiter.limit("2/minute")
 async def run_nightly_sync(request: Request):
     """
     Trigger nightly player game-log sync from BallDontLie into Supabase.

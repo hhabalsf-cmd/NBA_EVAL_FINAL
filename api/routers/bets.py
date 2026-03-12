@@ -5,6 +5,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query, Request
 
 import db
+from ..limiter import limiter
 from ..schemas.prediction import DailyPick, DailyPicksResponse
 from ..routers.auth import verify_service_key
 
@@ -14,6 +15,7 @@ router = APIRouter(prefix="/api/bets", tags=["bets"])
 
 
 @router.get("/today", response_model=DailyPicksResponse)
+@limiter.limit("60/minute")
 async def get_todays_daily_picks(
     date: str = Query(default=None, description="Date in YYYY-MM-DD format (defaults to today)"),
 ):
@@ -32,6 +34,7 @@ async def get_todays_daily_picks(
 
 
 @router.post("/generate")
+@limiter.limit("2/minute")
 async def trigger_generate_daily_picks(request: Request):
     """
     Trigger daily picks generation.

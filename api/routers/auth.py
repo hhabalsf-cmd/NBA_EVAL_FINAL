@@ -1,4 +1,5 @@
 """Authentication endpoints — avatar management and password change."""
+import hmac
 import logging
 import os
 import sys
@@ -8,6 +9,8 @@ _logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
+
+from ..limiter import limiter
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from ..auth_utils import (
@@ -111,14 +114,16 @@ if not FASTAPI_SERVICE_KEY:
 def verify_service_key(request: Request) -> None:
     """Dependency for internal endpoints called by Edge Functions / pg_cron."""
     key = request.headers.get("X-Service-Key")
-    if not key or key != FASTAPI_SERVICE_KEY:
+    if not key or not hmac.compare_digest(key, FASTAPI_SERVICE_KEY):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
 # ── Endpoints ──────────────────────────────────────────────────
 
 @router.post("/avatar")
+@limiter.limit("10/minute")
 async def upload_avatar(
+    request: Request,
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user),
 ):
@@ -161,7 +166,9 @@ async def upload_avatar(
 
 
 @router.post("/change-password", status_code=204)
+@limiter.limit("5/minute")
 async def change_password(
+    request: Request,
     req: ChangePasswordRequest,
     current_user: dict = Depends(get_current_user),
 ):
@@ -177,7 +184,8 @@ async def change_password(
 
 
 @router.delete("/avatar", status_code=200)
-async def delete_avatar(current_user: dict = Depends(get_current_user)):
+@limiter.limit("10/minute")
+async def delete_avatar(request: Request, current_user: dict = Depends(get_current_user)):
     supa = _get_supa_client()
     user_id = current_user["id"]
 
