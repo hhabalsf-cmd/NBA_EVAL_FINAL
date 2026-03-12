@@ -2221,6 +2221,22 @@ class MLPredictor:
                         zip(feat_names, model.feature_importances_)
                     )
 
+                    # Log new feature usage after selection
+                    _new_feats = {
+                        'OPP_OFF_RATING_NORM', 'OPP_NET_RATING_NORM', 'OPP_EFG_PCT_NORM',
+                        'OPP_TOV_PCT_NORM', 'OPP_OREB_PCT_NORM', 'OPP_DREB_PCT_NORM',
+                        'OREB_RATE', 'ROLL_5_OREB', 'ROLL_10_OREB', 'ROLL_5_DREB', 'ROLL_10_DREB',
+                        'FG3_RATE', 'ROLL_5_FG3M', 'ROLL_10_FG3M', 'ROLL_5_FG3A', 'FG3_TREND',
+                        'FT_RATE', 'ROLL_5_FT_RATE', 'ROLL_5_FTM',
+                        'ROLL_5_PF', 'PF_PER_MIN',
+                        'OREB_RATE_x_OPP_OREB', 'HIGH_PACE_GAME', 'LOW_PACE_GAME', 'ELITE_OPP',
+                        'ROLL_5_OREB_PER36', 'ROLL_5_DREB_PER36', 'ROLL_5_FG3_RATE',
+                    }
+                    _kept = {n: v for n, v in self.feature_importance[stat].items() if n in _new_feats}
+                    if _kept:
+                        _top = sorted(_kept.items(), key=lambda x: x[1], reverse=True)[:5]
+                        print(f"    📊 New features in {stat}: {len(_kept)} kept, top: {', '.join(f'{n}={v:.3f}' for n, v in _top)}")
+
             self.models[stat] = model
 
             # --- Quantile Regression (Improvement #4) ---
