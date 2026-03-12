@@ -47,9 +47,9 @@ from nba_evaluator import (
 
 # ── Configuration ───────────────────────────────────────────────
 MIN_EDGE_PCT = 20.0          # Minimum absolute edge to include
-MAX_EDGE_PCT = 45.0          # Maximum absolute edge to include
-MIN_CONFIDENCE = 80.0        # Minimum model confidence
-MAX_PICKS = 15               # Cap on total picks returned
+MAX_EDGE_PCT = 46.0          # Maximum absolute edge to include
+MIN_CONFIDENCE = 60.0        # Minimum model confidence
+MAX_PICKS = 10               # Cap on total picks returned
 MIN_MINUTES_AVG = 20.0       # Minimum average minutes to evaluate
 MIN_GAMES_TO_TRAIN = 15      # Minimum historical games to train a model
 STATS_TO_EVALUATE = ['PTS', 'REB', 'AST', 'PRA']
@@ -113,29 +113,27 @@ def _get_teams_playing_today() -> list[dict]:
 
 def _fetch_player_props_lookup(games: list[dict]) -> dict:
     """
-    Fetch player props for all of today's games from BDL.
-    Returns: {bdl_player_id: {stat: line_value}, 'by_name': {lowercase_name: {stat: line_value}}}
+    Fetch player props for all of today's games from BDL v2 API.
+    Returns: {'by_id': {bdl_player_id: {stat: median_line}}}
 
-    Prop type mapping (BDL prop_type -> our stat):
-      'points'       -> 'PTS'
-      'rebounds'     -> 'REB'
-      'assists'      -> 'AST'
-      'pts_reb_ast'  -> 'PRA'  (or any combo containing all three)
+    Only uses over_under market type props. Computes median line across
+    vendors for each player+stat combo to resist outlier lines.
 
-    If get_player_props() raises, log warning and return {} for that game.
+    BDL v2 response format per prop:
+      {'player_id': int, 'prop_type': str, 'line_value': str,
+       'market': {'type': 'over_under', ...}, 'vendor': str, ...}
     """
     _PROP_TYPE_MAP: dict[str, str] = {
         'points': 'PTS',
         'rebounds': 'REB',
         'assists': 'AST',
-        'pts_reb_ast': 'PRA',
+        'points_rebounds_assists': 'PRA',
     }
 
     bdl = get_bdl_client()
-    # {bdl_player_id (int): {stat (str): line_value (float)}}
-    props_lookup: dict[int, dict[str, float]] = {}
-    props_by_name: dict[str, dict[str, float]] = {}
-    total_props = 0
+    # Collect all lines per player+stat for median calculation
+    # {bdl_player_id: {stat: [line_values_from_different_vendors]}}
+    raw_lines: dict[int, dict[str, list[float]]] = {}
 
     for g in games:
         bdl_game_id = g.get('bdl_game_id')
@@ -153,8 +151,12 @@ def _fetch_player_props_lookup(games: list[dict]) -> dict:
             continue
 
         for prop in raw_props:
-            player_obj = prop.get('player') or {}
-            bdl_player_id = player_obj.get('id')
+            # BDL v2: player_id at top level, filter for over_under market
+            market = prop.get('market') or {}
+            if market.get('type') != 'over_under':
+                continue
+
+            bdl_player_id = prop.get('player_id')
             if bdl_player_id is None:
                 continue
 
@@ -162,36 +164,38 @@ def _fetch_player_props_lookup(games: list[dict]) -> dict:
             stat = _PROP_TYPE_MAP.get(prop_type)
             if stat is None:
                 # Check for combo props containing all three components
-                if 'pts' in prop_type and 'reb' in prop_type and 'ast' in prop_type:
+                if 'points' in prop_type and 'rebounds' in prop_type and 'assists' in prop_type:
                     stat = 'PRA'
                 else:
                     continue
 
-            raw_line = prop.get('line')
+            raw_line = prop.get('line_value')
             if raw_line is None:
                 continue
 
             bdl_player_id = int(bdl_player_id)
-            # Only store the first line found per player+stat (immutable: build new dict entry)
-            existing = props_lookup.get(bdl_player_id, {})
-            if stat not in existing:
-                props_lookup[bdl_player_id] = {**existing, stat: float(raw_line)}
-                total_props += 1
-                
-            # Store by name for fallback lookup
-            first_name = player_obj.get('first_name', '')
-            last_name = player_obj.get('last_name', '')
-            player_name_lower = f"{first_name} {last_name}".strip().lower()
-            if player_name_lower:
-                existing_name = props_by_name.get(player_name_lower, {})
-                if stat not in existing_name:
-                    props_by_name[player_name_lower] = {**existing_name, stat: float(raw_line)}
+            line_val = float(raw_line)
+
+            # Accumulate lines from all vendors for median calculation
+            player_lines = raw_lines.get(bdl_player_id, {})
+            stat_lines = player_lines.get(stat, [])
+            raw_lines[bdl_player_id] = {**player_lines, stat: [*stat_lines, line_val]}
+
+    # Compute median line per player+stat (consensus across vendors)
+    props_lookup: dict[int, dict[str, float]] = {}
+    total_props = 0
+    for pid, stat_dict in raw_lines.items():
+        player_entry: dict[str, float] = {}
+        for stat, lines in stat_dict.items():
+            player_entry[stat] = round(float(np.median(lines)), 1)
+            total_props += 1
+        props_lookup[pid] = player_entry
 
     logger.info(
-        "_fetch_player_props_lookup: fetched %d prop lines across %d players.",
+        "_fetch_player_props_lookup: fetched %d consensus lines across %d players.",
         total_props, len(props_lookup),
     )
-    return props_lookup
+    return {'by_id': props_lookup, 'by_name': {}}
 
 
 def _get_players_for_teams(team_abbrevs: set[str]) -> list[dict]:
@@ -271,6 +275,48 @@ def _build_matchup_string(player_team: str, opponent: str, is_home: bool) -> str
     return f"{player_team} @ {opponent}"
 
 
+def _sync_game_logs_for_prop_players(props_lookup: dict) -> int:
+    """
+    Ensure game logs exist in Supabase for all players who have prop lines.
+    Fetches full current-season logs from BDL for any player missing data.
+    Returns the number of players synced.
+    """
+    by_id = props_lookup.get('by_id', {})
+    if not by_id:
+        return 0
+
+    bdl_player_ids = list(by_id.keys())
+    logger.info(f"🔄 Checking game logs for {len(bdl_player_ids)} players with prop lines...")
+
+    scraper = NBADataScraper()
+    season_int = int(CURRENT_SEASON.split('-')[0])
+    synced = 0
+    already_have = 0
+
+    for bdl_pid in bdl_player_ids:
+        # Check if we already have sufficient game logs
+        existing = db.get_game_logs_from_supabase(str(bdl_pid), CURRENT_SEASON)
+        if existing is not None and len(existing) >= MIN_GAMES_TO_TRAIN:
+            already_have += 1
+            continue
+
+        # Fetch full season game log from BDL
+        try:
+            df = scraper._fetch_bdl_game_log(bdl_pid, bdl_pid, season_int, CURRENT_SEASON)
+            if df is not None and not df.empty:
+                db.insert_game_logs_to_supabase(df, str(bdl_pid), CURRENT_SEASON)
+                synced += 1
+                logger.debug(f"  ✅ Synced {len(df)} games for player {bdl_pid}")
+        except Exception as exc:
+            logger.debug(f"  ⚠️ Could not sync player {bdl_pid}: {exc}")
+
+    logger.info(
+        f"🔄 Game log sync: {synced} new, {already_have} already populated, "
+        f"{len(bdl_player_ids) - synced - already_have} failed/empty."
+    )
+    return synced
+
+
 # ── Core pipeline ───────────────────────────────────────────────
 
 def generate_daily_picks() -> list[dict]:
@@ -289,7 +335,7 @@ def generate_daily_picks() -> list[dict]:
 
     # Fetch real prop lines (may return {} if API unavailable)
     props_lookup = _fetch_player_props_lookup(games)
-    logger.info(f"📊 Fetched props for {len(props_lookup)} players.")
+    logger.info(f"📊 Fetched props for {len(props_lookup.get('by_id', {}))} players.")
 
     # Initialize player mapper for nba.com ID → BDL ID lookup
     try:
@@ -307,18 +353,21 @@ def generate_daily_picks() -> list[dict]:
         team_game_map[g['home_abbrev']] = g
         team_game_map[g['away_abbrev']] = g
 
-    # 2. Get team defensive stats (shared context)
+    # 2. Ensure game logs exist for all players with prop lines
+    _sync_game_logs_for_prop_players(props_lookup)
+
+    # 3. Get team defensive stats
     scraper = NBADataScraper()
     team_stats = scraper.get_team_defensive_stats()
     logger.info(f"📊 Loaded defensive stats for {len(team_stats)} teams.")
 
-    # 3. Get eligible players
+    # 4. Get eligible players
     eligible_players = _get_players_for_teams(team_abbrevs_today)
     if not eligible_players:
         logger.info("No eligible players found.")
         return []
 
-    # 4. Evaluate each player
+    # 5. Evaluate each player
     all_candidates: list[dict] = []
     players_evaluated = 0
     models_trained = 0
@@ -561,7 +610,7 @@ def generate_daily_picks() -> list[dict]:
         f"found {len(all_candidates)} candidates meeting filters."
     )
 
-    # 5. Rank and cap
+    # 6. Rank and cap
     ranked = sorted(all_candidates, key=lambda c: abs(c['edge']), reverse=True)
     top_picks = ranked[:MAX_PICKS]
 

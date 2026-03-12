@@ -1,9 +1,12 @@
-import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, BarChart3, Search as SearchIcon, Target } from 'lucide-react'
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { ArrowRight, BarChart3, ChevronDown, Search as SearchIcon, Target, TrendingUp } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { motion, type Variants } from 'framer-motion'
 import PlayerSearch from '../components/PlayerSearch'
-import { getPerformanceStats } from '../api/client'
+import BetCard from '../components/BetCard'
+import { getPerformanceStats, getTodaysDailyPicks, dailyPickToBestBet, saveDailyPickToMyPicks } from '../api/client'
+import type { DailyPick } from '../api/client'
 
 const fadeUp: Variants = {
   hidden: { opacity: 0, y: 16 },
@@ -18,6 +21,95 @@ const stagger: Variants = {
 const statCardVariant: Variants = {
   hidden: { opacity: 0, y: 12, scale: 0.97 },
   show:   { opacity: 1, y: 0, scale: 1 },
+}
+
+const PICKS_PER_PAGE = 5
+
+function BestBetsSection() {
+  const [visibleCount, setVisibleCount] = useState(PICKS_PER_PAGE)
+  const queryClient = useQueryClient()
+  const [savingId, setSavingId] = useState<number | null>(null)
+
+  const { data: dailyPicks, isLoading } = useQuery({
+    queryKey: ['daily-picks'],
+    queryFn: getTodaysDailyPicks,
+    staleTime: 1000 * 60 * 15,
+  })
+
+  const saveMutation = useMutation({
+    mutationFn: (pick: DailyPick) => saveDailyPickToMyPicks(pick),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['picks'] })
+      setSavingId(null)
+    },
+    onError: () => setSavingId(null),
+  })
+
+  const handleSave = (pick: DailyPick) => {
+    setSavingId(pick.id)
+    saveMutation.mutate(pick)
+  }
+
+  const hasMore = dailyPicks != null && visibleCount < dailyPicks.length
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-2">
+          <TrendingUp className="w-5 h-5 text-accent" />
+          <h2 className="text-xl font-semibold text-text-primary tracking-tight">Best Bets Today</h2>
+        </div>
+        {dailyPicks && dailyPicks.length > 0 && (
+          <span className="text-xs text-text-muted font-mono">{dailyPicks.length} picks</span>
+        )}
+      </div>
+
+      {isLoading && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {Array.from({ length: 2 }).map((_, i) => (
+            <div key={i} className="card p-5 animate-pulse">
+              <div className="skeleton h-4 w-32 rounded mb-3" />
+              <div className="skeleton h-3 w-24 rounded mb-5" />
+              <div className="skeleton h-8 w-full rounded" />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!isLoading && dailyPicks && dailyPicks.length > 0 && (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {dailyPicks.slice(0, visibleCount).map((pick) => (
+              <BetCard
+                key={pick.id}
+                bet={dailyPickToBestBet(pick)}
+                rank={pick.rank ?? undefined}
+                onSave={() => handleSave(pick)}
+                isSaving={savingId === pick.id}
+              />
+            ))}
+          </div>
+          {hasMore && (
+            <button
+              onClick={() => setVisibleCount((c) => c + PICKS_PER_PAGE)}
+              className="mt-4 w-full flex items-center justify-center gap-1.5 py-2.5 text-sm font-medium
+                         rounded-lg border border-border-default text-text-secondary
+                         hover:bg-bg-secondary hover:text-text-primary transition-colors"
+            >
+              Show More
+              <ChevronDown className="w-4 h-4" />
+            </button>
+          )}
+        </>
+      )}
+
+      {!isLoading && (!dailyPicks || dailyPicks.length === 0) && (
+        <div className="card p-10 text-center border-dashed opacity-60">
+          <p className="text-sm text-text-secondary">Daily picks are generated at 8 AM ET. Check back soon.</p>
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function HomePage() {
@@ -106,6 +198,11 @@ export default function HomePage() {
           </div>
         </motion.section>
       )}
+
+      {/* Best Bets Today */}
+      <motion.section variants={fadeUp} transition={{ duration: 0.38, ease: 'easeOut' }}>
+        <BestBetsSection />
+      </motion.section>
 
       {/* Performance by Stat */}
       <motion.section variants={fadeUp} transition={{ duration: 0.38, ease: 'easeOut' }}>
