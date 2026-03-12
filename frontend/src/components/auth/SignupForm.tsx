@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { Loader2, Mail } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import TermsModal from '../TermsModal'
 
@@ -13,14 +13,31 @@ export default function SignupForm({ onSuccess }: SignupFormProps) {
   const [password, setPassword] = useState('')
   const [tosAccepted, setTosAccepted] = useState(false)
   const [showTerms, setShowTerms] = useState(false)
-  const { signup, acceptTos, isLoading, error } = useAuthStore()
+  const { signup, acceptTos, isLoading, error, needsEmailConfirmation } = useAuthStore()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!tosAccepted) return
     await signup(email, username, password)
+    if (useAuthStore.getState().needsEmailConfirmation) return
     await acceptTos()
     onSuccess?.()
+  }
+
+  if (needsEmailConfirmation) {
+    return (
+      <div className="text-center space-y-4 py-4">
+        <Mail className="w-12 h-12 mx-auto text-accent" />
+        <h3 className="text-lg font-semibold text-text-primary">Check your email</h3>
+        <p className="text-sm text-text-secondary">
+          We sent a confirmation link to <span className="font-medium text-text-primary">{email}</span>.
+          Click the link to activate your account.
+        </p>
+        <p className="text-xs text-text-muted">
+          Didn't get it? Check your spam folder.
+        </p>
+      </div>
+    )
   }
 
   return (

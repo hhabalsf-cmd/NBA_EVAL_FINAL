@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom'
 import { Home, Gamepad2, Dice5, FlaskConical } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import HomePage from './pages/HomePage'
@@ -27,6 +27,7 @@ const pageVariants = {
 
 function AppRoutes() {
   const location = useLocation()
+  const { isAuthenticated } = useAuthStore()
 
   return (
     <AnimatePresence mode="wait" initial={false}>
@@ -39,7 +40,7 @@ function AppRoutes() {
         transition={{ duration: 0.2, ease: 'easeOut' }}
       >
         <Routes location={location}>
-          <Route path="/" element={<LandingPage />} />
+          <Route path="/" element={isAuthenticated ? <Navigate to="/app" replace /> : <LandingPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/signup" element={<SignupPage />} />
           <Route path="/app" element={<ProtectedRoute><HomePage /></ProtectedRoute>} />

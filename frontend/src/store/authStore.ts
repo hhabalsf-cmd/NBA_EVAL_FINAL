@@ -10,6 +10,7 @@ interface AuthStore {
   isLoading: boolean
   isUploadingAvatar: boolean
   error: string | null
+  needsEmailConfirmation: boolean
   login: (email: string, password: string) => Promise<void>
   signup: (email: string, username: string, password: string) => Promise<void>
   logout: () => Promise<void>
@@ -39,6 +40,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   isLoading: true,
   isUploadingAvatar: false,
   error: null,
+  needsEmailConfirmation: false,
 
   login: async (email, password) => {
     set({ isLoading: true, error: null })
@@ -67,6 +69,16 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   signup: async (email, username, password) => {
     set({ isLoading: true, error: null })
     try {
+      // Cap new registrations while in early access
+      const MAX_ACCOUNTS = 10
+      const { count, error: countError } = await supabase
+        .from('profiles')
+        .select('*', { count: 'exact', head: true })
+      if (countError) throw new Error('Unable to verify registration availability')
+      if (count !== null && count >= MAX_ACCOUNTS) {
+        throw new Error('Registration is currently closed — we\'re at capacity during the free trial. Check back soon!')
+      }
+
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
@@ -74,6 +86,16 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       })
       if (error) throw error
       if (!data.user) throw new Error('Sign up failed')
+
+      // No session means Supabase requires email confirmation first
+      if (!data.session) {
+        set({
+          needsEmailConfirmation: true,
+          isLoading: false,
+        })
+        return
+      }
+
       const profile = await fetchProfile(data.user.id)
       set({
         user: {
@@ -85,7 +107,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
           avatar_url: undefined,
           tos_accepted_at: undefined,
         },
-        isAuthenticated: data.session !== null,
+        isAuthenticated: true,
         isLoading: false,
       })
     } catch (err) {
