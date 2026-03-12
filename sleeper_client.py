@@ -19,10 +19,24 @@ _SLEEPER_BASE = "https://api.sleeper.app/v1"
 _CDN_BASE = "https://sleepercdn.com/content/nba/players"
 
 
+import re
+
+_SUFFIXES_RE = re.compile(r'\s+(jr\.?|sr\.?|ii|iii|iv|v)\s*$', re.IGNORECASE)
+
+
 def _norm(s: str) -> str:
-    """Lowercase + strip diacritics (e.g. 'Dončić' → 'doncic')."""
+    """Lowercase + strip diacritics + remove suffixes (Jr., III, etc.)."""
     nfkd = unicodedata.normalize('NFKD', s)
-    return ''.join(c for c in nfkd if not unicodedata.combining(c)).lower().strip()
+    cleaned = ''.join(c for c in nfkd if not unicodedata.combining(c)).lower().strip()
+    # Strip periods from names like "P.J." → "pj"
+    cleaned = cleaned.replace('.', '')
+    return cleaned
+
+
+def _norm_no_suffix(s: str) -> str:
+    """Like _norm but also strips name suffixes (Jr., Sr., II, III, IV)."""
+    result = _norm(s)
+    return _SUFFIXES_RE.sub('', result).strip()
 
 # ---------------------------------------------------------------------------
 # Player cache — name -> sleeper player_id
@@ -53,6 +67,10 @@ def _load_players() -> None:
             full = f"{fn} {ln}".strip()
             if full:
                 mapping[full] = pid
+                # Also index by suffix-stripped name for flexible matching
+                stripped = _norm_no_suffix(full)
+                if stripped and stripped != full:
+                    mapping.setdefault(stripped, pid)
         _name_to_id = mapping
         logger.info("Sleeper: loaded %d NBA players", len(mapping))
     except Exception as exc:
@@ -66,10 +84,21 @@ def get_headshot_url(player_name: str) -> Optional[str]:
     pid = _name_to_id.get(norm)
     if pid:
         return f"{_CDN_BASE}/{pid}.jpg"
-    # Partial fallback
+    # Try without suffix (e.g. "Jr.", "III")
+    stripped = _norm_no_suffix(player_name)
+    if stripped != norm:
+        pid = _name_to_id.get(stripped)
+        if pid:
+            return f"{_CDN_BASE}/{pid}.jpg"
+    # Partial fallback — last-name substring match
     for name, pid in _name_to_id.items():
         if norm in name or name in norm:
             return f"{_CDN_BASE}/{pid}.jpg"
+    # Try partial with stripped name
+    if stripped != norm:
+        for name, pid in _name_to_id.items():
+            if stripped in name or name in stripped:
+                return f"{_CDN_BASE}/{pid}.jpg"
     return None
 
 

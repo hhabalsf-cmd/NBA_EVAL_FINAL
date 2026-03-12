@@ -46,6 +46,40 @@ from nba_evaluator import (
     CURRENT_SEASON,
 )
 
+# ── NBA CDN headshot fallback ──────────────────────────────────
+_nba_name_to_id: dict[str, int] = {}
+
+
+def _get_nba_headshot_url(player_name: str) -> Optional[str]:
+    """Fallback: look up NBA person ID via nba_api static list, return CDN URL."""
+    global _nba_name_to_id
+    if not _nba_name_to_id:
+        try:
+            from nba_api.stats.static import players as nba_players
+            for p in nba_players.get_active_players():
+                _nba_name_to_id[p['full_name'].lower()] = p['id']
+        except Exception as exc:
+            logging.getLogger(__name__).warning("nba_api player lookup failed: %s", exc)
+            return None
+
+    name_lower = player_name.lower().strip()
+    nba_id = _nba_name_to_id.get(name_lower)
+    if nba_id:
+        return f"https://cdn.nba.com/headshots/nba/latest/260x190/{nba_id}.png"
+    # Partial match fallback
+    for name, nba_id in _nba_name_to_id.items():
+        if name_lower in name or name in name_lower:
+            return f"https://cdn.nba.com/headshots/nba/latest/260x190/{nba_id}.png"
+    return None
+
+
+def _get_best_headshot_url(player_name: str) -> Optional[str]:
+    """Try Sleeper CDN first, fall back to NBA CDN."""
+    url = get_sleeper_headshot(player_name)
+    if url:
+        return url
+    return _get_nba_headshot_url(player_name)
+
 # ── Configuration ───────────────────────────────────────────────
 MIN_EDGE_PCT = 20.0          # Minimum absolute edge to include
 MAX_EDGE_PCT = 46.0          # Maximum absolute edge to include
@@ -593,7 +627,7 @@ def generate_daily_picks() -> list[dict]:
             all_candidates.append({
                 'player': player_name,
                 'player_id': player_id,
-                'headshot_url': get_sleeper_headshot(player_name),
+                'headshot_url': _get_best_headshot_url(player_name),
                 'team_abbrev': team_abbrev,
                 'stat': stat,
                 'prediction': pred_value,
