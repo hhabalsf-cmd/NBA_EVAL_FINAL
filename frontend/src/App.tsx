@@ -104,7 +104,7 @@ function App() {
           <div className="max-w-5xl mx-auto px-4 sm:px-8">
             <div className="flex items-center justify-between h-20 sm:h-24">
               {/* Logo */}
-              <NavLink to="/" className="flex items-center group -ml-2">
+              <NavLink to="/" className="flex items-center group -ml-4 sm:-ml-8">
                 <img
                   src="/logo-full.png"
                   alt="Bettin' Jrys"
