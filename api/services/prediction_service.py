@@ -708,6 +708,8 @@ class PredictionService:
         # Build opponent context
         opponent_context = None
         if opponent and team_stats:
+            opp_def_rating = opp_ctx.get('opp_def_rating', 110)
+            opp_pace = opp_ctx.get('opp_pace', 100)
             def_rank = "Elite" if opp_def_rating < 108 else "Good" if opp_def_rating < 112 else "Average" if opp_def_rating < 116 else "Poor"
             pace_desc = "Fast" if opp_pace > 102 else "Slow" if opp_pace < 98 else "Average"
             opponent_context = {
