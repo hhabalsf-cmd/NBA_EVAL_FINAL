@@ -422,12 +422,6 @@ def generate_daily_picks() -> list[dict]:
         is_home = game['home_abbrev'] == team_abbrev
         opponent = game['away_abbrev'] if is_home else game['home_abbrev']
 
-        # Get opponent defensive stats
-        opp_stats = team_stats.get(opponent, {})
-        opp_def_rating = opp_stats.get('def_rating', 110.0)
-        opp_pace = opp_stats.get('pace', 100.0)
-        opp_ast_allowed = opp_stats.get('opp_ast', 25.0)
-
         # Load game log from Supabase (no NBA API call)
         game_log = db.get_game_logs_from_supabase(str(player_id), CURRENT_SEASON)
         if game_log is None or len(game_log) < MIN_GAMES_TO_TRAIN:
@@ -502,27 +496,39 @@ def generate_daily_picks() -> list[dict]:
             except Exception as e:
                 logger.warning(f"  ⚠️ Update error for {player_name}: {e}")
 
+        # Calculate actual days rest from game log
+        days_rest = 2
+        if 'GAME_DATE' in df.columns and len(df) > 1:
+            try:
+                last_game = pd.to_datetime(df['GAME_DATE'].iloc[-1])
+                days_rest = min((datetime.now() - last_game).days, 7)
+            except Exception:
+                pass
+
+        # Get full opponent context (enhanced stats)
+        opp_ctx = FeatureEngineer.extract_opp_stats(team_stats, opponent)
+
         # Get prediction features for today's game
         try:
             features_df = FeatureEngineer.get_prediction_features(
                 df,
                 is_home=1 if is_home else 0,
                 opponent=opponent,
-                opp_def_rating=opp_def_rating,
-                opp_pace=opp_pace,
-                opp_ast_allowed=opp_ast_allowed,
-                days_rest=2,  # Default; could be computed from game log
+                days_rest=days_rest,
                 player_info=player_info,
+                **opp_ctx,
             )
         except Exception as e:
             logger.warning(f"  ⚠️ Prediction features failed for {player_name}: {e}")
             continue
 
         # Estimate minutes
+        injuries_team = 0  # Could be enhanced with injury data later
         estimated_minutes = FeatureEngineer.estimate_minutes(
             df,
             is_home=1 if is_home else 0,
-            days_rest=2,
+            days_rest=days_rest,
+            injuries_team=injuries_team,
         )
 
         # Predict
