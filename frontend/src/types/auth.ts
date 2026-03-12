@@ -5,6 +5,7 @@ export interface User {
   created_at: string
   role: 'user' | 'admin'
   avatar_url?: string
+  tos_accepted_at?: string
 }
 
 export interface AuthState {

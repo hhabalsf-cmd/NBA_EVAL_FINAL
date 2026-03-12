@@ -18,12 +18,13 @@ interface AuthStore {
   updateAvatar: (file: File) => Promise<void>
   removeAvatar: () => Promise<void>
   changePassword: (curPass: string, newPass: string) => Promise<void>
+  acceptTos: () => Promise<void>
 }
 
 async function fetchProfile(userId: string): Promise<Partial<User>> {
   const { data, error } = await supabase
     .from('profiles')
-    .select('username, avatar_url, role, created_at')
+    .select('username, avatar_url, role, created_at, tos_accepted_at')
     .eq('id', userId)
     .single()
   if (error) {
@@ -53,6 +54,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
           created_at: profile.created_at ?? data.user.created_at,
           role: (profile.role as 'user' | 'admin') ?? 'user',
           avatar_url: profile.avatar_url,
+          tos_accepted_at: profile.tos_accepted_at ?? undefined,
         },
         isAuthenticated: true,
         isLoading: false,
@@ -81,6 +83,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
           created_at: profile.created_at ?? new Date().toISOString(),
           role: 'user',
           avatar_url: undefined,
+          tos_accepted_at: undefined,
         },
         isAuthenticated: data.session !== null,
         isLoading: false,
@@ -112,6 +115,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
           created_at: profile.created_at ?? session.user.created_at,
           role: (profile.role as 'user' | 'admin') ?? 'user',
           avatar_url: profile.avatar_url,
+          tos_accepted_at: profile.tos_accepted_at ?? undefined,
         },
         isAuthenticated: true,
         isLoading: false,
@@ -182,5 +186,19 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     // Now update to new password
     const { error } = await supabase.auth.updateUser({ password: newPass })
     if (error) throw error
+  },
+
+  acceptTos: async () => {
+    const userId = get().user?.id
+    if (!userId) throw new Error('Not authenticated')
+    const now = new Date().toISOString()
+    const { error } = await supabase
+      .from('profiles')
+      .update({ tos_accepted_at: now })
+      .eq('id', userId)
+    if (error) throw error
+    set((state) => ({
+      user: state.user ? { ...state.user, tos_accepted_at: now } : null,
+    }))
   },
 }))
