@@ -15,7 +15,9 @@ export default function BetCard({ bet, rank, onSave, isSaving }: BetCardProps) {
   const isOver = bet.direction === 'OVER'
 
   const handleClick = () => {
-    navigate(`/player/${encodeURIComponent(bet.player)}`)
+    navigate(`/player/${encodeURIComponent(bet.player)}`, {
+      state: { headshot_url: bet.headshot_url },
+    })
   }
 
   return (

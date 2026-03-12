@@ -531,6 +531,9 @@ def generate_daily_picks() -> list[dict]:
             injuries_team=injuries_team,
         )
 
+        # Ensure recent averages are fresh (not stale from pickle) before predicting
+        predictor._update_recent_averages(df)
+
         # Predict
         try:
             predictions = predictor.predict(features_df, estimated_minutes=estimated_minutes)
