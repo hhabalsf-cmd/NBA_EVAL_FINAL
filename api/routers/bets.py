@@ -17,6 +17,7 @@ router = APIRouter(prefix="/api/bets", tags=["bets"])
 @router.get("/today", response_model=DailyPicksResponse)
 @limiter.limit("60/minute")
 async def get_todays_daily_picks(
+    request: Request,
     date: str = Query(default=None, description="Date in YYYY-MM-DD format (defaults to today)"),
 ):
     """
