@@ -108,7 +108,7 @@ function App() {
                 <img
                   src="/logo-full.png"
                   alt="Bettin' Jrys"
-                  className="h-8 object-contain group-hover:opacity-80 transition-opacity duration-150"
+                  className="h-12 sm:h-14 object-contain group-hover:opacity-80 transition-opacity duration-150"
                 />
               </NavLink>
 
