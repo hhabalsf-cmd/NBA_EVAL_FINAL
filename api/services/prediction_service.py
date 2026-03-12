@@ -742,6 +742,7 @@ class PredictionService:
             "player_name": player_info['player_name'],
             "player_id": player_info['player_id'],
             "team_abbrev": player_info.get('team_abbrev'),
+            "headshot_url": get_sleeper_headshot(player_info['player_name']),
             "predictions": stat_predictions,
             "game_info": game_info_response,
             "opponent_context": opponent_context,

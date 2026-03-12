@@ -99,6 +99,7 @@ export interface GameLogEntry {
 export interface PredictionResult {
   player_name: string
   player_id: number
+  headshot_url?: string
   team_abbrev?: string
   predictions: Record<string, StatPrediction>
   game_info?: GameInfo
@@ -130,6 +131,7 @@ export interface Pick {
   timestamp: string
   player: string
   player_id?: number
+  headshot_url?: string
   team_abbrev?: string
   stat: string
   line: number
@@ -153,6 +155,7 @@ export interface ParlayLegDetail {
   pick_id: number
   player: string
   player_id?: number
+  headshot_url?: string
   team_abbrev?: string
   stat: string
   line: number
@@ -307,6 +310,7 @@ export interface LiveLegStatus {
   pick_id: number
   player_name: string
   player_id: number
+  headshot_url?: string
   stat: string
   line: number
   direction: string
@@ -574,7 +578,7 @@ export async function createParlay(pickIds: number[]): Promise<SavedParlay> {
 export async function getParlays(): Promise<SavedParlay[]> {
   const { data, error } = await supabase
     .from('parlays')
-    .select('*, parlay_legs(id, pick_id, picks(player, player_id, team_abbrev, stat, line, prediction, direction, edge, prob_over, actual_result, won, voided, void_reason, game_date, opponent))')
+    .select('*, parlay_legs(id, pick_id, picks(player, player_id, headshot_url, team_abbrev, stat, line, prediction, direction, edge, prob_over, actual_result, won, voided, void_reason, game_date, opponent))')
     .order('created_at', { ascending: false })
 
   if (error) throw new Error(error.message)
@@ -587,6 +591,7 @@ export async function getParlays(): Promise<SavedParlay[]> {
         pick_id: leg.pick_id,
         player: pick.player,
         player_id: pick.player_id,
+        headshot_url: pick.headshot_url,
         team_abbrev: pick.team_abbrev,
         stat: pick.stat,
         line: pick.line,

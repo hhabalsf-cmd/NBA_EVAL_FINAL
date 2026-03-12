@@ -105,6 +105,7 @@ export default function PlayerPage() {
     await createPick({
       player: result.player_name,
       player_id: result.player_id,
+      headshot_url: result.headshot_url ?? headshotUrl,
       team_abbrev: result.team_abbrev || undefined,
       stat: evalData.stat,
       line: evalData.line,

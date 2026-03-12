@@ -796,8 +796,9 @@ def save_pick(pick_data: dict) -> int:
     cursor.execute("""
         INSERT INTO picks (timestamp, player, stat, line, prediction, direction,
                           edge, confidence, opponent, is_home, model_type,
-                          game_date, player_id, team_abbrev, prob_over, user_id)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                          game_date, player_id, team_abbrev, prob_over, user_id,
+                          headshot_url)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
     """, (
         datetime.now().isoformat(),
@@ -816,6 +817,7 @@ def save_pick(pick_data: dict) -> int:
         pick_data.get('team_abbrev'),
         pick_data.get('prob_over'),
         pick_data.get('user_id'),
+        pick_data.get('headshot_url'),
     ))
 
     pick_id = cursor.fetchone()['id']
@@ -1864,7 +1866,8 @@ def get_parlays(user_id: str) -> list:
                 cur.execute(
                     """
                     SELECT pl.id, pl.pick_id,
-                           pk.player, pk.player_id, pk.team_abbrev, pk.stat,
+                           pk.player, pk.player_id, pk.headshot_url,
+                           pk.team_abbrev, pk.stat,
                            pk.line, pk.prediction, pk.direction, pk.edge,
                            pk.prob_over, pk.actual_result, pk.won,
                            pk.voided, pk.void_reason, pk.game_date, pk.opponent

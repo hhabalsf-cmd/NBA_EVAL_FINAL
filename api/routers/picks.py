@@ -28,6 +28,7 @@ def _pick_to_response(p: dict) -> PickResponse:
         timestamp=p['timestamp'],
         player=p['player'],
         player_id=p.get('player_id'),
+        headshot_url=p.get('headshot_url'),
         team_abbrev=p.get('team_abbrev'),
         stat=p['stat'],
         line=p['line'],
@@ -70,6 +71,7 @@ async def create_pick(pick: PickCreate, current_user: dict = Depends(get_current
     pick_data = {
         'player': pick.player,
         'player_id': pick.player_id,
+        'headshot_url': pick.headshot_url,
         'team_abbrev': pick.team_abbrev,
         'stat': pick.stat,
         'line': pick.line,

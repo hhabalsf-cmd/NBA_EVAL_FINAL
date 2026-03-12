@@ -172,6 +172,7 @@ async def get_live_parlay_status(
                 "pick_id": leg.get("pick_id"),
                 "player_name": leg.get("player", ""),
                 "player_id": player_id,
+                "headshot_url": leg.get("headshot_url"),
                 "stat": leg.get("stat", ""),
                 "line": float(leg.get("line") or 0),
                 "direction": leg.get("direction", ""),

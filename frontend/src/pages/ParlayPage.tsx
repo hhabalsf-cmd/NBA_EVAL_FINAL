@@ -6,7 +6,7 @@ import { useLiveParlayStatus } from '../hooks/useLiveParlayStatus'
 import { getPicks, deletePick, Pick, createParlay, getParlays, deleteParlay, SavedParlay, autoGradePicks } from '../api/client'
 import type { LiveParlayStatus } from '../api/client'
 import { useNavigate } from 'react-router-dom'
-import { getNbaHeadshotUrl } from '../utils/nba'
+import { getHeadshotUrl, getNbaHeadshotUrl } from '../utils/nba'
 import LiveParlayCard from '../components/LiveParlayCard'
 
 const DECIMAL_PER_LEG = 1.909 // standard -110
@@ -346,7 +346,7 @@ export default function ParlayPage() {
                   const isOver = pick.direction === 'OVER'
                   const inParlay = selectedIds.has(pick.id)
                   const prob = hitProb(pick)
-                  const headshotId = pick.player_id ?? 0
+                  const headshotSrc = getHeadshotUrl(pick.headshot_url, pick.player_id ?? 0)
                   const isExiting = exitingIds.has(pick.id)
 
                   return (
@@ -383,7 +383,7 @@ export default function ParlayPage() {
 
                         {/* Player headshot */}
                         <img
-                          src={getNbaHeadshotUrl(headshotId)}
+                          src={headshotSrc}
                           alt={pick.player}
                           className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl object-cover bg-bg-secondary flex-shrink-0 shadow-sm hidden xs:block"
                           onError={e => { (e.target as HTMLImageElement).src = getNbaHeadshotUrl(0) }}
@@ -523,7 +523,7 @@ export default function ParlayPage() {
                           <div key={pick.id} className="space-y-1">
                             <div className="flex items-center gap-2 text-xs">
                               <img
-                                src={getNbaHeadshotUrl(pick.player_id ?? 0)}
+                                src={getHeadshotUrl(pick.headshot_url, pick.player_id ?? 0)}
                                 alt={pick.player}
                                 className="w-5 h-5 rounded-full object-cover bg-bg-secondary flex-shrink-0"
                                 onError={e => { (e.target as HTMLImageElement).src = getNbaHeadshotUrl(0) }}
@@ -654,7 +654,7 @@ export default function ParlayPage() {
                           <div key={leg.id} className={`flex items-center gap-2 text-xs ${leg.voided ? 'opacity-40' : ''}`}>
                             <div className="w-4 flex-shrink-0 text-center">{legIcon}</div>
                             <img
-                              src={getNbaHeadshotUrl(leg.player_id ?? 0)}
+                              src={getHeadshotUrl(leg.headshot_url, leg.player_id ?? 0)}
                               alt={leg.player}
                               className="w-5 h-5 rounded-full object-cover bg-bg-secondary flex-shrink-0"
                               onError={e => { (e.target as HTMLImageElement).src = getNbaHeadshotUrl(0) }}

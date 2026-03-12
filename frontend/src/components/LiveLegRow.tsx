@@ -1,5 +1,5 @@
 import type { LiveLegStatus } from '../api/client'
-import { getNbaHeadshotUrl } from '../utils/nba'
+import { getHeadshotUrl, getNbaHeadshotUrl } from '../utils/nba'
 
 interface LiveLegRowProps {
   readonly leg: LiveLegStatus
@@ -66,7 +66,7 @@ export default function LiveLegRow({ leg }: LiveLegRowProps) {
 
         {/* Player headshot */}
         <img
-          src={getNbaHeadshotUrl(leg.player_id ?? 0)}
+          src={getHeadshotUrl(leg.headshot_url, leg.player_id ?? 0)}
           alt={leg.player_name}
           className="w-6 h-6 rounded-full object-cover bg-bg-secondary flex-shrink-0"
           onError={e => { (e.target as HTMLImageElement).src = getNbaHeadshotUrl(0) }}

@@ -12,7 +12,7 @@ import {
   deletePick,
   Pick,
 } from '../api/client'
-import { getNbaHeadshotUrl } from '../utils/nba'
+import { getHeadshotUrl, getNbaHeadshotUrl } from '../utils/nba'
 import {
   LineChart,
   Line,
@@ -367,7 +367,7 @@ export default function HistoryPage() {
                       <td>
                         <div className="flex items-center gap-2">
                            <img
-                            src={getNbaHeadshotUrl(pick.player_id ?? 0)}
+                            src={getHeadshotUrl(pick.headshot_url, pick.player_id ?? 0)}
                             alt={pick.player}
                             className="w-7 h-7 rounded-lg object-cover bg-bg-secondary flex-shrink-0"
                             onError={e => { (e.target as HTMLImageElement).src = getNbaHeadshotUrl(0) }}
@@ -453,7 +453,7 @@ export default function HistoryPage() {
                     <div className="flex items-start justify-between mb-2">
                       <div className="flex items-center gap-2">
                         <img
-                          src={getNbaHeadshotUrl(pick.player_id ?? 0)}
+                          src={getHeadshotUrl(pick.headshot_url, pick.player_id ?? 0)}
                           alt={pick.player}
                           className="w-8 h-8 rounded-lg object-cover bg-bg-secondary flex-shrink-0"
                           onError={e => { (e.target as HTMLImageElement).src = getNbaHeadshotUrl(0) }}

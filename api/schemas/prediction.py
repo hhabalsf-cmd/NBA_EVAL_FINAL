@@ -74,6 +74,7 @@ class GameLogEntry(BaseModel):
 class PredictionResponse(BaseModel):
     player_name: str
     player_id: int
+    headshot_url: Optional[str] = None
     team_abbrev: Optional[str] = None
     predictions: Dict[str, StatPrediction]
     game_info: Optional[GameInfo] = None
@@ -114,6 +115,7 @@ class LineEvaluation(BaseModel):
 class PickCreate(BaseModel):
     player: str = Field(..., min_length=2, max_length=100)
     player_id: Optional[int] = None
+    headshot_url: Optional[str] = None
     team_abbrev: Optional[str] = Field(None, max_length=5)
     stat: Literal["PTS", "REB", "AST", "PRA"]
     line: float = Field(..., ge=0, le=200)
@@ -133,6 +135,7 @@ class PickResponse(BaseModel):
     timestamp: str
     player: str
     player_id: Optional[int] = None
+    headshot_url: Optional[str] = None
     team_abbrev: Optional[str] = None
     stat: str
     line: float
