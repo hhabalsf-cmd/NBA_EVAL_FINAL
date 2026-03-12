@@ -129,6 +129,59 @@ class GamePredictionService:
             },
         }
 
+    def predict_all_sync(self) -> dict:
+        """Run predictions for all today's games synchronously (for cron use)."""
+        games = self.predictor.get_todays_games()
+
+        if not games:
+            return {
+                'predictions': [],
+                'generated_at': datetime.now().isoformat(),
+                'games_count': 0,
+                'message': 'No games scheduled today',
+            }
+
+        self._ensure_model()
+        self.predictor.get_team_stats()
+        self.predictor.get_injuries()
+        self.predictor.get_top_scorers()
+
+        predictions = []
+        for game in games:
+            pred = self.predictor.predict_game(
+                game['home_team'],
+                game['away_team'],
+                game.get('game_date'),
+            )
+
+            if pred:
+                pred['matchup']['game_time'] = game.get('game_time', '')
+                predictions.append(pred)
+
+                matchup = pred['matchup']
+                home = matchup['home_team']
+                away = matchup['away_team']
+                db.save_game_prediction({
+                    'game_date': matchup.get('game_date', datetime.now().strftime('%Y-%m-%d')),
+                    'home_team': home['team_abbrev'],
+                    'away_team': away['team_abbrev'],
+                    'home_team_id': home.get('team_id'),
+                    'away_team_id': away.get('team_id'),
+                    'predicted_winner': pred['predicted_winner'],
+                    'home_win_prob': pred['home_win_prob'],
+                    'away_win_prob': pred['away_win_prob'],
+                    'confidence': pred['confidence'],
+                    'key_factors': pred.get('key_factors', []),
+                    'matchup': matchup,
+                })
+
+        return {
+            'predictions_count': len(predictions),
+            'generated_at': datetime.now().isoformat(),
+            'games_count': len(games),
+            'message': f'Predicted {len(predictions)} of {len(games)} games',
+        }
+
     def get_prediction_history(self, limit: int = 40) -> list:
         """Get past predictions."""
         return db.get_game_predictions(limit=limit)

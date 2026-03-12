@@ -78,6 +78,18 @@ async def predict_todays_games(request: Request):
     )
 
 
+@router.post("/predict-cron")
+@limiter.limit("5/minute")
+def predict_todays_games_cron(request: Request):
+    """Predict today's games synchronously (for cron/scheduled use).
+
+    Protected by service key (X-Service-Key header).
+    """
+    verify_service_key(request)
+    service = get_game_service()
+    return service.predict_all_sync()
+
+
 @router.get("/history")
 @limiter.limit("60/minute")
 def get_prediction_history(request: Request, limit: int = Query(default=40, ge=1, le=40)):
