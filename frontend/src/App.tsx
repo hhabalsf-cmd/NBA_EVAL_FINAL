@@ -104,13 +104,12 @@ function App() {
           <div className="max-w-5xl mx-auto px-4 sm:px-8">
             <div className="flex items-center justify-between h-14 sm:h-16">
               {/* Logo */}
-              <NavLink to="/" className="flex items-center gap-1 group">
-                <span className="font-bold text-[15px] tracking-tight text-text-primary group-hover:text-accent transition-colors duration-150">
-                  Bettin&apos;
-                </span>
-                <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: '17px', letterSpacing: '0.05em', color: 'var(--accent)' }}>
-                  Jrys
-                </span>
+              <NavLink to="/" className="flex items-center group">
+                <img
+                  src="/logo-icon.png"
+                  alt="Bettin' Jrys"
+                  className="h-8 w-8 rounded-md object-cover group-hover:opacity-80 transition-opacity duration-150"
+                />
               </NavLink>
 
               {/* Desktop Nav Links */}
