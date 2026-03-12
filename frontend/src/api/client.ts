@@ -304,6 +304,7 @@ export async function predictPlayer(
     modelType?: string
     useEnsemble?: boolean
     retrain?: boolean
+    signal?: AbortSignal
   } = {}
 ): Promise<PredictionResult | null> {
   const response = await apiFetch(`${API_BASE}/players/predict`, {
@@ -315,6 +316,7 @@ export async function predictPlayer(
       use_ensemble: options.useEnsemble || false,
       retrain: options.retrain || false,
     }),
+    signal: options.signal,
   })
 
   if (!response.ok) await throwResponseError(response, 'Prediction failed')
@@ -325,35 +327,40 @@ export async function predictPlayer(
   let result: PredictionResult | null = null
   let buffer = ''
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
+  try {
+    while (true) {
+      if (options.signal?.aborted) break
+      const { done, value } = await reader.read()
+      if (done) break
 
-    buffer += decoder.decode(value, { stream: true })
-    
-    let boundary = buffer.indexOf('\n\n')
-    while (boundary !== -1) {
-      const chunk = buffer.slice(0, boundary)
-      buffer = buffer.slice(boundary + 2)
+      buffer += decoder.decode(value, { stream: true })
 
-      const lines = chunk.split('\n')
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const event: ProgressEvent = JSON.parse(line.slice(6))
-            onProgress(event)
+      let boundary = buffer.indexOf('\n\n')
+      while (boundary !== -1) {
+        const chunk = buffer.slice(0, boundary)
+        buffer = buffer.slice(boundary + 2)
 
-            if (event.stage === 'complete' && event.data) {
-              result = event.data
+        const lines = chunk.split('\n')
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const event: ProgressEvent = JSON.parse(line.slice(6))
+              onProgress(event)
+
+              if (event.stage === 'complete' && event.data) {
+                result = event.data
+              }
+            } catch {
+              // Ignore parse errors
             }
-          } catch {
-            // Ignore parse errors
           }
         }
+
+        boundary = buffer.indexOf('\n\n')
       }
-      
-      boundary = buffer.indexOf('\n\n')
     }
+  } finally {
+    reader.cancel().catch(() => {})
   }
 
   return result
@@ -679,9 +686,10 @@ export async function getTodaysGamePredictions(): Promise<TodaysGamesResponse> {
 }
 
 export async function predictTodaysGames(
-  onProgress: (event: ProgressEvent) => void
+  onProgress: (event: ProgressEvent) => void,
+  signal?: AbortSignal
 ): Promise<GamePrediction[] | null> {
-  const response = await apiFetch(`${API_BASE}/games/predict`, { method: 'POST' })
+  const response = await apiFetch(`${API_BASE}/games/predict`, { method: 'POST', signal })
 
   if (!response.ok) throw new Error('Prediction failed')
   if (!response.body) throw new Error('No response body')
@@ -691,36 +699,41 @@ export async function predictTodaysGames(
   let result: GamePrediction[] | null = null
   let buffer = ''
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
+  try {
+    while (true) {
+      if (signal?.aborted) break
+      const { done, value } = await reader.read()
+      if (done) break
 
-    buffer += decoder.decode(value, { stream: true })
-    
-    let boundary = buffer.indexOf('\n\n')
-    while (boundary !== -1) {
-      const chunk = buffer.slice(0, boundary)
-      buffer = buffer.slice(boundary + 2)
+      buffer += decoder.decode(value, { stream: true })
 
-      const lines = chunk.split('\n')
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const event: ProgressEvent = JSON.parse(line.slice(6))
-            onProgress(event)
+      let boundary = buffer.indexOf('\n\n')
+      while (boundary !== -1) {
+        const chunk = buffer.slice(0, boundary)
+        buffer = buffer.slice(boundary + 2)
 
-            if (event.stage === 'complete' && event.data) {
-              const responseData = event.data as unknown as TodaysGamesResponse
-              result = responseData.predictions
+        const lines = chunk.split('\n')
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const event: ProgressEvent = JSON.parse(line.slice(6))
+              onProgress(event)
+
+              if (event.stage === 'complete' && event.data) {
+                const responseData = event.data as unknown as TodaysGamesResponse
+                result = responseData.predictions
+              }
+            } catch {
+              // Ignore parse errors
             }
-          } catch {
-            // Ignore parse errors
           }
         }
+
+        boundary = buffer.indexOf('\n\n')
       }
-      
-      boundary = buffer.indexOf('\n\n')
     }
+  } finally {
+    reader.cancel().catch(() => {})
   }
 
   return result

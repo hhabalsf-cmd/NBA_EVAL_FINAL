@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '../store/authStore'
 import { RefreshCw, Loader2, BarChart3, Cpu, Users, Zap, X } from 'lucide-react'
@@ -36,6 +36,14 @@ export default function GamesPage() {
   const [streamProgress, setStreamProgress] = useState(0)
   const [streamMessage, setStreamMessage] = useState('')
   const [streamedPredictions, setStreamedPredictions] = useState<GamePrediction[] | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
+
+  // Cancel any in-flight prediction when the component unmounts (page exit)
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort()
+    }
+  }, [])
 
   const { data: gamesData, isLoading, error, refetch } = useQuery({
     queryKey: ['todays-games'],
@@ -113,22 +121,31 @@ export default function GamesPage() {
   const predictions = streamedPredictions || gamesData?.predictions || []
 
   const handlePredict = async () => {
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+
     setIsStreaming(true)
     setStreamProgress(0)
     setStreamMessage('Starting...')
     setStreamedPredictions(null)
     try {
       const result = await predictTodaysGames((event: ProgressEvent) => {
+        if (controller.signal.aborted) return
         setStreamProgress(event.progress)
         setStreamMessage(event.message)
-      })
+      }, controller.signal)
+      if (controller.signal.aborted) return
       if (result) setStreamedPredictions(result)
     } catch (err) {
+      if ((err as Error).name === 'AbortError' || controller.signal.aborted) return
       console.error('Prediction error:', err)
     } finally {
-      setIsStreaming(false)
-      refetch()
-      refetchAccuracy()
+      if (!controller.signal.aborted) {
+        setIsStreaming(false)
+        refetch()
+        refetchAccuracy()
+      }
     }
   }
 

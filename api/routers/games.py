@@ -1,11 +1,14 @@
 """Game prediction endpoints."""
 import json
+import logging
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 
 from ..limiter import limiter
+
+logger = logging.getLogger(__name__)
 from ..routers.auth import get_current_user, verify_service_key
 
 from ..schemas.prediction import (
@@ -65,6 +68,9 @@ async def predict_todays_games(request: Request):
 
     async def event_generator():
         async for event in service.predict_with_progress():
+            if await request.is_disconnected():
+                logger.info("Client disconnected during game prediction")
+                return
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(

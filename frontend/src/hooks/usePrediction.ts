@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { predictPlayer, PredictionResult, ProgressEvent } from '../api/client'
 
 interface UsePredictionState {
@@ -26,7 +26,21 @@ export function usePrediction() {
     error: null,
   })
 
+  const abortRef = useRef<AbortController | null>(null)
+
+  // Cancel any in-flight prediction when the component unmounts
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort()
+    }
+  }, [])
+
   const predict = useCallback(async (playerName: string, options: UsePredictionOptions = {}) => {
+    // Abort any previous in-flight prediction
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+
     setState({
       isLoading: true,
       progress: 0,
@@ -40,6 +54,7 @@ export function usePrediction() {
       const result = await predictPlayer(
         playerName,
         (event: ProgressEvent) => {
+          if (controller.signal.aborted) return
           setState(prev => ({
             ...prev,
             progress: event.progress,
@@ -55,8 +70,10 @@ export function usePrediction() {
             }))
           }
         },
-        options
+        { ...options, signal: controller.signal }
       )
+
+      if (controller.signal.aborted) return null
 
       setState(prev => ({
         ...prev,
@@ -68,6 +85,7 @@ export function usePrediction() {
 
       return result
     } catch (err) {
+      if ((err as Error).name === 'AbortError' || controller.signal.aborted) return null
       const errorMessage = err instanceof Error ? err.message : 'Prediction failed'
       setState(prev => ({
         ...prev,
@@ -78,7 +96,16 @@ export function usePrediction() {
     }
   }, [])
 
+  const cancel = useCallback(() => {
+    abortRef.current?.abort()
+    setState(prev => ({
+      ...prev,
+      isLoading: false,
+    }))
+  }, [])
+
   const reset = useCallback(() => {
+    abortRef.current?.abort()
     setState({
       isLoading: false,
       progress: 0,
@@ -92,6 +119,7 @@ export function usePrediction() {
   return {
     ...state,
     predict,
+    cancel,
     reset,
   }
 }

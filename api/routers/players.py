@@ -80,6 +80,9 @@ async def predict_player_stats(request: Request, body: PredictionRequest):
             use_ensemble=body.use_ensemble,
             retrain=body.retrain
         ):
+            if await request.is_disconnected():
+                logger.info("Client disconnected during player prediction for %s", body.player_name)
+                return
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(
