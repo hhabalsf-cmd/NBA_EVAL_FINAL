@@ -3430,7 +3430,7 @@ def find_best_bets(min_edge=5.0, max_edge=55.0, max_results=20, select_games=Fal
 
             # Calculate days rest
             last_game = pd.to_datetime(df['GAME_DATE'].iloc[-1])
-            days_rest = (datetime.now() - last_game).days
+            days_rest = min((datetime.now() - last_game).days, 7)
 
             # Get injury counts
             injuries_team = injuries.get(team_abbrev, {}).get('out', 0)
@@ -4100,7 +4100,7 @@ def interactive_mode():
             continue
 
         # Feature engineering with opponent context
-        df = FeatureEngineer.create_features(game_log, team_stats=team_stats)
+        df = FeatureEngineer.create_features(game_log, player_info=player_info, team_stats=team_stats)
 
         # Get vs team stats
         vs_stats = None
@@ -4154,20 +4154,22 @@ def interactive_mode():
         injuries_team = injuries.get(team_abbrev, {}).get('out', 0)
         injuries_opp = injuries.get(opponent, {}).get('out', 0)
 
+        # Calculate days rest before prediction features
+        days_rest_val = 2  # default
+        if 'GAME_DATE' in df.columns and len(df) > 1:
+            last_game = pd.to_datetime(df['GAME_DATE'].iloc[-1])
+            days_rest_val = min((datetime.now() - last_game).days, 7)
+
         # Make predictions with full context
         features_df = FeatureEngineer.get_prediction_features(
             df, is_home, opponent,
             injuries_team=injuries_team,
             injuries_opp=injuries_opp,
+            days_rest=days_rest_val,
             vs_stats=vs_stats,
             **opp_ctx,
         )
 
-        # Estimate minutes for this game context
-        days_rest_val = 2  # default
-        if 'GAME_DATE' in df.columns and len(df) > 1:
-            last_game = pd.to_datetime(df['GAME_DATE'].iloc[-1])
-            days_rest_val = min((datetime.now() - last_game).days, 7)
         estimated_minutes = FeatureEngineer.estimate_minutes(
             df, is_home, days_rest_val, injuries_team
         )
@@ -4455,7 +4457,7 @@ Examples:
         sys.exit(1)
 
     # Feature engineering with team stats
-    df = FeatureEngineer.create_features(game_log, team_stats=team_stats)
+    df = FeatureEngineer.create_features(game_log, player_info=player_info, team_stats=team_stats)
 
     # Get vs team stats
     vs_stats = None
@@ -4505,20 +4507,22 @@ Examples:
     injuries_team = injuries.get(team_abbrev, {}).get('out', 0)
     injuries_opp = injuries.get(opponent, {}).get('out', 0)
 
+    # Calculate days rest before prediction features
+    days_rest_cli = 2
+    if 'GAME_DATE' in df.columns and len(df) > 1:
+        last_game = pd.to_datetime(df['GAME_DATE'].iloc[-1])
+        days_rest_cli = min((datetime.now() - last_game).days, 7)
+
     # Make predictions with full context
     features_df = FeatureEngineer.get_prediction_features(
         df, is_home, opponent,
         injuries_team=injuries_team,
         injuries_opp=injuries_opp,
+        days_rest=days_rest_cli,
         vs_stats=vs_stats,
         **opp_ctx,
     )
 
-    # Estimate minutes for this game
-    days_rest_cli = 2
-    if 'GAME_DATE' in df.columns and len(df) > 1:
-        last_game = pd.to_datetime(df['GAME_DATE'].iloc[-1])
-        days_rest_cli = min((datetime.now() - last_game).days, 7)
     estimated_minutes = FeatureEngineer.estimate_minutes(
         df, is_home, days_rest_cli, injuries_team
     )
