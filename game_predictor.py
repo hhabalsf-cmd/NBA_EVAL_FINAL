@@ -238,9 +238,17 @@ class GamePredictor:
         self.calibrator = None
         self.elo_tracker = EloTracker()
         self._team_stats_cache = None
-        self._team_game_logs_cache = {}
+        self._team_stats_cache_time: float = 0
+        self._team_game_logs_cache: dict = {}
+        self._team_game_logs_cache_times: dict = {}
         self._injuries_cache = None
+        self._injuries_cache_time: float = 0
         self._top_scorers_cache = None
+        self._top_scorers_cache_time: float = 0
+
+        # Cache config
+        self._CACHE_TTL = 60 * 60          # 1 hour for all caches
+        self._GAME_LOGS_MAX_ENTRIES = 15   # Max team/season combos to keep
 
         # Build team lookup using BDL team mapper (BDL team IDs)
         team_mapper = get_team_mapper()
@@ -321,12 +329,14 @@ class GamePredictor:
             print(f"  ⚠️ Invalid season format '{season}', expected 'YYYY-YY'")
             return {}
 
-        if self._team_stats_cache is not None:
+        now = time.time()
+        if self._team_stats_cache is not None and (now - self._team_stats_cache_time) < self._CACHE_TTL:
             return self._team_stats_cache
 
         cached = CacheManager.get('game_pred_team', season, expiry_type='team_stats')
         if cached is not None:
             self._team_stats_cache = cached
+            self._team_stats_cache_time = now
             return cached
 
         try:
@@ -454,6 +464,7 @@ class GamePredictor:
 
             CacheManager.set('game_pred_team', team_data, season)
             self._team_stats_cache = team_data
+            self._team_stats_cache_time = time.time()
             return team_data
 
         except Exception as e:
@@ -474,12 +485,17 @@ class GamePredictor:
             return pd.DataFrame()
 
         cache_key = f"{team_id}_{season}"
+        now = time.time()
         if cache_key in self._team_game_logs_cache:
-            return self._team_game_logs_cache[cache_key]
+            if (now - self._team_game_logs_cache_times.get(cache_key, 0)) < self._CACHE_TTL:
+                return self._team_game_logs_cache[cache_key]
+            del self._team_game_logs_cache[cache_key]
+            self._team_game_logs_cache_times.pop(cache_key, None)
 
         cached = CacheManager.get('game_pred_log', team_id, season, expiry_type='game_log')
         if cached is not None:
             self._team_game_logs_cache[cache_key] = cached
+            self._team_game_logs_cache_times[cache_key] = now
             return cached
 
         try:
@@ -550,7 +566,13 @@ class GamePredictor:
             df = df.sort_values('GAME_DATE')
 
             CacheManager.set('game_pred_log', df, team_id, season)
+            # Evict oldest entries if at capacity
+            if len(self._team_game_logs_cache) >= self._GAME_LOGS_MAX_ENTRIES:
+                oldest_key = min(self._team_game_logs_cache_times, key=self._team_game_logs_cache_times.get)
+                del self._team_game_logs_cache[oldest_key]
+                del self._team_game_logs_cache_times[oldest_key]
             self._team_game_logs_cache[cache_key] = df
+            self._team_game_logs_cache_times[cache_key] = time.time()
             return df
 
         except Exception as e:
@@ -558,10 +580,12 @@ class GamePredictor:
             return pd.DataFrame()
 
     def get_injuries(self):
-        """Get injury report (reuses existing scraper)."""
-        if self._injuries_cache is not None:
+        """Get injury report (reuses existing scraper). Refreshes every hour."""
+        now = time.time()
+        if self._injuries_cache is not None and (now - self._injuries_cache_time) < self._CACHE_TTL:
             return self._injuries_cache
         self._injuries_cache = self.scraper.get_injury_report()
+        self._injuries_cache_time = now
         return self._injuries_cache
 
     def get_top_scorers(self, season='2025-26'):
@@ -570,12 +594,14 @@ class GamePredictor:
             print(f"  ⚠️ Invalid season format '{season}', expected 'YYYY-YY'")
             return {}
 
-        if self._top_scorers_cache is not None:
+        now = time.time()
+        if self._top_scorers_cache is not None and (now - self._top_scorers_cache_time) < self._CACHE_TTL:
             return self._top_scorers_cache
 
         cached = CacheManager.get('game_pred_scorers', season, expiry_type='team_stats')
         if cached is not None:
             self._top_scorers_cache = cached
+            self._top_scorers_cache_time = now
             return cached
 
         try:
@@ -616,6 +642,7 @@ class GamePredictor:
 
             CacheManager.set('game_pred_scorers', top_scorers, season)
             self._top_scorers_cache = top_scorers
+            self._top_scorers_cache_time = time.time()
             return top_scorers
 
         except Exception as e:

@@ -221,9 +221,12 @@ class PredictionService:
         self._scraper = None
         self._evaluator = None
         self._team_stats_cache = None
+        self._team_stats_cache_time: float = 0
         self._injuries_cache = None
+        self._injuries_cache_time: float = 0
         self._odds_cache: Optional[Dict] = None
         self._odds_cache_time: float = 0
+        self._CACHE_TTL = 60 * 60       # 1 hour for stats/injuries
         self._ODDS_CACHE_TTL = 30 * 60  # 30 minutes
 
     @property
@@ -241,15 +244,19 @@ class PredictionService:
         return self._evaluator
 
     def get_team_stats(self) -> Dict:
-        """Get cached team defensive stats."""
-        if self._team_stats_cache is None:
+        """Get cached team defensive stats. Refreshes every hour."""
+        now = time.time()
+        if self._team_stats_cache is None or (now - self._team_stats_cache_time) >= self._CACHE_TTL:
             self._team_stats_cache = self.scraper.get_team_defensive_stats()
+            self._team_stats_cache_time = now
         return self._team_stats_cache
 
     def get_injuries(self) -> Dict:
-        """Get cached injury report."""
-        if self._injuries_cache is None:
+        """Get cached injury report. Refreshes every hour."""
+        now = time.time()
+        if self._injuries_cache is None or (now - self._injuries_cache_time) >= self._CACHE_TTL:
             self._injuries_cache = self.scraper.get_injury_report()
+            self._injuries_cache_time = now
         return self._injuries_cache
 
     @staticmethod

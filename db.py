@@ -44,7 +44,10 @@ import psycopg2.pool
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 # Cache for team schedule lookups (date_str -> set of team abbreviations that played)
-_team_schedule_cache = {}
+_team_schedule_cache: dict = {}
+_team_schedule_cache_times: dict = {}
+_SCHEDULE_CACHE_TTL = 60 * 60 * 4   # 4 hours
+_SCHEDULE_CACHE_MAX = 30             # Max dates to keep
 EXCEL_PATH = Path(__file__).parent / "nba_picks_tracker.xlsx"
 
 # ── Connection pool (shared across all threads/requests) ──────────────────────
@@ -1283,9 +1286,14 @@ def _check_team_played(team_abbrev: str, game_date, scraper=None) -> bool:
 
     date_iso = game_date.strftime('%Y-%m-%d')
 
-    # Check cache first
+    # Check cache first (with TTL)
+    import time as _time
+    now = _time.time()
     if date_iso in _team_schedule_cache:
-        return team_abbrev.upper() in _team_schedule_cache[date_iso]
+        if (now - _team_schedule_cache_times.get(date_iso, 0)) < _SCHEDULE_CACHE_TTL:
+            return team_abbrev.upper() in _team_schedule_cache[date_iso]
+        del _team_schedule_cache[date_iso]
+        _team_schedule_cache_times.pop(date_iso, None)
 
     try:
         from bdl_client import get_bdl_client
@@ -1301,7 +1309,13 @@ def _check_team_played(team_abbrev: str, game_date, scraper=None) -> bool:
             if h_abbrev: teams_that_played.add(h_abbrev)
             if v_abbrev: teams_that_played.add(v_abbrev)
 
+        # Evict oldest if at capacity
+        if len(_team_schedule_cache) >= _SCHEDULE_CACHE_MAX:
+            oldest = min(_team_schedule_cache_times, key=_team_schedule_cache_times.get)
+            del _team_schedule_cache[oldest]
+            del _team_schedule_cache_times[oldest]
         _team_schedule_cache[date_iso] = teams_that_played
+        _team_schedule_cache_times[date_iso] = now
         return team_abbrev.upper() in teams_that_played
 
     except Exception:

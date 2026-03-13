@@ -57,9 +57,9 @@ def _load_players() -> None:
         resp = requests.get(f"{_SLEEPER_BASE}/players/nba", timeout=20)
         resp.raise_for_status()
         data: dict = resp.json()
-        _players_cache = data
-        _players_cache_time = now
 
+        # Only keep the fields we actually need (id -> name mapping)
+        # instead of the full ~50 MB API response
         mapping: dict[str, str] = {}
         for pid, p in data.items():
             fn = _norm(p.get("first_name") or "")
@@ -67,11 +67,12 @@ def _load_players() -> None:
             full = f"{fn} {ln}".strip()
             if full:
                 mapping[full] = pid
-                # Also index by suffix-stripped name for flexible matching
                 stripped = _norm_no_suffix(full)
                 if stripped and stripped != full:
                     mapping.setdefault(stripped, pid)
         _name_to_id = mapping
+        _players_cache = {"_loaded": True}   # Lightweight marker instead of full payload
+        _players_cache_time = now
         logger.info("Sleeper: loaded %d NBA players", len(mapping))
     except Exception as exc:
         logger.warning("Sleeper player fetch failed: %s", exc)
