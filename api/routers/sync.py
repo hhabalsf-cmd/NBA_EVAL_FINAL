@@ -43,14 +43,14 @@ async def run_nightly_sync(request: Request):
         raise HTTPException(status_code=504, detail="Nightly sync timed out after 600s")
     except Exception as exc:
         logger.exception("Nightly sync subprocess error: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="Nightly sync failed to start")
 
     if result.returncode != 0:
         logger.error("Nightly sync failed (exit %d): %s", result.returncode, result.stderr[-1000:])
         raise HTTPException(
             status_code=500,
-            detail=f"Sync exited {result.returncode}: {result.stderr[-500:]}",
+            detail=f"Sync failed (exit {result.returncode}). Check server logs for details.",
         )
 
     logger.info("Nightly sync completed successfully")
-    return {"status": "ok", "output": result.stdout[-500:]}
+    return {"status": "ok"}

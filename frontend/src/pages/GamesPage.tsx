@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '../store/authStore'
-import { RefreshCw, Loader2, BarChart3, Cpu, Users, Zap, X } from 'lucide-react'
+import { Loader2, BarChart3, Cpu, Users, Zap, X, RefreshCw } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import GameCard from '../components/GameCard'
 import AccuracyTracker from '../components/AccuracyTracker'
@@ -10,7 +10,6 @@ import {
   getGameAccuracyStats,
   predictTodaysGames,
   getGamePredictionHistory,
-  autoGradeGamePredictions,
   gradeGamePrediction,
   GamePrediction,
   GamePredictionHistoryItem,
@@ -81,15 +80,6 @@ export default function GamesPage() {
     setResultFilter(f)
     setPage(1)
   }
-
-  const autoGradeMutation = useMutation({
-    mutationFn: autoGradeGamePredictions,
-    onSuccess: () => {
-      queryClient.refetchQueries({ queryKey: ['game-history'] })
-      queryClient.refetchQueries({ queryKey: ['game-accuracy'] })
-    },
-    onError: () => { },
-  })
 
   const gradeMutation = useMutation({
     mutationFn: ({ id, winner }: { id: number; winner: string }) =>
@@ -176,25 +166,7 @@ export default function GamesPage() {
                 )}
               </button>
             )}
-            {activeTab === 'history' && (
-              <button
-                onClick={() => autoGradeMutation.mutate()}
-                disabled={autoGradeMutation.isPending}
-                className="btn btn-secondary text-sm flex-shrink-0"
-              >
-                {autoGradeMutation.isPending ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span className="hidden sm:inline">Grading...</span>
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">Auto-grade</span>
-                  </>
-                )}
-              </button>
-            )}
+            {/* Auto-grade is now service-key only (cron/Edge Functions) */}
           </div>
         </div>
         <p className="text-sm text-text-secondary">ML-powered win predictions for NBA matchups</p>

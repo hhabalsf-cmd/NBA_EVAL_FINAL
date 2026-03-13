@@ -1,12 +1,9 @@
-import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, BarChart3, ChevronDown, Search as SearchIcon, Target, TrendingUp } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { ArrowRight, BarChart3, Search as SearchIcon, Target, Gamepad2, History } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { motion, type Variants } from 'framer-motion'
 import PlayerSearch from '../components/PlayerSearch'
-import BetCard from '../components/BetCard'
-import { getPerformanceStats, getTodaysDailyPicks, dailyPickToBestBet, saveDailyPickToMyPicks } from '../api/client'
-import type { DailyPick } from '../api/client'
+import { getPerformanceStats } from '../api/client'
 
 const fadeUp: Variants = {
   hidden: { opacity: 0, y: 16 },

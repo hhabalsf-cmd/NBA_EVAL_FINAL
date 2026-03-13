@@ -3,7 +3,7 @@ import { X, Trash2, RefreshCw, BookmarkCheck, ArrowUpDown, ArrowUp, ArrowDown, B
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParlaysRealtime } from '../hooks/useParlaysRealtime'
 import { useLiveParlayStatus } from '../hooks/useLiveParlayStatus'
-import { getPicks, deletePick, Pick, createParlay, getParlays, deleteParlay, SavedParlay, autoGradePicks } from '../api/client'
+import { getPicks, deletePick, Pick, createParlay, getParlays, deleteParlay, SavedParlay } from '../api/client'
 import type { LiveParlayStatus } from '../api/client'
 import { useNavigate } from 'react-router-dom'
 import { getHeadshotUrl, getNbaHeadshotUrl } from '../utils/nba'
@@ -74,7 +74,7 @@ export default function ParlayPage() {
     staleTime: 1000 * 30,
   })
 
-  const { data: savedParlays = [], refetch: refetchParlays } = useQuery({
+  const { data: savedParlays = [] } = useQuery({
     queryKey: ['parlays'],
     queryFn: getParlays,
     staleTime: 1000 * 30,
@@ -113,16 +113,6 @@ export default function ParlayPage() {
     mutationFn: (id: number) => deleteParlay(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['parlays'] })
-    },
-  })
-
-  const autoGradeMutation = useMutation({
-    mutationFn: autoGradePicks,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['pending-picks'] })
-      queryClient.invalidateQueries({ queryKey: ['parlays'] })
-      refetch()
-      refetchParlays()
     },
   })
 
@@ -193,15 +183,7 @@ export default function ParlayPage() {
             </p>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
-            <button
-              onClick={() => autoGradeMutation.mutate()}
-              disabled={autoGradeMutation.isPending}
-              className="btn btn-secondary text-sm"
-              title="Auto-grade picks and parlays"
-            >
-              <RefreshCw className={`w-4 h-4 ${autoGradeMutation.isPending ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">Auto-grade</span>
-            </button>
+            {/* Auto-grade is now service-key only (cron/Edge Functions) */}
             {activeTab === 'builder' && selectedIds.size > 0 && (
               <button
                 onClick={() => setSelectedIds(new Set())}

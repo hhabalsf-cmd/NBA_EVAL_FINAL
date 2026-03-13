@@ -14,6 +14,8 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from slowapi.errors import RateLimitExceeded
 
+_is_prod = bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_ID"))
+
 from .limiter import limiter
 from .routers import players_router, bets_router, picks_router, games_router, auth_router, parlays_router, sync_router, live_router, social_router
 
@@ -74,6 +76,21 @@ async def lifespan(app: FastAPI):
     yield
 
 
+class RequestBodyLimitMiddleware(BaseHTTPMiddleware):
+    """Reject requests with bodies larger than the configured limit (default 2 MB)."""
+
+    MAX_BODY_SIZE = 2 * 1024 * 1024  # 2 MB
+
+    async def dispatch(self, request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > self.MAX_BODY_SIZE:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": "Request body too large"},
+            )
+        return await call_next(request)
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Add security-relevant HTTP response headers to every response."""
 
@@ -85,7 +102,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: https:; "
             "connect-src 'self' https://*.supabase.co wss://*.supabase.co;"
@@ -99,9 +116,9 @@ app = FastAPI(
     title="Bettin' Jrys API",
     description="ML-powered player prop analysis for NBA betting",
     version="1.0.0",
-    docs_url="/api/docs",
-    redoc_url="/api/redoc",
-    openapi_url="/api/openapi.json",
+    docs_url=None if _is_prod else "/api/docs",
+    redoc_url=None if _is_prod else "/api/redoc",
+    openapi_url=None if _is_prod else "/api/openapi.json",
     lifespan=lifespan,
 )
 
@@ -115,6 +132,9 @@ def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONRespons
 # Rate limiting
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
+
+# Request body size limit (2 MB)
+app.add_middleware(RequestBodyLimitMiddleware)
 
 # Security headers
 app.add_middleware(SecurityHeadersMiddleware)
@@ -154,40 +174,13 @@ async def health_check():
 
 @app.get("/")
 async def root():
-    """Root endpoint with API info."""
+    """Root endpoint — health check only in production."""
+    if _is_prod:
+        return {"status": "healthy", "service": "bettin-jrys-api"}
     return {
         "name": "NBA Prop Evaluator API",
         "version": "1.0.0",
         "docs": "/api/docs",
-        "endpoints": {
-            "players": {
-                "search": "GET /api/players/search?q=<query>",
-                "predict": "POST /api/players/predict",
-                "predict_sync": "POST /api/players/predict/sync",
-                "evaluate_line": "POST /api/players/evaluate-line"
-            },
-            "bets": {
-                "today": "GET /api/bets/today",
-                "quick": "GET /api/bets/quick"
-            },
-            "picks": {
-                "list": "GET /api/picks",
-                "create": "POST /api/picks",
-                "get": "GET /api/picks/{id}",
-                "grade": "PUT /api/picks/{id}/grade",
-                "delete": "DELETE /api/picks/{id}",
-                "auto_grade": "POST /api/picks/auto-grade",
-                "stats": "GET /api/picks/stats/performance",
-                "profit": "GET /api/picks/stats/profit"
-            },
-            "games": {
-                "today": "GET /api/games/today",
-                "predict": "POST /api/games/predict",
-                "history": "GET /api/games/history",
-                "auto_grade": "POST /api/games/auto-grade",
-                "accuracy": "GET /api/games/stats/accuracy"
-            }
-        }
     }
 
 

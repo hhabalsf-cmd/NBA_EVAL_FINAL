@@ -160,13 +160,9 @@ async def auto_grade_picks(request: Request):
     Automatically grade pending picks by fetching actual results,
     then derive and store results for any pending parlays whose picks are all resolved.
 
-    Accepts either a service key (X-Service-Key) or authenticated user (Bearer JWT).
+    Protected by X-Service-Key header only (called by pg_cron or Edge Functions).
     """
-    service_key = request.headers.get("X-Service-Key")
-    if service_key:
-        verify_service_key(request)
-    else:
-        get_current_user(request)
+    verify_service_key(request)
 
     result = db.auto_grade_picks()
     parlay_result = db.grade_pending_parlays(user_id=None)

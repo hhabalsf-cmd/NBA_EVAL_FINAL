@@ -15,6 +15,13 @@ function getTodayET(): string {
 }
 
 Deno.serve(async (req) => {
+  // Verify inbound authorization
+  const authHeader = req.headers.get('Authorization')
+  const expectedKey = Deno.env.get('WEBHOOK_SECRET')
+  if (expectedKey && (!authHeader || authHeader !== `Bearer ${expectedKey}`)) {
+    return new Response('Unauthorized', { status: 401 })
+  }
+
   try {
     const body = await req.json()
     const record = body.record

@@ -2,12 +2,11 @@ import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '../store/authStore'
 import { usePicksRealtime } from '../hooks/usePicksRealtime'
-import { RefreshCw, Trash2, Check, X, Loader2, Share2 } from 'lucide-react'
+import { Trash2, Check, X, Loader2, Share2 } from 'lucide-react'
 import {
   getPicks,
   getPerformanceStats,
   getCumulativeProfit,
-  autoGradePicks,
   gradePick,
   deletePick,
   Pick,
@@ -71,20 +70,6 @@ export default function HistoryPage() {
     queryKey: ['cumulative-profit'],
     queryFn: getCumulativeProfit,
     enabled: isAuthenticated,
-  })
-
-  const autoGradeMutation = useMutation({
-    mutationFn: autoGradePicks,
-    onSuccess: (data) => {
-      queryClient.refetchQueries({ queryKey: ['picks'] })
-      queryClient.refetchQueries({ queryKey: ['performance-stats'] })
-      queryClient.refetchQueries({ queryKey: ['cumulative-profit'] })
-      queryClient.invalidateQueries({ queryKey: ['parlays'] })
-      if (data.parlays_graded > 0) {
-        console.log(`Auto-grade: ${data.graded_count} picks graded, ${data.parlays_graded} parlays resolved`)
-      }
-    },
-    onError: () => {},
   })
 
   const gradePickMutation = useMutation({
@@ -185,23 +170,7 @@ export default function HistoryPage() {
           <h1 className="text-2xl font-bold text-text-primary tracking-tight">Pick History</h1>
           <p className="text-sm text-text-secondary mt-1">Track your picks and performance</p>
         </div>
-        <button
-          onClick={() => autoGradeMutation.mutate()}
-          disabled={autoGradeMutation.isPending}
-          className="btn btn-secondary text-sm"
-        >
-          {autoGradeMutation.isPending ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Auto-grading...
-            </>
-          ) : (
-            <>
-              <RefreshCw className="w-3.5 h-3.5" />
-              Auto-grade Picks
-            </>
-          )}
-        </button>
+        {/* Auto-grade is now service-key only (cron/Edge Functions) */}
       </section>
 
       {/* Stats Grid */}

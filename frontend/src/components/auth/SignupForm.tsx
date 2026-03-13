@@ -18,6 +18,13 @@ export default function SignupForm({ onSuccess }: SignupFormProps) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!tosAccepted) return
+
+    // Validate username format
+    if (!/^[a-zA-Z0-9_-]{3,30}$/.test(username)) {
+      useAuthStore.setState({ error: 'Username must be 3-30 characters: letters, numbers, _ or -' })
+      return
+    }
+
     await signup(email, username, password)
     if (useAuthStore.getState().needsEmailConfirmation) return
     await acceptTos()

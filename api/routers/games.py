@@ -109,13 +109,9 @@ def get_prediction_history(request: Request, limit: int = Query(default=40, ge=1
 def auto_grade_predictions(request: Request):
     """Auto-grade pending game predictions using final scores.
 
-    Accepts either a service key (X-Service-Key) or authenticated user (Bearer JWT).
+    Protected by X-Service-Key header only (called by pg_cron or Edge Functions).
     """
-    service_key = request.headers.get("X-Service-Key")
-    if service_key:
-        verify_service_key(request)
-    else:
-        get_current_user(request)
+    verify_service_key(request)
 
     service = get_game_service()
     return service.auto_grade()

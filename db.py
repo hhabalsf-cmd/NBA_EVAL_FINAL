@@ -42,6 +42,11 @@ import psycopg2.extras
 import psycopg2.pool
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL environment variable is not set. "
+        "Refusing to start with no database connection."
+    )
 
 # Cache for team schedule lookups (date_str -> set of team abbreviations that played)
 _team_schedule_cache: dict = {}
@@ -72,14 +77,17 @@ def get_connection():
     return _get_pool().getconn()
 
 
+_logger = logging.getLogger(__name__)
+
+
 def put_connection(conn) -> None:
     """Return a connection to the pool, rolling back any open transaction first."""
     try:
         if not conn.closed:
             conn.rollback()
         _get_pool().putconn(conn)
-    except Exception:
-        pass
+    except Exception as exc:
+        _logger.warning("put_connection error: %s", exc)
 
 
 def init_db():
@@ -322,90 +330,11 @@ def get_league_averages_from_supabase(season: str) -> dict:
         put_connection(conn)
 
 
-# ── User functions ────────────────────────────────────────────
 
-def _safe_user(row) -> dict:
-    """Return a user dict with hashed_password stripped out."""
-    d = dict(row)
-    d.pop("hashed_password", None)
-    return d
-
-
-def create_user(user_id: str, email: str, pass_hash: str, username: str) -> dict:
-    """Insert a new user row. Returns the created user dict."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    now = datetime.utcnow().isoformat()
-    cursor.execute(
-        "INSERT INTO users (id, email, pass_hash, username, created_at) VALUES (%s, %s, %s, %s, %s)",
-        (user_id, email, pass_hash, username, now)
-    )
-    conn.commit()
-    cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
-    row = cursor.fetchone()
-    put_connection(conn)
-    return _safe_user(row)
-
-
-def get_user_by_email(email: str) -> Optional[dict]:
-    """Return user dict for given email, or None if not found."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE email = %s", (email,))
-    row = cursor.fetchone()
-    put_connection(conn)
-    return dict(row) if row else None
-
-
-def get_user_by_id(user_id: str) -> Optional[dict]:
-    """Return user dict for given id, or None if not found."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
-    row = cursor.fetchone()
-    put_connection(conn)
-    return dict(row) if row else None
-
-
-def update_user_avatar(user_id: str, avatar_url: str) -> Optional[dict]:
-    """Set avatar_url for user. Returns updated user dict."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE users SET avatar_url = %s WHERE id = %s",
-        (avatar_url, user_id)
-    )
-    conn.commit()
-    cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
-    row = cursor.fetchone()
-    put_connection(conn)
-    return _safe_user(row) if row else None
-
-
-def update_user_password(user_id: str, pass_hash: str) -> None:
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE users SET hashed_password = %s WHERE id = %s",
-        (pass_hash, user_id),
-    )
-    conn.commit()
-    put_connection(conn)
-
-
-def clear_user_avatar(user_id: str) -> Optional[dict]:
-    """Set avatar_url to NULL for user. Returns updated user dict."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE users SET avatar_url = NULL WHERE id = %s",
-        (user_id,)
-    )
-    conn.commit()
-    cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
-    row = cursor.fetchone()
-    put_connection(conn)
-    return _safe_user(row) if row else None
+# NOTE: Legacy user functions (create_user, get_user_by_email, get_user_by_id,
+# update_user_avatar, update_user_password, clear_user_avatar) were removed in
+# the security audit of 2026-03-13. The `users` table was dropped during the
+# Supabase migration (2026-03-07) and replaced by auth.users + profiles.
 
 
 def save_game_prediction(prediction_data: dict) -> int:

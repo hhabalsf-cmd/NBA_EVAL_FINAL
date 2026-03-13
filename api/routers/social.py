@@ -14,6 +14,10 @@ from ..routers.auth import get_current_user
 
 router = APIRouter(prefix="/api", tags=["social"])
 
+# Allowlist for leaderboard sort columns — prevents SQL injection even if
+# FastAPI's query validation is bypassed or misconfigured.
+_LEADERBOARD_SORT_COLS = {"win_rate": "win_rate", "roi_units": "roi_units"}
+
 
 def get_optional_user(request: Request) -> Optional[dict]:
     """Return current user if authenticated, None otherwise. Never raises."""
@@ -95,12 +99,13 @@ async def get_leaderboard(
     limit: int = Query(default=50, ge=1, le=100),
 ):
     """Return top users from the leaderboard materialized view."""
+    sort_col = _LEADERBOARD_SORT_COLS.get(sort_by, "win_rate")
     conn = db.get_connection()
     try:
         cur = conn.cursor()
         cur.execute(
-            f"SELECT user_id, username, avatar_url, total_graded, total_won, win_rate, roi_units "
-            f"FROM leaderboard_view ORDER BY {sort_by} DESC LIMIT %s",
+            "SELECT user_id, username, avatar_url, total_graded, total_won, win_rate, roi_units "
+            "FROM leaderboard_view ORDER BY " + sort_col + " DESC LIMIT %s",
             (limit,),
         )
         cols = [d[0] for d in cur.description]
