@@ -494,8 +494,7 @@ export async function evaluateLine(
  * Returns picks ordered by rank.
  */
 export async function getTodaysDailyPicks(): Promise<DailyPick[]> {
-  const now = new Date()
-  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}` // local YYYY-MM-DD
+  const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
   const { data, error } = await supabase
     .from('daily_picks')
     .select('*')
