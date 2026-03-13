@@ -415,7 +415,8 @@ class NBADataScraper:
                 print(f"⚠️ No BDL team ID for abbreviation: {team_abbrev}")
                 return None
 
-            today = datetime.now().date()
+            from zoneinfo import ZoneInfo
+            today = datetime.now(ZoneInfo("America/New_York")).date()
             end_date = today + timedelta(days=7)
             start_str = today.strftime('%Y-%m-%d')
             end_str = end_date.strftime('%Y-%m-%d')

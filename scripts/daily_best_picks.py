@@ -107,8 +107,9 @@ def _get_teams_playing_today() -> list[dict]:
     """
     logger.info("📅 Fetching today's NBA schedule...")
     from datetime import timedelta
-    
-    target_date = datetime.now().date()
+    from zoneinfo import ZoneInfo
+
+    target_date = datetime.now(ZoneInfo("America/New_York")).date()
     today_str = target_date.strftime('%Y-%m-%d')
     bdl = get_bdl_client()
     raw_games = bdl.get_games(dates=[today_str])

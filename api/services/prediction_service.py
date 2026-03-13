@@ -171,8 +171,9 @@ PRED_CACHE_DIR = Path("./cache/predictions")
 
 
 def _prediction_cache_path(player_name: str) -> Path:
+    from zoneinfo import ZoneInfo
     key = player_name.replace(" ", "_")
-    date_str = datetime.now().strftime("%Y-%m-%d")
+    date_str = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
     return PRED_CACHE_DIR / f"{key}_{date_str}.json"
 
 

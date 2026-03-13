@@ -494,7 +494,8 @@ export async function evaluateLine(
  * Returns picks ordered by rank.
  */
 export async function getTodaysDailyPicks(): Promise<DailyPick[]> {
-  const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+  // Use ET date since NBA schedule operates on Eastern Time
+  const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })).toISOString().slice(0, 10)
   const { data, error } = await supabase
     .from('daily_picks')
     .select('*')
