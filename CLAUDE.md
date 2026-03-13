@@ -66,7 +66,7 @@ Both servers must run simultaneously. Vite proxies `/api/*` → `localhost:8000`
 | POST | `/api/players/predict/sync` | Blocking alternative |
 | POST | `/api/players/evaluate-line` | Single stat/line evaluation |
 | GET | `/api/players/{name}/research` | Game log, rolling avgs, splits, matchup context |
-| GET | `/api/bets/today` | **SUNSETTED** — returns empty |
+| GET | `/api/bets/today` | Daily best bets |
 | GET | `/api/picks?days=30&pending_only=false` | Pick history |
 | POST | `/api/picks` | Create pick |
 | PUT | `/api/picks/{id}/grade` | Grade a pick |
@@ -82,7 +82,7 @@ Both servers must run simultaneously. Vite proxies `/api/*` → `localhost:8000`
 
 **SSE shape:** `{stage, progress (0–100), message, data?}`
 
-**Services (singletons):** `PredictionService`, `BestBetsService` (sunsetted), `GamePredictionService`
+**Services (singletons):** `PredictionService`, `BestBetsService`, `GamePredictionService`
 
 **Key schemas (`api/schemas/prediction.py`):**
 - `PredictionRequest` — `{player_name, model_type, use_ensemble, retrain}`
@@ -105,7 +105,7 @@ Both servers must run simultaneously. Vite proxies `/api/*` → `localhost:8000`
 - **`HistoryPage.tsx`** — cumulative profit chart, manual/auto grading, by-stat breakdown
 - **`ParlayPage.tsx`** — multi-pick builder, dynamic odds calc
 - **`GamesPage.tsx`** — ELO win probabilities, key factors, accuracy tracker
-- **`HomePage.tsx`** / **`LandingPage.tsx`** — Best Bets section **sunsetted** (placeholder)
+- **`HomePage.tsx`** / **`LandingPage.tsx`** — Best Bets section (active), performance stats, how-it-works
 
 #### Key Components & Hooks
 - **`PlayerSearch.tsx`** — debounced (300ms) autocomplete, headshots via `utils/nba.ts`
@@ -150,7 +150,6 @@ game_predictions: id, timestamp, game_date, home_team, away_team, home/away_team
 
 ## Known Issues / Sunsetted Features
 
-- **Best Bets** (`/api/bets/today`, `/api/bets/quick`): Return empty. To re-enable: restore `BestBetsService` call in `bets.py` + restore `BetCard` rendering in HomePage/LandingPage.
 - **Live Odds**: Quota exhausted (500/500). Replace `odds_api_key` in `config.json`. Only affects line auto-population on PlayerPage.
 
 ## Security Policy
