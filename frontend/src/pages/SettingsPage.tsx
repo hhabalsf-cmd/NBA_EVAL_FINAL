@@ -1,8 +1,9 @@
 import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { User, SlidersHorizontal, Camera, History, ChevronRight, TrendingUp } from 'lucide-react'
+import { User, SlidersHorizontal, Camera, History, ChevronRight, TrendingUp, Globe } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
 import { useThemeStore } from '../store/themeStore'
+import { supabase } from '../lib/supabase'
 import AvatarCropModal from '../components/AvatarCropModal'
 
 type Tab = 'profile' | 'preferences'
@@ -20,10 +21,30 @@ export default function SettingsPage() {
   const [pwError, setPwError] = useState<string | null>(null)
   const [pwSuccess, setPwSuccess] = useState(false)
   const [isChangingPw, setIsChangingPw] = useState(false)
+  const [isTogglingPublic, setIsTogglingPublic] = useState(false)
   const { user, updateAvatar, removeAvatar, isUploadingAvatar, changePassword } = useAuthStore()
   const { theme, toggleTheme } = useThemeStore()
 
   if (!user) return null
+
+  async function handleTogglePublic() {
+    setIsTogglingPublic(true)
+    try {
+      const newVal = !user!.is_public
+      const { error } = await supabase
+        .from('profiles')
+        .update({ is_public: newVal })
+        .eq('id', user!.id)
+      if (error) throw error
+      useAuthStore.setState((state) => ({
+        user: state.user ? { ...state.user, is_public: newVal } : null,
+      }))
+    } catch (err) {
+      console.error('Failed to update profile visibility:', err)
+    } finally {
+      setIsTogglingPublic(false)
+    }
+  }
 
   const initial = user.username.charAt(0).toUpperCase()
 
@@ -273,6 +294,41 @@ export default function SettingsPage() {
                 ))}
               </div>
             </div>
+          </div>
+
+          {/* Public Profile Toggle */}
+          <div className="card p-6 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Globe className="w-4 h-4 text-text-muted" />
+                <div>
+                  <label className="block text-sm font-medium text-text-primary">Public Profile</label>
+                  <p className="text-xs text-text-muted mt-0.5">
+                    Show your stats and picks on the leaderboard
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={handleTogglePublic}
+                disabled={isTogglingPublic}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none disabled:opacity-50 ${
+                  user.is_public ? 'bg-accent' : 'bg-bg-elevated'
+                }`}
+                role="switch"
+                aria-checked={user.is_public ?? false}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                    user.is_public ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+            {user.is_public && (
+              <p className="text-xs text-accent">
+                Your profile is visible at /users/{user.username}
+              </p>
+            )}
           </div>
 
           {/* Pick History Card */}

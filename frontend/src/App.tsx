@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom'
-import { Home, Gamepad2, Dice5, FlaskConical } from 'lucide-react'
+import { Home, Gamepad2, Dice5, FlaskConical, Trophy } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import HomePage from './pages/HomePage'
 import LandingPage from './pages/LandingPage'
@@ -12,6 +12,8 @@ import ResearchPage from './pages/ResearchPage'
 import LoginPage from './pages/auth/LoginPage'
 import SignupPage from './pages/auth/SignupPage'
 import SettingsPage from './pages/SettingsPage'
+import LeaderboardPage from './pages/LeaderboardPage'
+import PublicProfilePage from './pages/PublicProfilePage'
 import ProtectedRoute from './components/auth/ProtectedRoute'
 import UserMenu from './components/UserMenu'
 import { useAuthStore } from './store/authStore'
@@ -51,6 +53,8 @@ function AppRoutes() {
           <Route path="/history" element={<ProtectedRoute><HistoryPage /></ProtectedRoute>} />
           <Route path="/parlay" element={<ProtectedRoute><ParlayPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+          <Route path="/leaderboard" element={<LeaderboardPage />} />
+          <Route path="/users/:username" element={<PublicProfilePage />} />
         </Routes>
       </motion.div>
     </AnimatePresence>
@@ -95,6 +99,7 @@ function App() {
     { to: '/games', icon: Gamepad2, label: 'Games' },
     { to: '/research', icon: FlaskConical, label: 'Research' },
     { to: '/parlay', icon: Dice5, label: 'Parlays', badge: pendingPicks.length },
+    { to: '/leaderboard', icon: Trophy, label: 'Leaders' },
   ]
 
   return (
@@ -115,7 +120,9 @@ function App() {
 
               {/* Desktop Nav Links */}
               <div className="hidden sm:flex items-center gap-1">
-                {isAuthenticated && navItems.map(({ to, icon: Icon, label, badge }) => (
+                {navItems
+                  .filter(item => isAuthenticated || item.to === '/leaderboard')
+                  .map(({ to, icon: Icon, label, badge }) => (
                   <NavLink
                     key={to}
                     to={to}
@@ -163,14 +170,16 @@ function App() {
         <footer className="hidden sm:block border-t border-border-subtle py-8 mt-auto">
           <div className="max-w-5xl mx-auto px-5 sm:px-8 flex items-center justify-between">
             <span className="text-text-muted text-xs tracking-wide">ML-Powered Analysis</span>
-            <span className="text-text-muted text-xs tracking-wide font-mono">EVAL</span>
+            <span className="text-text-muted text-xs tracking-wide font-mono">Bettin' Jrys</span>
           </div>
         </footer>
 
         {/* Mobile Bottom Navigation */}
         <nav className="sm:hidden fixed bottom-0 left-0 right-0 z-50 bg-bg-secondary/95 backdrop-blur-xl border-t border-border-subtle safe-area-bottom">
           <div className="flex items-center justify-around h-16 px-2">
-            {isAuthenticated && navItems.map(({ to, icon: Icon, label, badge }) => (
+            {navItems
+              .filter(item => isAuthenticated || item.to === '/leaderboard')
+              .map(({ to, icon: Icon, label, badge }) => (
               <NavLink
                 key={to}
                 to={to}

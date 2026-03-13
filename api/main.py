@@ -15,7 +15,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from slowapi.errors import RateLimitExceeded
 
 from .limiter import limiter
-from .routers import players_router, bets_router, picks_router, games_router, auth_router, parlays_router, sync_router, live_router
+from .routers import players_router, bets_router, picks_router, games_router, auth_router, parlays_router, sync_router, live_router, social_router
 
 _logger = logging.getLogger(__name__)
 
@@ -96,7 +96,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 # Create app
 app = FastAPI(
-    title="NBA Prop Evaluator API",
+    title="Bettin' Jrys API",
     description="ML-powered player prop analysis for NBA betting",
     version="1.0.0",
     docs_url="/api/docs",
@@ -143,6 +143,7 @@ app.include_router(auth_router)
 app.include_router(parlays_router)
 app.include_router(sync_router)
 app.include_router(live_router)
+app.include_router(social_router)
 
 
 @app.get("/api/health")

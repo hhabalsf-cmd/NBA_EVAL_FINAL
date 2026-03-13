@@ -6,6 +6,7 @@ export interface User {
   role: 'user' | 'admin'
   avatar_url?: string
   tos_accepted_at?: string
+  is_public?: boolean
 }
 
 export interface AuthState {

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, BarChart3, Search as SearchIcon, Target, Activity, Lock } from 'lucide-react'
+import { ArrowRight, BarChart3, Search as SearchIcon, Target, Activity } from 'lucide-react'
 import { getPerformanceStats } from '../api/client'
 
 // ── Animated counter ─────────────────────────────────────────────────────────
@@ -210,8 +210,8 @@ export default function LandingPage() {
             ML models trained on NBA data surface the edge in player props. Know when to bet — and when to pass.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-            <Link to="/app" className="btn btn-primary text-base px-6 py-3 w-full sm:w-auto">
-              Start Analyzing
+            <Link to="/signup" className="btn btn-primary text-base px-6 py-3 w-full sm:w-auto">
+              Get Started Free
               <ArrowRight className="w-4 h-4" />
             </Link>
             <Link to="/games" className="btn btn-secondary text-base px-6 py-3 w-full sm:w-auto">
@@ -271,28 +271,47 @@ export default function LandingPage() {
         </section>
       )}
 
-      {/* ── Best Bets CTA (auth-gated) ──────────────────────────────── */}
-      <section className="card p-6 sm:p-8 text-center relative overflow-hidden">
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{ background: 'linear-gradient(135deg, var(--accent)08 0%, transparent 60%)' }}
-        />
-        <div className="relative flex flex-col items-center gap-4">
-          <div
-            className="w-12 h-12 rounded-2xl flex items-center justify-center"
-            style={{ background: 'var(--accent)18', border: '1px solid var(--accent)30' }}
-          >
-            <Lock className="w-5 h-5 text-accent" />
-          </div>
-          <div>
-            <h2 className="text-xl font-semibold text-text-primary tracking-tight mb-1.5">Today's Best Bets</h2>
-            <p className="text-sm text-text-secondary max-w-sm mx-auto">
-              Our ML models surface the highest-edge plays daily. Sign in to access today's picks.
-            </p>
-          </div>
-          <Link to="/login" className="btn btn-primary text-sm px-6 py-2.5">
-            Sign In to View
-            <ArrowRight className="w-4 h-4" />
+      {/* ── Sample Predictions ──────────────────────────────────────── */}
+      <section>
+        <div className="mb-6">
+          <h2 className="text-2xl font-semibold text-text-primary tracking-tight">Live Predictions</h2>
+          <p className="text-sm text-text-secondary mt-1">See what our ML models produce for today's players</p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {GHOST_CARDS.slice(0, 3).map(card => (
+            <div key={card.player} className="card p-5 relative overflow-hidden">
+              <div
+                className="absolute inset-0 pointer-events-none"
+                style={{ background: `linear-gradient(135deg, var(--accent)0A 0%, transparent 60%)` }}
+              />
+              <div className="relative">
+                <div className="text-xs text-text-muted uppercase tracking-wider mb-2">{card.player}</div>
+                <div className="flex items-end justify-between gap-3">
+                  <div>
+                    <div className="font-mono text-2xl font-bold text-text-primary">{card.value}</div>
+                    <div className="text-xs text-text-muted mt-0.5">{card.stat} prediction</div>
+                  </div>
+                  <div className="text-right">
+                    <div className={`text-xs font-bold px-2 py-1 rounded ${
+                      card.isOver ? 'text-accent-success bg-accent-success/10' : 'text-accent-danger bg-accent-danger/10'
+                    }`}>
+                      {card.isOver ? 'OVER' : 'UNDER'} {card.line}
+                    </div>
+                    <div className="text-[10px] text-text-muted mt-1">{card.conf}% confidence</div>
+                  </div>
+                </div>
+                <div className="mt-3">
+                  <div className="h-1 bg-bg-elevated rounded-full overflow-hidden">
+                    <div className="h-full rounded-full bg-accent" style={{ width: `${card.conf}%` }} />
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="text-center mt-4">
+          <Link to="/signup" className="text-sm text-accent hover:text-accent-hover transition-colors">
+            Create a free account to run your own predictions →
           </Link>
         </div>
       </section>
@@ -412,14 +431,20 @@ export default function LandingPage() {
         <div className="relative">
           <h2 className="text-xl font-semibold text-text-primary mb-3 tracking-tight">Ready to find an edge?</h2>
           <p className="text-sm text-text-secondary mb-6 max-w-sm mx-auto">
-            ML-powered prop analysis in seconds. No signup required to start.
+            Create a free account to get started with ML-powered prop analysis.
           </p>
-          <Link to="/app" className="btn btn-primary text-base px-8 py-3 w-full sm:w-auto">
-            Start Analyzing
+          <Link to="/signup" className="btn btn-primary text-base px-8 py-3 w-full sm:w-auto">
+            Get Started Free
             <ArrowRight className="w-4 h-4" />
           </Link>
         </div>
       </section>
+
+      {/* ── Footer Links ────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-center gap-6 text-xs text-text-muted pb-4">
+        <span>&copy; {new Date().getFullYear()} Bettin' Jrys</span>
+        <a href="mailto:contact@bettinjrys.com" className="hover:text-text-secondary transition-colors">Contact</a>
+      </div>
     </div>
   )
 }

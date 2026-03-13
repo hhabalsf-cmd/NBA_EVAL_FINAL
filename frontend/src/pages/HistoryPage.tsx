@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '../store/authStore'
 import { usePicksRealtime } from '../hooks/usePicksRealtime'
-import { RefreshCw, Trash2, Check, X, Loader2 } from 'lucide-react'
+import { RefreshCw, Trash2, Check, X, Loader2, Share2 } from 'lucide-react'
 import {
   getPicks,
   getPerformanceStats,
@@ -37,6 +37,7 @@ export default function HistoryPage() {
   const [gradeValue, setGradeValue] = useState('')
   const [page, setPage] = useState(1)
   const [resultFilter, setResultFilter] = useState<ResultFilter>('all')
+  const [copiedId, setCopiedId] = useState<number | null>(null)
 
   const { data: picks, isLoading: picksLoading } = useQuery({
     queryKey: ['picks', showPending],
@@ -126,6 +127,23 @@ export default function HistoryPage() {
     const value = parseFloat(gradeValue)
     if (isNaN(value)) return
     gradePickMutation.mutate({ pickId: pick.id, result: value })
+  }
+
+  const handleSharePick = async (pick: Pick) => {
+    const result = pick.won ? 'WON' : 'LOST'
+    const text = [
+      `Bettin' Jrys Pick: ${pick.player} ${pick.stat}`,
+      `${pick.direction} ${pick.line} (predicted ${pick.prediction.toFixed(1)})`,
+      pick.actual_result != null ? `${result} (actual: ${pick.actual_result})` : result,
+      `bettin-jrys.com`,
+    ].join(' \u2014 ')
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedId(pick.id)
+      setTimeout(() => setCopiedId(null), 2000)
+    } catch {
+      // Fallback for older browsers
+    }
   }
 
   const formatDate = (timestamp: string) => {
@@ -431,12 +449,23 @@ export default function HistoryPage() {
                         )}
                       </td>
                       <td>
-                        <button
-                          onClick={() => { if (confirm('Delete this pick?')) deletePickMutation.mutate(pick.id) }}
-                          className="text-text-muted hover:text-accent-danger transition-colors"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="flex items-center gap-2">
+                          {pick.won !== null && pick.won !== undefined && !pick.voided && (
+                            <button
+                              onClick={() => handleSharePick(pick)}
+                              className="text-text-muted hover:text-accent transition-colors"
+                              title={copiedId === pick.id ? 'Copied!' : 'Share pick'}
+                            >
+                              {copiedId === pick.id ? <Check className="w-3.5 h-3.5 text-accent-success" /> : <Share2 className="w-3.5 h-3.5" />}
+                            </button>
+                          )}
+                          <button
+                            onClick={() => { if (confirm('Delete this pick?')) deletePickMutation.mutate(pick.id) }}
+                            className="text-text-muted hover:text-accent-danger transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -501,6 +530,15 @@ export default function HistoryPage() {
                             className="text-xs text-accent font-medium px-2 py-1"
                           >
                             Grade
+                          </button>
+                        )}
+                        {pick.won !== null && pick.won !== undefined && !pick.voided && (
+                          <button
+                            onClick={() => handleSharePick(pick)}
+                            className="text-text-muted hover:text-accent transition-colors p-1"
+                            title={copiedId === pick.id ? 'Copied!' : 'Share pick'}
+                          >
+                            {copiedId === pick.id ? <Check className="w-3.5 h-3.5 text-accent-success" /> : <Share2 className="w-3.5 h-3.5" />}
                           </button>
                         )}
                         <button

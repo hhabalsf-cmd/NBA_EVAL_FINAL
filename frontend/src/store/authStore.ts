@@ -25,7 +25,7 @@ interface AuthStore {
 async function fetchProfile(userId: string): Promise<Partial<User>> {
   const { data, error } = await supabase
     .from('profiles')
-    .select('username, avatar_url, role, created_at, tos_accepted_at')
+    .select('username, avatar_url, role, created_at, tos_accepted_at, is_public')
     .eq('id', userId)
     .single()
   if (error) {
@@ -57,6 +57,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
           role: (profile.role as 'user' | 'admin') ?? 'user',
           avatar_url: profile.avatar_url,
           tos_accepted_at: profile.tos_accepted_at ?? undefined,
+          is_public: profile.is_public ?? false,
         },
         isAuthenticated: true,
         isLoading: false,
@@ -106,6 +107,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
           role: 'user',
           avatar_url: undefined,
           tos_accepted_at: undefined,
+          is_public: false,
         },
         isAuthenticated: true,
         isLoading: false,
@@ -138,6 +140,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
           role: (profile.role as 'user' | 'admin') ?? 'user',
           avatar_url: profile.avatar_url,
           tos_accepted_at: profile.tos_accepted_at ?? undefined,
+          is_public: profile.is_public ?? false,
         },
         isAuthenticated: true,
         isLoading: false,

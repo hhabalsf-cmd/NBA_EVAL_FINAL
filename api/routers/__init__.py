@@ -7,5 +7,6 @@ from .auth import router as auth_router
 from .parlays import router as parlays_router
 from .sync import router as sync_router
 from .live import router as live_router
+from .social import router as social_router
 
-__all__ = ['players_router', 'bets_router', 'picks_router', 'games_router', 'auth_router', 'parlays_router', 'sync_router', 'live_router']
+__all__ = ['players_router', 'bets_router', 'picks_router', 'games_router', 'auth_router', 'parlays_router', 'sync_router', 'live_router', 'social_router']

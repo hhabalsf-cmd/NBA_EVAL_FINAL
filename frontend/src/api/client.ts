@@ -1006,3 +1006,107 @@ export async function getPlayerResearch(playerName: string): Promise<PlayerResea
   if (!res.ok) throw new Error(`Failed to fetch research data for ${playerName}`)
   return res.json()
 }
+
+// ── Social / Leaderboard Types ──────────────────────────────────────────────
+
+export interface LeaderboardEntry {
+  user_id: string
+  username: string
+  avatar_url: string | null
+  total_graded: number
+  total_won: number
+  win_rate: number
+  roi_units: number
+}
+
+export interface PublicProfile {
+  user_id: string
+  username: string
+  avatar_url: string | null
+  is_public: boolean
+  total_graded: number
+  total_won: number
+  win_rate: number
+  roi_units: number
+  followers_count: number
+  following_count: number
+  is_following: boolean | null
+}
+
+export interface PublicPick {
+  id: number
+  player: string
+  stat: string
+  line: number
+  prediction: number
+  direction: string
+  edge: number
+  confidence: number | null
+  opponent: string | null
+  is_home: boolean | null
+  actual_result: number | null
+  won: boolean | null
+  game_date: string | null
+  model_type: string | null
+}
+
+export interface FollowInfo {
+  following: Array<{ id: string; username: string; avatar_url: string | null }>
+  followers: Array<{ id: string; username: string; avatar_url: string | null }>
+}
+
+export interface FeedPick {
+  id: number
+  username: string
+  avatar_url: string | null
+  player: string
+  stat: string
+  line: number
+  prediction: number
+  direction: string
+  won: boolean | null
+  game_date: string | null
+  timestamp: string
+}
+
+// ── Social / Leaderboard API Calls ──────────────────────────────────────────
+
+export async function getLeaderboard(sortBy = 'win_rate', limit = 50): Promise<LeaderboardEntry[]> {
+  const res = await apiFetch(`${API_BASE}/leaderboard?sort_by=${sortBy}&limit=${limit}`)
+  if (!res.ok) await throwResponseError(res, 'Failed to fetch leaderboard')
+  return res.json()
+}
+
+export async function getPublicProfile(username: string): Promise<PublicProfile> {
+  const res = await apiFetch(`${API_BASE}/users/${encodeURIComponent(username)}/profile`)
+  if (!res.ok) await throwResponseError(res, 'Failed to fetch profile')
+  return res.json()
+}
+
+export async function getPublicPicks(username: string, page = 1, perPage = 20): Promise<PublicPick[]> {
+  const res = await apiFetch(`${API_BASE}/users/${encodeURIComponent(username)}/picks?page=${page}&per_page=${perPage}`)
+  if (!res.ok) await throwResponseError(res, 'Failed to fetch picks')
+  return res.json()
+}
+
+export async function followUser(userId: string): Promise<void> {
+  const res = await apiFetch(`${API_BASE}/follows/${userId}`, { method: 'POST' })
+  if (!res.ok) await throwResponseError(res, 'Failed to follow user')
+}
+
+export async function unfollowUser(userId: string): Promise<void> {
+  const res = await apiFetch(`${API_BASE}/follows/${userId}`, { method: 'DELETE' })
+  if (!res.ok) await throwResponseError(res, 'Failed to unfollow user')
+}
+
+export async function getFollows(): Promise<FollowInfo> {
+  const res = await apiFetch(`${API_BASE}/follows`)
+  if (!res.ok) await throwResponseError(res, 'Failed to fetch follows')
+  return res.json()
+}
+
+export async function getFeed(limit = 20): Promise<FeedPick[]> {
+  const res = await apiFetch(`${API_BASE}/feed?limit=${limit}`)
+  if (!res.ok) await throwResponseError(res, 'Failed to fetch feed')
+  return res.json()
+}
