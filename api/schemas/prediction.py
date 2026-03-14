@@ -230,6 +230,7 @@ class DailyPick(BaseModel):
     generated_date: str
     player: str
     player_id: Optional[int] = None
+    headshot_url: Optional[str] = None
     team_abbrev: Optional[str] = None
     stat: str
     prediction: float
