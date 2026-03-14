@@ -311,10 +311,41 @@ def _build_matchup_string(player_team: str, opponent: str, is_home: bool) -> str
     return f"{player_team} @ {opponent}"
 
 
+def _compute_vs_stats(game_log_df, opponent: str):
+    """Compute head-to-head stats from an already-loaded game log DataFrame.
+
+    Mirrors the return shape of NBADataScraper.get_vs_team_stats() but avoids
+    any API calls — works purely from in-memory data.
+
+    Returns dict with games/avg_pts/avg_reb/avg_ast/avg_min/std fields, or None.
+    """
+    if game_log_df is None or game_log_df.empty or not opponent:
+        return None
+
+    vs = game_log_df[game_log_df['MATCHUP'].str.contains(opponent, na=False)]
+    if vs.empty:
+        return None
+
+    mins = vs['MIN'].apply(
+        lambda x: float(str(x).split(':')[0]) if ':' in str(x) else float(x)
+    )
+    return {
+        'games': len(vs),
+        'avg_pts': vs['PTS'].mean(),
+        'avg_reb': vs['REB'].mean(),
+        'avg_ast': vs['AST'].mean(),
+        'avg_min': mins.mean(),
+        'pts_std': vs['PTS'].std() if len(vs) > 1 else 0.0,
+        'reb_std': vs['REB'].std() if len(vs) > 1 else 0.0,
+        'ast_std': vs['AST'].std() if len(vs) > 1 else 0.0,
+    }
+
+
 def _sync_game_logs_for_prop_players(props_lookup: dict) -> int:
     """
-    Ensure game logs exist in Supabase for all players who have prop lines.
-    Fetches full current-season logs from BDL for any player missing data.
+    Ensure game logs in Supabase are up-to-date for all players who have prop lines.
+    Always re-fetches current season from BDL — insert uses ON CONFLICT DO NOTHING
+    so only genuinely new games are added.
     Returns the number of players synced.
     """
     by_id = props_lookup.get('by_id', {})
@@ -322,21 +353,16 @@ def _sync_game_logs_for_prop_players(props_lookup: dict) -> int:
         return 0
 
     bdl_player_ids = list(by_id.keys())
-    logger.info(f"🔄 Checking game logs for {len(bdl_player_ids)} players with prop lines...")
+    logger.info(f"🔄 Syncing game logs for {len(bdl_player_ids)} players with prop lines...")
 
     scraper = NBADataScraper()
     season_int = int(CURRENT_SEASON.split('-')[0])
     synced = 0
-    already_have = 0
 
     for bdl_pid in bdl_player_ids:
-        # Check if we already have sufficient game logs
-        existing = db.get_game_logs_from_supabase(str(bdl_pid), CURRENT_SEASON)
-        if existing is not None and len(existing) >= MIN_GAMES_TO_TRAIN:
-            already_have += 1
-            continue
-
-        # Fetch full season game log from BDL
+        # Always re-fetch from BDL to pick up recent games.
+        # insert_game_logs_to_supabase uses ON CONFLICT DO NOTHING,
+        # so existing rows are skipped and only new games are inserted.
         try:
             df = scraper._fetch_bdl_game_log(bdl_pid, bdl_pid, season_int, CURRENT_SEASON)
             if df is not None and not df.empty:
@@ -347,8 +373,8 @@ def _sync_game_logs_for_prop_players(props_lookup: dict) -> int:
             logger.debug(f"  ⚠️ Could not sync player {bdl_pid}: {exc}")
 
     logger.info(
-        f"🔄 Game log sync: {synced} new, {already_have} already populated, "
-        f"{len(bdl_player_ids) - synced - already_have} failed/empty."
+        f"🔄 Game log sync: {synced} synced, "
+        f"{len(bdl_player_ids) - synced} failed/empty."
     )
     return synced
 
@@ -392,10 +418,14 @@ def generate_daily_picks() -> list[dict]:
     # 2. Ensure game logs exist for all players with prop lines
     _sync_game_logs_for_prop_players(props_lookup)
 
-    # 3. Get team defensive stats
+    # 3. Get team defensive stats and injury report
     scraper = NBADataScraper()
     team_stats = scraper.get_team_defensive_stats()
     logger.info(f"📊 Loaded defensive stats for {len(team_stats)} teams.")
+
+    injuries = scraper.get_injury_report()
+    total_out = sum(t.get('out', 0) for t in injuries.values())
+    logger.info(f"🏥 Loaded injury report: {total_out} players out across {len(injuries)} teams.")
 
     # 4. Get eligible players
     eligible_players = _get_players_for_teams(team_abbrevs_today)
@@ -509,13 +539,23 @@ def generate_daily_picks() -> list[dict]:
         # Get full opponent context (enhanced stats)
         opp_ctx = FeatureEngineer.extract_opp_stats(team_stats, opponent)
 
+        # Get injury counts for this matchup
+        injuries_team = injuries.get(team_abbrev, {}).get('out', 0)
+        injuries_opp = injuries.get(opponent, {}).get('out', 0)
+
+        # Get head-to-head stats from already-loaded game log (zero API calls)
+        vs_stats = _compute_vs_stats(game_log, opponent)
+
         # Get prediction features for today's game
         try:
             features_df = FeatureEngineer.get_prediction_features(
                 df,
                 is_home=1 if is_home else 0,
                 opponent=opponent,
+                injuries_team=injuries_team,
+                injuries_opp=injuries_opp,
                 days_rest=days_rest,
+                vs_stats=vs_stats,
                 player_info=player_info,
                 **opp_ctx,
             )
@@ -524,7 +564,6 @@ def generate_daily_picks() -> list[dict]:
             continue
 
         # Estimate minutes
-        injuries_team = 0  # Could be enhanced with injury data later
         estimated_minutes = FeatureEngineer.estimate_minutes(
             df,
             is_home=1 if is_home else 0,
@@ -535,9 +574,10 @@ def generate_daily_picks() -> list[dict]:
         # Ensure recent averages are fresh (not stale from pickle) before predicting
         predictor._update_recent_averages(df)
 
-        # Predict
+        # Predict and apply injury-based usage adjustments
         try:
             predictions = predictor.predict(features_df, estimated_minutes=estimated_minutes)
+            predictions = predictor.apply_injury_boost(predictions, injuries_team, injuries_opp)
         except Exception as e:
             logger.warning(f"  ⚠️ Prediction failed for {player_name}: {e}")
             continue

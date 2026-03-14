@@ -15,9 +15,11 @@ Predicts which team will win each NBA game using:
 
 import concurrent.futures
 import json
+import time
 import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -270,7 +272,7 @@ class GamePredictor:
             return cached
 
         try:
-            today_str = datetime.now().date().strftime('%Y-%m-%d')
+            today_str = datetime.now(ZoneInfo("America/New_York")).date().strftime('%Y-%m-%d')
             bdl = get_bdl_client()
             raw_games = bdl.get_games(dates=[today_str])
 

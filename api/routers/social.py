@@ -108,8 +108,7 @@ async def get_leaderboard(
             "FROM leaderboard_view ORDER BY " + sort_col + " DESC LIMIT %s",
             (limit,),
         )
-        cols = [d[0] for d in cur.description]
-        rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+        rows = cur.fetchall()
         return [
             LeaderboardEntry(
                 user_id=str(r["user_id"]),
@@ -254,8 +253,7 @@ async def get_public_picks(
             """,
             (str(profile_id), per_page, offset),
         )
-        cols = [d[0] for d in cur.description]
-        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        rows = cur.fetchall()
 
         return [
             PublicPick(
@@ -413,8 +411,7 @@ async def get_feed(
             """,
             (uid, limit),
         )
-        cols = [d[0] for d in cur.description]
-        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        rows = cur.fetchall()
 
         return [
             FeedPick(

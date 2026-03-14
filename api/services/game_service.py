@@ -1,10 +1,13 @@
 """Service layer wrapping GamePredictor for API use."""
+import logging
 import sys
 import json
 import asyncio
 from pathlib import Path
 from typing import Dict, Any, Generator
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 # Add parent directory to path to import existing modules
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -24,9 +27,11 @@ class GamePredictionService:
         """Ensure model is loaded or trained."""
         if not self._model_loaded:
             if not self.predictor.load_model():
+                logger.warning("Game model not found on disk/Supabase, training from scratch")
                 self.predictor.train_model()
                 self.predictor.save_model()
             self._model_loaded = True
+            logger.info("Game prediction model ready")
 
     def get_todays_games(self) -> Dict:
         """Return today's stored game predictions from DB (no NBA API call)."""
@@ -131,56 +136,63 @@ class GamePredictionService:
 
     def predict_all_sync(self) -> dict:
         """Run predictions for all today's games synchronously (for cron use)."""
-        games = self.predictor.get_todays_games()
+        try:
+            games = self.predictor.get_todays_games()
 
-        if not games:
+            if not games:
+                logger.info("predict_all_sync: no games scheduled today")
+                return {
+                    'predictions': [],
+                    'generated_at': datetime.now().isoformat(),
+                    'games_count': 0,
+                    'message': 'No games scheduled today',
+                }
+
+            logger.info("predict_all_sync: found %d games, loading model/stats", len(games))
+            self._ensure_model()
+            self.predictor.get_team_stats()
+            self.predictor.get_injuries()
+            self.predictor.get_top_scorers()
+
+            predictions = []
+            for game in games:
+                pred = self.predictor.predict_game(
+                    game['home_team'],
+                    game['away_team'],
+                    game.get('game_date'),
+                )
+
+                if pred:
+                    pred['matchup']['game_time'] = game.get('game_time', '')
+                    predictions.append(pred)
+
+                    matchup = pred['matchup']
+                    home = matchup['home_team']
+                    away = matchup['away_team']
+                    db.save_game_prediction({
+                        'game_date': matchup.get('game_date', datetime.now().strftime('%Y-%m-%d')),
+                        'home_team': home['team_abbrev'],
+                        'away_team': away['team_abbrev'],
+                        'home_team_id': home.get('team_id'),
+                        'away_team_id': away.get('team_id'),
+                        'predicted_winner': pred['predicted_winner'],
+                        'home_win_prob': pred['home_win_prob'],
+                        'away_win_prob': pred['away_win_prob'],
+                        'confidence': pred['confidence'],
+                        'key_factors': pred.get('key_factors', []),
+                        'matchup': matchup,
+                    })
+
+            logger.info("predict_all_sync: predicted %d of %d games", len(predictions), len(games))
             return {
-                'predictions': [],
+                'predictions_count': len(predictions),
                 'generated_at': datetime.now().isoformat(),
-                'games_count': 0,
-                'message': 'No games scheduled today',
+                'games_count': len(games),
+                'message': f'Predicted {len(predictions)} of {len(games)} games',
             }
-
-        self._ensure_model()
-        self.predictor.get_team_stats()
-        self.predictor.get_injuries()
-        self.predictor.get_top_scorers()
-
-        predictions = []
-        for game in games:
-            pred = self.predictor.predict_game(
-                game['home_team'],
-                game['away_team'],
-                game.get('game_date'),
-            )
-
-            if pred:
-                pred['matchup']['game_time'] = game.get('game_time', '')
-                predictions.append(pred)
-
-                matchup = pred['matchup']
-                home = matchup['home_team']
-                away = matchup['away_team']
-                db.save_game_prediction({
-                    'game_date': matchup.get('game_date', datetime.now().strftime('%Y-%m-%d')),
-                    'home_team': home['team_abbrev'],
-                    'away_team': away['team_abbrev'],
-                    'home_team_id': home.get('team_id'),
-                    'away_team_id': away.get('team_id'),
-                    'predicted_winner': pred['predicted_winner'],
-                    'home_win_prob': pred['home_win_prob'],
-                    'away_win_prob': pred['away_win_prob'],
-                    'confidence': pred['confidence'],
-                    'key_factors': pred.get('key_factors', []),
-                    'matchup': matchup,
-                })
-
-        return {
-            'predictions_count': len(predictions),
-            'generated_at': datetime.now().isoformat(),
-            'games_count': len(games),
-            'message': f'Predicted {len(predictions)} of {len(games)} games',
-        }
+        except Exception:
+            logger.exception("predict_all_sync failed")
+            raise
 
     def get_prediction_history(self, limit: int = 40) -> list:
         """Get past predictions."""
