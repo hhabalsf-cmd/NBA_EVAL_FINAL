@@ -656,6 +656,11 @@ class PredictionService:
             predictor._update_recent_averages(df_features)
             preds = predictor.predict(pred_features, estimated_minutes=estimated_minutes)
             preds = predictor.apply_injury_boost(preds, injuries_team, injuries_opp)
+            preds = predictor.apply_blowout_discount(
+                preds,
+                opp_net_rating=opp_ctx.get('opp_net_rating', 0),
+                avg_min_l10=estimated_minutes,
+            )
             return pred_features, preds
 
         pred_features, predictions = await loop.run_in_executor(None, _run_prediction)

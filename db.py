@@ -725,6 +725,21 @@ def save_pick(pick_data: dict) -> int:
     conn = get_connection()
     cursor = conn.cursor()
 
+    # Prevent duplicate picks: same user + player + stat + game_date
+    user_id = pick_data.get('user_id')
+    game_date = pick_data.get('game_date')
+    if user_id and game_date:
+        cursor.execute("""
+            SELECT id FROM picks
+            WHERE user_id = %s AND player = %s AND stat = %s
+              AND game_date = %s AND (voided IS NULL OR voided = 0)
+            LIMIT 1
+        """, (user_id, pick_data.get('player'), pick_data.get('stat'), game_date))
+        existing = cursor.fetchone()
+        if existing:
+            put_connection(conn)
+            return existing['id']
+
     cursor.execute("""
         INSERT INTO picks (timestamp, player, stat, line, prediction, direction,
                           edge, confidence, opponent, is_home, model_type,
@@ -744,11 +759,11 @@ def save_pick(pick_data: dict) -> int:
         pick_data.get('opponent'),
         pick_data.get('is_home', 0),
         pick_data.get('model_type', 'unknown'),
-        pick_data.get('game_date'),
+        game_date,
         pick_data.get('player_id'),
         pick_data.get('team_abbrev'),
         pick_data.get('prob_over'),
-        pick_data.get('user_id'),
+        user_id,
         pick_data.get('headshot_url'),
     ))
 
@@ -1464,6 +1479,31 @@ def auto_grade_picks(scraper=None) -> Dict:
 
             # Get the actual stat value
             game = game_match.iloc[0]
+
+            # DNP detection: if player has a game log entry but 0 minutes,
+            # they dressed but didn't play (or BDL returned a stub row).
+            # Void instead of grading as actual=0.
+            game_min = float(game.get('MIN_NUMERIC', game.get('MIN', 0)) or 0)
+            if game_min == 0:
+                all_zeros = all(
+                    float(game.get(s, 0) or 0) == 0
+                    for s in ('PTS', 'REB', 'AST')
+                )
+                if all_zeros:
+                    void_pick(pick['id'], "DNP")
+                    results.append({
+                        'player': player_name,
+                        'stat': stat,
+                        'line': pick['line'],
+                        'prediction': pick['prediction'],
+                        'actual': None,
+                        'direction': pick['direction'],
+                        'won': None,
+                        'voided': True,
+                        'void_reason': 'DNP',
+                        'model_type': pick.get('model_type', 'unknown')
+                    })
+                    continue
 
             if stat == 'PRA':
                 actual = game['PTS'] + game['REB'] + game['AST']

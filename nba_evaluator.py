@@ -2697,10 +2697,9 @@ class MLPredictor:
                 correction = rolling_bias * 0.5  # Apply 50% of detected bias
                 pred = pred - correction
 
-            # --- Hard Deviation Cap ---
-            # Prevents runaway EMA-driven predictions when one outlier game dominates
-            # recent features (e.g., EMA_5_AST at 52%+ importance). Cap only fires
-            # when prediction is far above recent average; has zero effect on normal cases.
+            # --- Hard Deviation Cap (upside + downside) ---
+            # Prevents runaway predictions when outlier games dominate features.
+            # Caps prediction to a bounded range around the L10 average.
             if hasattr(self, 'recent_averages') and stat in self.recent_averages:
                 recent_avg = self.recent_averages[stat]
                 if recent_avg > 0:
@@ -2710,10 +2709,39 @@ class MLPredictor:
                         'PTS': 1.60,  # max 60% above
                         'PRA': 1.50,  # max 50% above
                     }
+                    stat_downside_caps = {
+                        'AST': 0.45,  # min 45% of recent L10 avg
+                        'REB': 0.45,  # min 45% of recent L10 avg
+                        'PTS': 0.50,  # min 50% of recent L10 avg
+                        'PRA': 0.50,  # min 50% of recent L10 avg
+                    }
                     upside_mult = stat_upside_caps.get(stat, 1.50)
+                    downside_mult = stat_downside_caps.get(stat, 0.50)
                     upper_cap = recent_avg * upside_mult
+                    lower_cap = recent_avg * downside_mult
                     if pred > upper_cap:
                         pred = upper_cap
+                    elif pred < lower_cap:
+                        pred = lower_cap
+
+            # --- Prediction Floor ---
+            # Prevents unreasonably low predictions (e.g., 0.2 AST) for
+            # low-volume stats. Floor = max(absolute_floor, L20_min * 0.5).
+            if hasattr(self, 'recent_averages') and stat in self.recent_averages:
+                stat_absolute_floors = {
+                    'AST': 0.5,
+                    'REB': 1.0,
+                    'PTS': 2.0,
+                    'PRA': 4.0,
+                }
+                abs_floor = stat_absolute_floors.get(stat, 0)
+                # Use L20 minimum as a secondary floor (half of worst recent game)
+                if stat in features_df.columns:
+                    l20_min = features_df[stat].tail(20).min()
+                    dynamic_floor = max(abs_floor, l20_min * 0.5)
+                else:
+                    dynamic_floor = abs_floor
+                pred = max(pred, dynamic_floor)
 
             predictions[stat] = pred
 
@@ -2759,6 +2787,51 @@ class MLPredictor:
                 result['PTS'] = result['PTS'] * (1 + pts_boost)
 
         # Reconcile PRA with adjusted components
+        if all(s in result for s in ('PTS', 'REB', 'AST')):
+            result['PRA'] = result['PTS'] + result['REB'] + result['AST']
+
+        return result
+
+    @staticmethod
+    def apply_blowout_discount(predictions, opp_net_rating=0, avg_min_l10=None):
+        """Discount star predictions when a blowout is projected.
+
+        When the opponent has a very high net rating (strong favorite),
+        the player's team is likely to trail badly, leading to garbage time
+        and reduced minutes for starters. Conversely, if the player's team
+        is the heavy favorite, their stars sit early in the 4th.
+
+        Args:
+            predictions: dict of {stat: predicted_value}
+            opp_net_rating: opponent's net rating (positive = opponent is good)
+            avg_min_l10: player's average minutes over last 10 games
+
+        Returns:
+            New predictions dict with blowout discount applied.
+        """
+        # Only apply when there's a projected blowout (|net_rating| > 8)
+        # and the player is a high-minutes starter (30+ min avg)
+        if abs(opp_net_rating) <= 8:
+            return predictions
+        if avg_min_l10 is not None and avg_min_l10 < 28:
+            return predictions
+
+        result = dict(predictions)
+
+        # Scale discount by how lopsided the matchup is
+        # net_rating 8 = 0% discount, 15+ = max 8% discount
+        blowout_severity = min(abs(opp_net_rating) - 8, 7) / 7  # 0 to 1
+        discount = blowout_severity * 0.08  # max 8% reduction
+
+        for stat in ('PTS', 'AST'):
+            if stat in result:
+                result[stat] = result[stat] * (1 - discount)
+
+        # REB less affected by blowout (garbage time rebounds still happen)
+        if 'REB' in result:
+            result['REB'] = result['REB'] * (1 - discount * 0.3)
+
+        # Reconcile PRA
         if all(s in result for s in ('PTS', 'REB', 'AST')):
             result['PRA'] = result['PTS'] + result['REB'] + result['AST']
 
