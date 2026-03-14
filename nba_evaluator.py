@@ -287,13 +287,9 @@ class NBADataScraper:
         print(f"🔍 Looking up player: {player_name}")
         try:
             bdl = get_bdl_client()
-            results = bdl.get_players(search=player_name)
-            if not results:
-                # BDL search is last-name based — retry with extracted last name
-                last_name = self._bdl_last_name(player_name)
-                if last_name.lower() != player_name.lower().strip():
-                    print(f"🔄 Retrying BDL search with last name: {last_name}")
-                    results = bdl.get_players(search=last_name)
+            # BDL search only matches last name — search by last name directly
+            last_name = self._bdl_last_name(player_name)
+            results = bdl.get_players(search=last_name)
             if not results:
                 print(f"⚠️ No BDL results for: {player_name}")
                 return None
