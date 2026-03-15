@@ -148,7 +148,10 @@ async def get_public_profile(
         if not row:
             raise HTTPException(status_code=404, detail="User not found")
 
-        profile_id, uname, avatar_url, is_public = row
+        profile_id = row["id"]
+        uname = row["username"]
+        avatar_url = row["avatar_url"]
+        is_public = row["is_public"]
 
         if not is_public:
             return PublicProfile(
@@ -177,17 +180,17 @@ async def get_public_profile(
             (str(profile_id),),
         )
         stats_row = cur.fetchone()
-        total_graded = stats_row[0] or 0
-        total_won = stats_row[1] or 0
-        win_rate = float(stats_row[2] or 0)
-        roi_units = float(stats_row[3] or 0)
+        total_graded = stats_row["total_graded"] or 0
+        total_won = stats_row["total_won"] or 0
+        win_rate = float(stats_row["win_rate"] or 0)
+        roi_units = float(stats_row["roi_units"] or 0)
 
         # Follower / following counts
-        cur.execute("SELECT COUNT(*) FROM follows WHERE followed_id = %s", (str(profile_id),))
-        followers_count = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) AS cnt FROM follows WHERE followed_id = %s", (str(profile_id),))
+        followers_count = cur.fetchone()["cnt"]
 
-        cur.execute("SELECT COUNT(*) FROM follows WHERE follower_id = %s", (str(profile_id),))
-        following_count = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) AS cnt FROM follows WHERE follower_id = %s", (str(profile_id),))
+        following_count = cur.fetchone()["cnt"]
 
         # Is the current user following this profile?
         is_following = None
@@ -236,10 +239,10 @@ async def get_public_picks(
         row = cur.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="User not found")
-        if not row[1]:
+        if not row["is_public"]:
             raise HTTPException(status_code=403, detail="This profile is private")
 
-        profile_id = row[0]
+        profile_id = row["id"]
         offset = (page - 1) * per_page
 
         cur.execute(
@@ -363,7 +366,7 @@ async def get_follows(
             """,
             (uid,),
         )
-        following = [{"id": str(r[0]), "username": r[1], "avatar_url": r[2]} for r in cur.fetchall()]
+        following = [{"id": str(r["id"]), "username": r["username"], "avatar_url": r["avatar_url"]} for r in cur.fetchall()]
 
         # Followers
         cur.execute(
@@ -375,7 +378,7 @@ async def get_follows(
             """,
             (uid,),
         )
-        followers = [{"id": str(r[0]), "username": r[1], "avatar_url": r[2]} for r in cur.fetchall()]
+        followers = [{"id": str(r["id"]), "username": r["username"], "avatar_url": r["avatar_url"]} for r in cur.fetchall()]
 
         return FollowInfo(following=following, followers=followers)
     finally:
