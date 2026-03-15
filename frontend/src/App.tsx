@@ -1,13 +1,12 @@
 import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom'
-import { Home, Gamepad2, Dice5, FlaskConical, Trophy } from 'lucide-react'
+import { Home, Gamepad2, ClipboardList, FlaskConical, Trophy } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import HomePage from './pages/HomePage'
 import LandingPage from './pages/LandingPage'
 import PlayerPage from './pages/PlayerPage'
-import HistoryPage from './pages/HistoryPage'
 import GamesPage from './pages/GamesPage'
-import ParlayPage from './pages/ParlayPage'
+import PicksPage from './pages/PicksPage'
 import ResearchPage from './pages/ResearchPage'
 import LoginPage from './pages/auth/LoginPage'
 import SignupPage from './pages/auth/SignupPage'
@@ -50,8 +49,7 @@ function AppRoutes() {
           <Route path="/research" element={<ProtectedRoute><ResearchPage /></ProtectedRoute>} />
           <Route path="/research/:playerName" element={<ProtectedRoute><ResearchPage /></ProtectedRoute>} />
           <Route path="/games" element={<ProtectedRoute><GamesPage /></ProtectedRoute>} />
-          <Route path="/history" element={<ProtectedRoute><HistoryPage /></ProtectedRoute>} />
-          <Route path="/parlay" element={<ProtectedRoute><ParlayPage /></ProtectedRoute>} />
+          <Route path="/picks" element={<ProtectedRoute><PicksPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="/leaderboard" element={<LeaderboardPage />} />
           <Route path="/users/:username" element={<PublicProfilePage />} />
@@ -98,7 +96,7 @@ function App() {
     { to: '/app', icon: Home, label: 'Home' },
     { to: '/games', icon: Gamepad2, label: 'Games' },
     { to: '/research', icon: FlaskConical, label: 'Research' },
-    { to: '/parlay', icon: Dice5, label: 'Parlays', badge: pendingPicks.length },
+    { to: '/picks', icon: ClipboardList, label: 'Picks', badge: pendingPicks.length },
     { to: '/leaderboard', icon: Trophy, label: 'Leaders' },
   ]
 

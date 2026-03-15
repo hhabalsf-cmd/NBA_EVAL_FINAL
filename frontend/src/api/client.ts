@@ -158,36 +158,6 @@ export interface Pick {
   prob_over?: number
 }
 
-export interface ParlayLegDetail {
-  id: number
-  pick_id: number
-  player: string
-  player_id?: number
-  headshot_url?: string
-  team_abbrev?: string
-  stat: string
-  line: number
-  prediction: number
-  direction: string
-  edge: number
-  prob_over?: number
-  actual_result?: number
-  won?: boolean
-  voided?: boolean
-  void_reason?: string
-  game_date?: string
-  opponent?: string
-}
-
-export interface SavedParlay {
-  id: number
-  legs_count: number
-  status: 'pending' | 'won' | 'lost' | 'voided'
-  graded_at?: string
-  created_at: string
-  legs: ParlayLegDetail[]
-}
-
 export interface PerformanceStats {
   total_picks: number
   graded_picks: number
@@ -296,68 +266,7 @@ export interface ProgressEvent {
   data?: PredictionResult
 }
 
-// === Live Parlay Status Types ===
-
-export interface LiveGameStatus {
-  home_team: string
-  visitor_team: string
-  home_score: number
-  visitor_score: number
-  status: string
-  period: number
-  time_remaining: string
-}
-
-export type LiveLegStatusValue =
-  | 'pending'
-  | 'in_progress'
-  | 'hit'
-  | 'miss'
-  | 'final_hit'
-  | 'final_miss'
-  | 'voided'
-
-export interface LiveLegStatus {
-  pick_id: number
-  player_name: string
-  player_id: number
-  headshot_url?: string
-  stat: string
-  line: number
-  direction: string
-  prediction: number
-  edge: number
-  current_value: number | null
-  leg_status: LiveLegStatusValue
-  game: LiveGameStatus | null
-}
-
-export interface LiveParlayStatus {
-  parlay_id: number
-  status: string
-  created_at: string
-  legs_count: number
-  legs: LiveLegStatus[]
-  legs_hit: number
-  legs_miss: number
-  legs_pending: number
-  legs_in_progress: number
-}
-
-export interface LiveParlaysResponse {
-  parlays: LiveParlayStatus[]
-  fetched_at: string
-  has_live_games: boolean
-  next_refresh_seconds: number
-}
-
 // API Functions
-
-export async function getLiveParlayStatus(): Promise<LiveParlaysResponse> {
-  const response = await apiFetch(`${API_BASE}/live/parlay-status`)
-  if (!response.ok) await throwResponseError(response, 'Failed to fetch live parlay status')
-  return response.json()
-}
 
 export async function getPlayerOdds(playerName: string): Promise<PlayerOdds> {
   const response = await apiFetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/odds`)
@@ -575,56 +484,6 @@ export async function gradePick(pickId: number, actualResult: number): Promise<P
 export async function deletePick(pickId: number): Promise<void> {
   const response = await apiFetch(`${API_BASE}/picks/${pickId}`, { method: 'DELETE' })
   if (!response.ok) throw new Error('Failed to delete pick')
-}
-
-export async function createParlay(pickIds: number[]): Promise<SavedParlay> {
-  const response = await apiFetch(`${API_BASE}/parlays`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pick_ids: pickIds }),
-  })
-  if (!response.ok) await throwResponseError(response, 'Failed to save parlay')
-  return response.json()
-}
-
-export async function getParlays(): Promise<SavedParlay[]> {
-  const { data, error } = await supabase
-    .from('parlays')
-    .select('*, parlay_legs(id, pick_id, picks(player, player_id, headshot_url, team_abbrev, stat, line, prediction, direction, edge, prob_over, actual_result, won, voided, void_reason, game_date, opponent))')
-    .order('created_at', { ascending: false })
-
-  if (error) throw new Error(error.message)
-  return (data ?? []).map(p => ({
-    ...p,
-    legs: (p.parlay_legs ?? []).map((leg: Record<string, unknown>) => {
-      const pick = ((leg.picks as Record<string, unknown>) ?? {})
-      return {
-        id: leg.id,
-        pick_id: leg.pick_id,
-        player: pick.player,
-        player_id: pick.player_id,
-        headshot_url: pick.headshot_url,
-        team_abbrev: pick.team_abbrev,
-        stat: pick.stat,
-        line: pick.line,
-        prediction: pick.prediction,
-        direction: pick.direction,
-        edge: pick.edge,
-        prob_over: pick.prob_over,
-        actual_result: pick.actual_result,
-        won: pick.won === 1 ? true : pick.won === 0 ? false : (pick.won ?? null),
-        voided: pick.voided === 1 ? true : false,
-        void_reason: pick.void_reason,
-        game_date: pick.game_date,
-        opponent: pick.opponent,
-      }
-    }),
-  })) as SavedParlay[]
-}
-
-export async function deleteParlay(parlayId: number): Promise<void> {
-  const response = await apiFetch(`${API_BASE}/parlays/${parlayId}`, { method: 'DELETE' })
-  if (!response.ok) throw new Error('Failed to delete parlay')
 }
 
 export async function autoGradePicks(): Promise<{ graded_count: number; parlays_graded: number; errors: string[]; results: unknown[] }> {

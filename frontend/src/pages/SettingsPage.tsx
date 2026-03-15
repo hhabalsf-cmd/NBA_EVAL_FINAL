@@ -1,6 +1,5 @@
 import { useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { User, SlidersHorizontal, Camera, History, ChevronRight, TrendingUp, Globe } from 'lucide-react'
+import { User, SlidersHorizontal, Camera, Globe } from 'lucide-react'
 import { useAuthStore } from '../store/authStore'
 import { useThemeStore } from '../store/themeStore'
 import { supabase } from '../lib/supabase'
@@ -331,31 +330,6 @@ export default function SettingsPage() {
             )}
           </div>
 
-          {/* Pick History Card */}
-          <Link
-            to="/history"
-            className="card p-5 flex items-center gap-4 group transition-all duration-150 hover:border-border-accent"
-            style={{ display: 'flex', textDecoration: 'none' }}
-          >
-            <div
-              className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors duration-150"
-              style={{ background: 'var(--accent-muted)' }}
-            >
-              <History className="w-5 h-5" style={{ color: 'var(--accent)' }} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
-                Pick History
-              </p>
-              <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                View past picks, profits, and performance trends
-              </p>
-            </div>
-            <div className="flex items-center gap-1.5 flex-shrink-0">
-              <TrendingUp className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity" style={{ color: 'var(--accent)' }} />
-              <ChevronRight className="w-4 h-4 transition-transform duration-150 group-hover:translate-x-0.5" style={{ color: 'var(--text-muted)' }} />
-            </div>
-          </Link>
         </div>
       )}
       {cropImageSrc && (

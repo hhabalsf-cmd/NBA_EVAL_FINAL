@@ -501,7 +501,7 @@ function EvalResult({
     setSaveMessage(null)
     try {
       await onSave()
-      setSaveMessage('Saved! Appears in Parlay Builder.')
+      setSaveMessage('Saved! View in Picks tab.')
       setTimeout(() => setSaveMessage(null), 4000)
     } catch {
       setSaveMessage('Failed to save pick')

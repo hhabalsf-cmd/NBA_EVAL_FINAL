@@ -190,7 +190,7 @@ export default function HomePage() {
                 </div>
               </div>
             </div>
-            <Link to="/history" className="btn btn-secondary text-sm">
+            <Link to="/picks" className="btn btn-secondary text-sm">
               View History
               <ArrowRight className="w-3.5 h-3.5" />
             </Link>
