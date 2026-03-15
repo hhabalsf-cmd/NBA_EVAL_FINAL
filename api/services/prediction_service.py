@@ -637,6 +637,15 @@ class PredictionService:
         except Exception:
             days_rest = 2  # Fallback if date parsing fails
 
+        # Check if the player themselves is DTD/questionable
+        player_injury_status = self.scraper.get_player_injury_status(
+            player_info['player_name'], injuries
+        ) if injuries else {'is_injured': False}
+        player_is_questionable = (
+            player_injury_status.get('is_injured', False)
+            and player_injury_status.get('status') in ('questionable', 'doubtful')
+        )
+
         # Offload prediction to thread pool (matrix operations)
         def _run_prediction():
             pred_features = ev.FeatureEngineer.get_prediction_features(
@@ -661,6 +670,19 @@ class PredictionService:
                 opp_net_rating=opp_ctx.get('opp_net_rating', 0),
                 avg_min_l10=estimated_minutes,
             )
+
+            # DTD / questionable self-injury dampener — player returning
+            # from injury or listed as questionable gets predictions reduced.
+            # They typically play fewer minutes or on a minutes restriction.
+            if player_is_questionable:
+                dampening = 0.88  # 12% reduction
+                preds = {
+                    stat: val * dampening for stat, val in preds.items()
+                }
+                # Reconcile PRA with dampened components
+                if all(s in preds for s in ('PTS', 'REB', 'AST')):
+                    preds['PRA'] = preds['PTS'] + preds['REB'] + preds['AST']
+
             return pred_features, preds
 
         pred_features, predictions = await loop.run_in_executor(None, _run_prediction)

@@ -2553,20 +2553,24 @@ class MLPredictor:
         return True
 
     def _update_recent_averages(self, df, stats=None):
-        """Update recent averages from latest data"""
+        """Update recent averages (L10) and full-season averages from latest data."""
         if stats is None:
             stats = ['PTS', 'REB', 'AST']
+        if not hasattr(self, 'season_averages'):
+            self.season_averages = {}
         for stat in stats + ['PRA']:
             if stat == 'PRA':
                 if all(s in df.columns for s in ['PTS', 'REB', 'AST']):
-                    recent_vals = (df['PTS'] + df['REB'] + df['AST']).tail(10)
+                    pra_series = df['PTS'] + df['REB'] + df['AST']
+                    self.recent_averages[stat] = pra_series.tail(10).mean()
+                    self.season_averages[stat] = pra_series.mean()
                 else:
                     continue
             elif stat in df.columns:
-                recent_vals = df[stat].tail(10)
+                self.recent_averages[stat] = df[stat].tail(10).mean()
+                self.season_averages[stat] = df[stat].mean()
             else:
                 continue
-            self.recent_averages[stat] = recent_vals.mean()
     
     # Per-stat bias correction weights — lower = trust the ML model more
     # Increased from original values to combat systematic over-prediction bias
@@ -2720,6 +2724,33 @@ class MLPredictor:
                     elif pred < lower_cap:
                         pred = lower_cap
 
+            # --- Season-Average Deviation Cap ---
+            # Prevents recency-biased L10 from allowing runaway predictions.
+            # If a player's L10 is inflated by a hot streak, the L10 cap
+            # is too permissive.  Anchor to full-season average as a second
+            # guardrail: max 1.35× season avg up, min 0.55× season avg down.
+            if hasattr(self, 'season_averages') and stat in self.season_averages:
+                season_avg = self.season_averages[stat]
+                if season_avg > 0:
+                    season_upside = {
+                        'AST': 1.30,
+                        'REB': 1.40,
+                        'PTS': 1.35,
+                        'PRA': 1.35,
+                    }
+                    season_downside = {
+                        'AST': 0.55,
+                        'REB': 0.55,
+                        'PTS': 0.55,
+                        'PRA': 0.55,
+                    }
+                    upper = season_avg * season_upside.get(stat, 1.35)
+                    lower = season_avg * season_downside.get(stat, 0.55)
+                    if pred > upper:
+                        pred = upper
+                    elif pred < lower:
+                        pred = lower
+
             # --- Prediction Floor ---
             # Prevents unreasonably low predictions (e.g., 0.2 AST) for
             # low-volume stats. Floor = max(absolute_floor, L20_min * 0.5).
@@ -2790,12 +2821,11 @@ class MLPredictor:
 
     @staticmethod
     def apply_blowout_discount(predictions, opp_net_rating=0, avg_min_l10=None):
-        """Discount star predictions when a blowout is projected.
+        """Discount predictions when a blowout is projected.
 
-        When the opponent has a very high net rating (strong favorite),
-        the player's team is likely to trail badly, leading to garbage time
-        and reduced minutes for starters. Conversely, if the player's team
-        is the heavy favorite, their stars sit early in the 4th.
+        Applies to all players when the matchup is lopsided.  Bench players
+        (< 28 min avg) receive a *stronger* discount because they are the
+        first to lose minutes in garbage time.
 
         Args:
             predictions: dict of {stat: predicted_value}
@@ -2806,18 +2836,19 @@ class MLPredictor:
             New predictions dict with blowout discount applied.
         """
         # Only apply when there's a projected blowout (|net_rating| > 8)
-        # and the player is a high-minutes starter (30+ min avg)
         if abs(opp_net_rating) <= 8:
-            return predictions
-        if avg_min_l10 is not None and avg_min_l10 < 28:
             return predictions
 
         result = dict(predictions)
 
         # Scale discount by how lopsided the matchup is
-        # net_rating 8 = 0% discount, 15+ = max 8% discount
+        # net_rating 8 = 0% discount, 15+ = max discount
         blowout_severity = min(abs(opp_net_rating) - 8, 7) / 7  # 0 to 1
-        discount = blowout_severity * 0.08  # max 8% reduction
+
+        # Bench players (< 28 min) get stronger discount — they sit first
+        is_bench = avg_min_l10 is not None and avg_min_l10 < 28
+        max_discount = 0.12 if is_bench else 0.08
+        discount = blowout_severity * max_discount
 
         for stat in ('PTS', 'AST'):
             if stat in result:
