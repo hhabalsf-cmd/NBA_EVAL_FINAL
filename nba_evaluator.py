@@ -39,7 +39,7 @@ from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import cross_val_score, TimeSeriesSplit
 from sklearn.metrics import mean_absolute_error, mean_squared_error
-from sklearn.linear_model import BayesianRidge
+from sklearn.linear_model import BayesianRidge, LogisticRegression
 from sklearn.isotonic import IsotonicRegression
 from sklearn.base import clone as sklearn_clone
 from scipy import stats as scipy_stats
@@ -2147,7 +2147,12 @@ class MLPredictor:
         self.residual_models[stat] = residual_model
 
     def _train_probability_calibrator(self, X, y, weights, stat, tscv):
-        """Train isotonic regression for probability calibration (Improvement #5)."""
+        """Train Platt scaling (logistic regression) for probability calibration.
+
+        Replaces isotonic regression which overfits on small per-player samples
+        (50-80 games). Platt scaling has only 2 parameters (slope + intercept),
+        making it robust against overfitting. Output clipped to [15%, 85%].
+        """
         oof_preds = np.full(len(y), np.nan)
         for train_idx, val_idx in tscv.split(X):
             fold_model = sklearn_clone(self.models[stat])
@@ -2163,29 +2168,58 @@ class MLPredictor:
         std_estimate = np.std(actuals - preds) or 1.0
 
         # Generate calibration data across hypothetical lines
-        z_scores = []
+        raw_probs = []
         outcomes = []
         for i in range(len(preds)):
-            # Test multiple line offsets around the prediction
             for offset in np.linspace(-2 * std_estimate, 2 * std_estimate, 9):
                 hypothetical_line = preds[i] + offset
                 z = (hypothetical_line - preds[i]) / (std_estimate + 0.1)
+                raw_prob = 1 - scipy_stats.norm.cdf(z)
                 went_over = 1 if actuals[i] > hypothetical_line else 0
-                z_scores.append(z)
+                raw_probs.append(raw_prob)
                 outcomes.append(went_over)
 
-        z_scores = np.array(z_scores)
+        raw_probs = np.array(raw_probs).reshape(-1, 1)
         outcomes = np.array(outcomes)
 
-        # Bin z-scores and compute actual over rates
-        calibrator = IsotonicRegression(y_min=0.02, y_max=0.98, out_of_bounds='clip')
-        # Map z-score to raw CDF-based probability, then calibrate
-        raw_prob_over = 1 - scipy_stats.norm.cdf(z_scores)
-        calibrator.fit(raw_prob_over, outcomes)
+        # Platt scaling: 2-parameter logistic regression (can't overfit)
+        platt = LogisticRegression(C=1.0, solver='lbfgs', max_iter=1000)
+        platt.fit(raw_probs, outcomes)
+
         self.probability_calibrator[stat] = {
-            'calibrator': calibrator,
+            'calibrator': platt,
             'std_estimate': std_estimate,
+            'method': 'platt',
         }
+
+        # --- CQR: compute conformity scores for quantile interval correction ---
+        q10_key, q90_key = f'{stat}_q10', f'{stat}_q90'
+        if q10_key in self.quantile_models and q90_key in self.quantile_models:
+            try:
+                q10_preds = np.full(len(y), np.nan)
+                q90_preds = np.full(len(y), np.nan)
+                for train_idx, val_idx in tscv.split(X):
+                    q10_fold = sklearn_clone(self.quantile_models[q10_key])
+                    q90_fold = sklearn_clone(self.quantile_models[q90_key])
+                    q10_fold.fit(X[train_idx], y[train_idx], sample_weight=weights[train_idx])
+                    q90_fold.fit(X[train_idx], y[train_idx], sample_weight=weights[train_idx])
+                    q10_preds[val_idx] = q10_fold.predict(X[val_idx])
+                    q90_preds[val_idx] = q90_fold.predict(X[val_idx])
+
+                cqr_mask = ~np.isnan(q10_preds) & ~np.isnan(q90_preds)
+                if cqr_mask.sum() >= 20:
+                    q10_cal = q10_preds[cqr_mask]
+                    q90_cal = q90_preds[cqr_mask]
+                    y_cal = y[cqr_mask]
+                    # Conformity score: how far outside the interval did actuals fall?
+                    conformity = np.maximum(q10_cal - y_cal, y_cal - q90_cal)
+                    # 90% quantile of conformity scores = CQR correction
+                    alpha = 0.1  # target 90% coverage
+                    q_level = min((1 - alpha) * (1 + 1 / len(conformity)), 1.0)
+                    cqr_correction = float(np.quantile(conformity, q_level))
+                    self.probability_calibrator[stat]['cqr_correction'] = max(0.0, cqr_correction)
+            except Exception:
+                pass  # CQR is optional; fall through if quantile clone fails
 
     def train(self, df, stats=None):
         """Train models for specified stats with feature selection, quantile regression,
@@ -3029,7 +3063,15 @@ class MLPredictor:
 
                 q10 = self.quantile_models[q10_key].predict(X_pred)[0]
                 q90 = self.quantile_models[q90_key].predict(X_pred)[0]
-                quantile_std = (q90 - q10) / 2.56  # Convert 80% interval to approx std
+
+                # Apply CQR correction for guaranteed coverage (Improvement #5b)
+                cqr_adj = 0.0
+                if hasattr(self, 'probability_calibrator') and stat in self.probability_calibrator:
+                    cqr_adj = self.probability_calibrator[stat].get('cqr_correction', 0.0)
+                q10_adj = q10 - cqr_adj
+                q90_adj = q90 + cqr_adj
+
+                quantile_std = (q90_adj - q10_adj) / 2.56  # Convert 80% interval to approx std
 
                 scale = self.CONFIDENCE_STD_SCALE.get(stat, 3.0)
                 cap = self.CONFIDENCE_CAPS.get(stat, 85)
@@ -3038,8 +3080,8 @@ class MLPredictor:
                 confidence = confidence * sample_penalty  # Apply sample-size discount
 
                 return {
-                    'low': round(q10, 1),
-                    'high': round(q90, 1),
+                    'low': round(q10_adj, 1),
+                    'high': round(q90_adj, 1),
                     'confidence': round(confidence, 0),
                     'std': round(quantile_std, 2),
                 }
@@ -3220,6 +3262,11 @@ class MLPredictor:
 class ProbabilityCalculator:
     """Unified probability calculation used by both LineEvaluator and EnhancedMLPredictor (Improvement #3)."""
 
+    # Probability bounds: prevents overconfident extremes that destroy Brier score.
+    # Research shows isotonic regression with y_min=0.02 overfits on small NBA samples.
+    PROB_FLOOR = 15.0
+    PROB_CEIL = 85.0
+
     @staticmethod
     def calculate(prediction, line, std, calibrator_data=None):
         """Calculate calibrated probability of going OVER the line.
@@ -3228,21 +3275,35 @@ class ProbabilityCalculator:
             prediction: Model's point prediction
             line: The betting line
             std: Standard deviation / uncertainty estimate
-            calibrator_data: Optional dict with 'calibrator' (IsotonicRegression) and 'std_estimate'
+            calibrator_data: Optional dict with 'calibrator' and 'std_estimate'.
+                             Supports both Platt scaling (method='platt') and
+                             legacy isotonic regression.
         Returns:
-            Probability of going over (0-100)
+            Probability of going over (0-100), clipped to [PROB_FLOOR, PROB_CEIL]
         """
         z = (line - prediction) / (std + 0.1)
         raw_prob_over = 1 - scipy_stats.norm.cdf(z)
 
         if calibrator_data and 'calibrator' in calibrator_data:
             try:
-                calibrated = calibrator_data['calibrator'].predict([raw_prob_over])[0]
-                return round(calibrated * 100, 1)
+                cal = calibrator_data['calibrator']
+                method = calibrator_data.get('method', 'isotonic')
+                if method == 'platt':
+                    # Platt scaling: logistic regression predict_proba
+                    calibrated = cal.predict_proba(np.array([[raw_prob_over]]))[0, 1]
+                else:
+                    # Legacy isotonic regression
+                    calibrated = cal.predict([raw_prob_over])[0]
+                prob = round(calibrated * 100, 1)
+                return max(ProbabilityCalculator.PROB_FLOOR,
+                           min(ProbabilityCalculator.PROB_CEIL, prob))
             except Exception:
                 pass
 
-        return round(raw_prob_over * 100, 1)
+        # Raw CDF fallback — still clip to safe bounds
+        prob = round(raw_prob_over * 100, 1)
+        return max(ProbabilityCalculator.PROB_FLOOR,
+                   min(ProbabilityCalculator.PROB_CEIL, prob))
 
 
 class LineEvaluator:
