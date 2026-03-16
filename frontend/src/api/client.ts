@@ -177,6 +177,43 @@ export interface CumulativeProfitPoint {
   cumulative_profit: number
 }
 
+export interface CalibrationBucket {
+  bucket: string
+  predicted: number
+  actual: number
+  count: number
+}
+
+export interface BrierDecomposition {
+  reliability: number
+  resolution: number
+  uncertainty: number
+}
+
+export interface StatBrier {
+  brier_score: number
+  skill_score: number
+  sample_size: number
+  win_rate: number
+}
+
+export interface CLVStats {
+  avg_clv: number
+  positive_clv_rate: number
+  sample_size: number
+}
+
+export interface CalibrationStats {
+  brier_score: number | null
+  brier_skill_score: number | null
+  calibration_curve: CalibrationBucket[]
+  by_stat: Record<string, StatBrier>
+  by_confidence: Record<string, { brier_score: number; sample_size: number; avg_pred_prob: number; actual_win_rate: number }>
+  decomposition: BrierDecomposition | null
+  clv: CLVStats | null
+  sample_size: number
+}
+
 export interface BestBet {
   player: string
   player_id?: number
@@ -515,6 +552,12 @@ function emptyPerformanceStats(): PerformanceStats {
     total_picks: 0, graded_picks: 0, wins: 0, losses: 0, pushes: 0,
     win_rate: 0, roi: 0, avg_edge_winners: 0, by_stat: {}, by_edge_range: {},
   }
+}
+
+export async function getCalibrationStats(): Promise<CalibrationStats> {
+  const response = await apiFetch(`${API_BASE}/picks/stats/calibration`)
+  if (!response.ok) return { brier_score: null, brier_skill_score: null, calibration_curve: [], by_stat: {}, by_confidence: {}, decomposition: null, clv: null, sample_size: 0 }
+  return response.json()
 }
 
 export async function getCumulativeProfit(): Promise<CumulativeProfitPoint[]> {

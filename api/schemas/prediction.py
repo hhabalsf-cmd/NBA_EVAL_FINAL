@@ -136,6 +136,8 @@ class PickCreate(BaseModel):
     model_type: str = Field(default="unknown", max_length=50)
     game_date: Optional[str] = Field(None, max_length=20)
     prob_over: Optional[float] = Field(None, ge=0, le=100)
+    opening_line: Optional[float] = Field(None, ge=0, le=200, description="Line at time of pick (defaults to line)")
+    closing_line: Optional[float] = Field(None, ge=0, le=200, description="Line at game start")
 
 
 class PickResponse(BaseModel):
@@ -160,6 +162,8 @@ class PickResponse(BaseModel):
     voided: Optional[bool] = None
     void_reason: Optional[str] = None
     prob_over: Optional[float] = None
+    opening_line: Optional[float] = None
+    closing_line: Optional[float] = None
 
 
 class PickGradeRequest(BaseModel):
@@ -195,6 +199,52 @@ class CumulativeProfitPoint(BaseModel):
     date: str
     profit: float
     cumulative_profit: float
+
+
+# === Calibration / Brier Score Schemas ===
+
+class CalibrationBucket(BaseModel):
+    bucket: str           # e.g. "60-65%"
+    predicted: float      # avg predicted probability in bucket (0-100)
+    actual: float         # actual win rate in bucket (0-100)
+    count: int            # number of picks in bucket
+
+
+class BrierDecomposition(BaseModel):
+    reliability: float    # calibration error (lower = better)
+    resolution: float     # discrimination power (higher = better)
+    uncertainty: float    # irreducible (base rate variance)
+
+
+class StatBrier(BaseModel):
+    brier_score: float
+    skill_score: float
+    sample_size: int
+    win_rate: float
+
+
+class ConfidenceBucketBrier(BaseModel):
+    brier_score: float
+    sample_size: int
+    avg_pred_prob: float
+    actual_win_rate: float
+
+
+class CLVStats(BaseModel):
+    avg_clv: float              # average closing line value (positive = beating the market)
+    positive_clv_rate: float    # % of picks with positive CLV
+    sample_size: int
+
+
+class CalibrationStats(BaseModel):
+    brier_score: Optional[float] = None
+    brier_skill_score: Optional[float] = None
+    calibration_curve: List[CalibrationBucket] = []
+    by_stat: Dict[str, StatBrier] = {}
+    by_confidence: Dict[str, ConfidenceBucketBrier] = {}
+    decomposition: Optional[BrierDecomposition] = None
+    clv: Optional[CLVStats] = None
+    sample_size: int = 0
 
 
 # === Best Bets Schemas ===

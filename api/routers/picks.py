@@ -16,6 +16,7 @@ from ..schemas.prediction import (
     PickGradeRequest,
     PerformanceStats,
     CumulativeProfitPoint,
+    CalibrationStats,
 )
 from ..routers.auth import get_current_user, verify_service_key
 
@@ -46,6 +47,8 @@ def _pick_to_response(p: dict) -> PickResponse:
         voided=bool(p.get('voided')) if p.get('voided') is not None else None,
         void_reason=p.get('void_reason'),
         prob_over=p.get('prob_over'),
+        opening_line=p.get('opening_line'),
+        closing_line=p.get('closing_line'),
     )
 
 
@@ -89,6 +92,8 @@ async def create_pick(request: Request, pick: PickCreate, current_user: dict = D
         'game_date': pick.game_date,
         'prob_over': pick.prob_over,
         'user_id': current_user["id"],
+        'opening_line': pick.opening_line,
+        'closing_line': pick.closing_line,
     }
 
     pick_id = db.save_pick(pick_data)
@@ -191,6 +196,14 @@ async def get_performance_stats(request: Request, current_user: dict = Depends(g
         by_stat=stats['by_stat'],
         by_edge_range=stats['by_edge_range']
     )
+
+
+@router.get("/stats/calibration", response_model=CalibrationStats)
+@limiter.limit("30/minute")
+async def get_calibration_stats(request: Request, current_user: dict = Depends(get_current_user)):
+    """Get Brier score, calibration curve, and decomposition for model evaluation."""
+    stats = db.get_calibration_stats(user_id=current_user["id"])
+    return CalibrationStats(**stats)
 
 
 @router.get("/stats/profit", response_model=List[CumulativeProfitPoint])

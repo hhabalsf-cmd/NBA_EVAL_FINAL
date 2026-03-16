@@ -11,6 +11,7 @@ import {
   getPicks,
   getPerformanceStats,
   getCumulativeProfit,
+  getCalibrationStats,
   gradePick,
   deletePick,
   Pick,
@@ -18,7 +19,8 @@ import {
 import { getHeadshotUrl, getNbaHeadshotUrl } from '../utils/nba'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Legend,
+  ResponsiveContainer, Legend, ReferenceLine,
+  ScatterChart, Scatter, ZAxis,
 } from 'recharts'
 
 /* ── Pending tab helpers ─────────────────────────────────────────────── */
@@ -123,6 +125,13 @@ export default function PicksPage() {
     enabled: isAuthenticated && activeTab === 'history',
   })
 
+  const { data: calibration } = useQuery({
+    queryKey: ['calibration-stats'],
+    queryFn: getCalibrationStats,
+    enabled: isAuthenticated && activeTab === 'history',
+    staleTime: 1000 * 60 * 5,
+  })
+
   /* ── Pending derived ── */
   const sortedPending = useMemo(
     () => sortPicks(pendingPicks, sortField, sortDir),
@@ -189,6 +198,7 @@ export default function PicksPage() {
       queryClient.invalidateQueries({ queryKey: ['pending-picks'] })
       queryClient.invalidateQueries({ queryKey: ['performance-stats'] })
       queryClient.invalidateQueries({ queryKey: ['cumulative-profit'] })
+      queryClient.invalidateQueries({ queryKey: ['calibration-stats'] })
     },
   })
 
@@ -497,6 +507,178 @@ export default function PicksPage() {
                   </LineChart>
                 </ResponsiveContainer>
               </div>
+            </section>
+          )}
+
+          {/* Model Calibration */}
+          {calibration && calibration.sample_size > 0 && (
+            <section className="space-y-3">
+              <h2 className="text-base font-semibold text-text-primary tracking-tight">Model Calibration</h2>
+
+              {/* Brier Score Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="card p-4 text-center">
+                  <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Brier Score</div>
+                  <div className={`font-mono text-lg font-semibold ${
+                    (calibration.brier_score ?? 1) < 0.22 ? 'text-accent-success' : (calibration.brier_score ?? 1) < 0.25 ? 'text-accent' : 'text-accent-danger'
+                  }`}>
+                    {calibration.brier_score?.toFixed(4) ?? '-'}
+                  </div>
+                  <div className="text-[10px] text-text-muted mt-0.5">lower = better</div>
+                </div>
+                <div className="card p-4 text-center">
+                  <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Skill Score</div>
+                  <div className={`font-mono text-lg font-semibold ${
+                    (calibration.brier_skill_score ?? 0) > 0.05 ? 'text-accent-success' : (calibration.brier_skill_score ?? 0) > 0 ? 'text-accent' : 'text-accent-danger'
+                  }`}>
+                    {calibration.brier_skill_score != null ? (calibration.brier_skill_score > 0 ? '+' : '') + calibration.brier_skill_score.toFixed(4) : '-'}
+                  </div>
+                  <div className="text-[10px] text-text-muted mt-0.5">vs always guessing base rate</div>
+                </div>
+                {calibration.decomposition && (
+                  <>
+                    <div className="card p-4 text-center">
+                      <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Reliability</div>
+                      <div className={`font-mono text-lg font-semibold ${
+                        calibration.decomposition.reliability < 0.02 ? 'text-accent-success' : calibration.decomposition.reliability < 0.05 ? 'text-accent' : 'text-accent-danger'
+                      }`}>
+                        {calibration.decomposition.reliability.toFixed(4)}
+                      </div>
+                      <div className="text-[10px] text-text-muted mt-0.5">calibration error (lower = better)</div>
+                    </div>
+                    <div className="card p-4 text-center">
+                      <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Resolution</div>
+                      <div className={`font-mono text-lg font-semibold ${
+                        calibration.decomposition.resolution > 0.05 ? 'text-accent-success' : calibration.decomposition.resolution > 0.02 ? 'text-accent' : 'text-text-secondary'
+                      }`}>
+                        {calibration.decomposition.resolution.toFixed(4)}
+                      </div>
+                      <div className="text-[10px] text-text-muted mt-0.5">discrimination (higher = better)</div>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Calibration Curve */}
+              {calibration.calibration_curve.length > 0 && (
+                <div className="card p-4 sm:p-6">
+                  <h3 className="text-sm font-semibold text-text-primary mb-1 tracking-tight">Reliability Diagram</h3>
+                  <p className="text-[11px] text-text-muted mb-4">Perfect calibration follows the diagonal. Below = overconfident, above = underconfident.</p>
+                  <div className="h-52 sm:h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ScatterChart margin={{ top: 5, right: 10, bottom: 20, left: 10 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
+                        <XAxis
+                          dataKey="predicted"
+                          name="Predicted"
+                          type="number"
+                          domain={[45, 95]}
+                          stroke="var(--text-muted)"
+                          fontSize={11}
+                          label={{ value: 'Predicted Win %', position: 'insideBottom', offset: -12, style: { fontSize: 10, fill: 'var(--text-muted)' } }}
+                        />
+                        <YAxis
+                          dataKey="actual"
+                          name="Actual"
+                          type="number"
+                          domain={[0, 100]}
+                          stroke="var(--text-muted)"
+                          fontSize={11}
+                          label={{ value: 'Actual Win %', angle: -90, position: 'insideLeft', offset: 10, style: { fontSize: 10, fill: 'var(--text-muted)' } }}
+                        />
+                        <ZAxis dataKey="count" range={[40, 200]} name="Picks" />
+                        <Tooltip
+                          contentStyle={{
+                            background: 'var(--bg-elevated)',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: '8px',
+                            fontSize: '12px',
+                          }}
+                          formatter={(value: number, name: string) => {
+                            if (name === 'Predicted') return [`${value.toFixed(1)}%`, 'Predicted']
+                            if (name === 'Actual') return [`${value.toFixed(1)}%`, 'Actual']
+                            return [value, name]
+                          }}
+                        />
+                        <ReferenceLine
+                          segment={[{ x: 45, y: 45 }, { x: 95, y: 95 }]}
+                          stroke="var(--text-muted)"
+                          strokeDasharray="5 5"
+                          strokeWidth={1}
+                        />
+                        <Scatter
+                          data={calibration.calibration_curve}
+                          fill="var(--accent)"
+                          stroke="var(--accent)"
+                          strokeWidth={1}
+                        />
+                      </ScatterChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+
+              {/* Per-Stat Brier Scores */}
+              {Object.keys(calibration.by_stat).length > 0 && (
+                <div className="card p-4 sm:p-6">
+                  <h3 className="text-sm font-semibold text-text-primary mb-4 tracking-tight">Brier Score by Stat</h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-5">
+                    {['PTS', 'REB', 'AST', 'PRA'].map(stat => {
+                      const data = calibration.by_stat[stat]
+                      if (!data) return null
+                      return (
+                        <div key={stat} className="text-center">
+                          <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1.5">{stat}</div>
+                          <div className={`font-mono text-xl font-bold ${
+                            data.brier_score < 0.22 ? 'text-accent-success' : data.brier_score < 0.25 ? 'text-accent' : 'text-accent-danger'
+                          }`}>
+                            {data.brier_score.toFixed(3)}
+                          </div>
+                          <div className="text-[10px] text-text-muted mt-0.5">
+                            Skill: {data.skill_score > 0 ? '+' : ''}{data.skill_score.toFixed(3)}
+                          </div>
+                          <div className="text-xs text-text-secondary mt-0.5">n={data.sample_size}</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* CLV Section (when data available) */}
+              {calibration.clv && (
+                <div className="card p-4 sm:p-6">
+                  <h3 className="text-sm font-semibold text-text-primary mb-4 tracking-tight">Closing Line Value</h3>
+                  <div className="grid grid-cols-3 gap-5">
+                    <div className="text-center">
+                      <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Avg CLV</div>
+                      <div className={`font-mono text-xl font-bold ${
+                        calibration.clv.avg_clv > 0 ? 'text-accent-success' : 'text-accent-danger'
+                      }`}>
+                        {calibration.clv.avg_clv > 0 ? '+' : ''}{calibration.clv.avg_clv.toFixed(2)}
+                      </div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">+CLV Rate</div>
+                      <div className={`font-mono text-xl font-bold ${
+                        calibration.clv.positive_clv_rate > 50 ? 'text-accent-success' : 'text-accent-danger'
+                      }`}>
+                        {calibration.clv.positive_clv_rate.toFixed(1)}%
+                      </div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-[11px] text-text-muted uppercase tracking-wider mb-1">Sample</div>
+                      <div className="font-mono text-xl font-bold text-text-primary">
+                        {calibration.clv.sample_size}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <p className="text-[10px] text-text-muted text-center">
+                Based on {calibration.sample_size} graded picks with probability data
+              </p>
             </section>
           )}
 

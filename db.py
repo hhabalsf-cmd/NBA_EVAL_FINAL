@@ -125,13 +125,15 @@ def get_game_logs_from_supabase(player_id: str, season: str):
     or None if no rows exist. Column names match NBA API format.
     """
     conn = get_connection()
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT * FROM player_game_logs WHERE player_id = %s AND season = %s",
-            (player_id, season),
-        )
-        rows = cur.fetchall()
-    put_connection(conn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM player_game_logs WHERE player_id = %s AND season = %s",
+                (player_id, season),
+            )
+            rows = cur.fetchall()
+    finally:
+        put_connection(conn)
 
     if not rows:
         return None
@@ -182,10 +184,12 @@ def insert_game_logs_to_supabase(df: pd.DataFrame, player_id: str, season: str) 
     rows = [tuple(row[c] for c in cols_present) for _, row in db_df.iterrows()]
 
     conn = get_connection()
-    with conn.cursor() as cur:
-        cur.executemany(insert_sql, rows)
-    conn.commit()
-    put_connection(conn)
+    try:
+        with conn.cursor() as cur:
+            cur.executemany(insert_sql, rows)
+        conn.commit()
+    finally:
+        put_connection(conn)
 
 
 # ── Team defensive stats cache (Supabase) ────────────────────
@@ -740,12 +744,16 @@ def save_pick(pick_data: dict) -> int:
             put_connection(conn)
             return existing['id']
 
+    # opening_line defaults to line if not explicitly provided
+    opening_line = pick_data.get('opening_line') or pick_data.get('line')
+    closing_line = pick_data.get('closing_line')
+
     cursor.execute("""
         INSERT INTO picks (timestamp, player, stat, line, prediction, direction,
                           edge, confidence, opponent, is_home, model_type,
                           game_date, player_id, team_abbrev, prob_over, user_id,
-                          headshot_url)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                          headshot_url, opening_line, closing_line)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
     """, (
         datetime.now().isoformat(),
@@ -765,6 +773,8 @@ def save_pick(pick_data: dict) -> int:
         pick_data.get('prob_over'),
         user_id,
         pick_data.get('headshot_url'),
+        opening_line,
+        closing_line,
     ))
 
     pick_id = cursor.fetchone()['id']
@@ -1122,6 +1132,201 @@ def get_performance_stats(user_id: str = None) -> dict:
         'avg_edge_winners': float(row['avg_edge_winners'] or 0.0),
         'by_stat': by_stat,
         'by_edge_range': by_edge_range,
+    }
+
+
+def get_calibration_stats(user_id: str = None) -> dict:
+    """
+    Compute Brier score, calibration curve, and decomposition for graded picks.
+
+    Uses prob_over to derive the predicted probability for the chosen direction,
+    then compares against the binary outcome (won=1 / lost=0).
+
+    Returns:
+        Dict with: brier_score, brier_skill_score, calibration_curve (list of
+        bucket dicts), by_stat (per-stat Brier), decomposition (reliability,
+        resolution, uncertainty), sample_size
+    """
+    uid_filter = "AND user_id = %s" if user_id else ""
+    params = (user_id,) if user_id else ()
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            SELECT prob_over, won, direction, stat, confidence,
+                   opening_line, closing_line, line
+            FROM picks
+            WHERE won IS NOT NULL
+              AND prob_over IS NOT NULL
+              AND (voided IS NULL OR voided = 0)
+              {uid_filter}
+            ORDER BY timestamp ASC
+        """, params)
+        rows = cursor.fetchall()
+    finally:
+        put_connection(conn)
+
+    if not rows:
+        return {
+            'brier_score': None,
+            'brier_skill_score': None,
+            'calibration_curve': [],
+            'by_stat': {},
+            'by_confidence': {},
+            'decomposition': None,
+            'clv': None,
+            'sample_size': 0,
+        }
+
+    # --- Build parallel lists of (predicted_prob, outcome) ---
+    probs = []
+    outcomes = []
+    stat_groups: Dict[str, list] = {}
+    conf_groups: Dict[str, list] = {}
+
+    for row in rows:
+        prob_over = row['prob_over'] / 100.0  # Convert 0-100 → 0-1
+        outcome = int(row['won'])
+        direction = row['direction']
+
+        # Predicted probability for the chosen direction
+        if direction == 'OVER':
+            pred_prob = prob_over
+        else:
+            pred_prob = 1.0 - prob_over
+
+        probs.append(pred_prob)
+        outcomes.append(outcome)
+
+        # Group by stat
+        stat = row['stat']
+        stat_groups.setdefault(stat, []).append((pred_prob, outcome))
+
+        # Group by confidence bucket
+        conf = row['confidence'] or 0
+        if conf >= 80:
+            bucket = '80%+'
+        elif conf >= 70:
+            bucket = '70-80%'
+        elif conf >= 60:
+            bucket = '60-70%'
+        else:
+            bucket = '<60%'
+        conf_groups.setdefault(bucket, []).append((pred_prob, outcome))
+
+    n = len(probs)
+
+    # --- Overall Brier score ---
+    brier_sum = sum((p - o) ** 2 for p, o in zip(probs, outcomes))
+    brier_score = brier_sum / n
+
+    # --- Brier skill score (vs always predicting base rate) ---
+    base_rate = sum(outcomes) / n
+    brier_ref = base_rate * (1 - base_rate)  # climatology Brier
+    brier_skill = 1 - (brier_score / brier_ref) if brier_ref > 0 else 0.0
+
+    # --- Calibration curve (10 buckets from 0.45 to 0.95) ---
+    bucket_edges = [0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 1.01]
+    calibration_curve = []
+
+    for i in range(len(bucket_edges) - 1):
+        lo, hi = bucket_edges[i], bucket_edges[i + 1]
+        bucket_probs = [(p, o) for p, o in zip(probs, outcomes) if lo <= p < hi]
+        if bucket_probs:
+            avg_pred = sum(p for p, _ in bucket_probs) / len(bucket_probs)
+            avg_actual = sum(o for _, o in bucket_probs) / len(bucket_probs)
+            calibration_curve.append({
+                'bucket': f"{int(lo * 100)}-{int(hi * 100)}%",
+                'predicted': round(avg_pred * 100, 1),
+                'actual': round(avg_actual * 100, 1),
+                'count': len(bucket_probs),
+            })
+
+    # --- Brier decomposition: reliability, resolution, uncertainty ---
+    overall_rate = base_rate
+    uncertainty = overall_rate * (1 - overall_rate)
+
+    reliability = 0.0
+    resolution = 0.0
+    for bucket in calibration_curve:
+        nk = bucket['count']
+        fk = bucket['predicted'] / 100.0
+        ok = bucket['actual'] / 100.0
+        reliability += nk * (fk - ok) ** 2
+        resolution += nk * (ok - overall_rate) ** 2
+
+    reliability /= n
+    resolution /= n
+
+    # --- Per-stat Brier scores ---
+    by_stat = {}
+    for stat, pairs in stat_groups.items():
+        stat_brier = sum((p - o) ** 2 for p, o in pairs) / len(pairs)
+        stat_base_rate = sum(o for _, o in pairs) / len(pairs)
+        stat_ref = stat_base_rate * (1 - stat_base_rate) if stat_base_rate > 0 else 0
+        by_stat[stat] = {
+            'brier_score': round(stat_brier, 4),
+            'skill_score': round(1 - (stat_brier / stat_ref), 4) if stat_ref > 0 else 0.0,
+            'sample_size': len(pairs),
+            'win_rate': round(sum(o for _, o in pairs) / len(pairs) * 100, 1),
+        }
+
+    # --- By confidence bucket ---
+    by_confidence = {}
+    for bucket_label, pairs in conf_groups.items():
+        bucket_brier = sum((p - o) ** 2 for p, o in pairs) / len(pairs)
+        by_confidence[bucket_label] = {
+            'brier_score': round(bucket_brier, 4),
+            'sample_size': len(pairs),
+            'avg_pred_prob': round(sum(p for p, _ in pairs) / len(pairs) * 100, 1),
+            'actual_win_rate': round(sum(o for _, o in pairs) / len(pairs) * 100, 1),
+        }
+
+    # --- CLV (Closing Line Value) ---
+    clv_data = None
+    clv_picks = [
+        r for r in rows
+        if r.get('closing_line') is not None and r.get('opening_line') is not None
+    ]
+    if clv_picks:
+        clv_values = []
+        positive_clv_count = 0
+        for r in clv_picks:
+            opening = r['opening_line']
+            closing = r['closing_line']
+            direction = r['direction']
+            # CLV: did the closing line move in our favor?
+            # OVER: positive CLV if closing > opening (line moved up, we got the lower number)
+            # UNDER: positive CLV if closing < opening (line moved down, we got the higher number)
+            if direction == 'OVER':
+                clv = closing - opening
+            else:
+                clv = opening - closing
+            clv_values.append(clv)
+            if clv > 0:
+                positive_clv_count += 1
+
+        avg_clv = sum(clv_values) / len(clv_values)
+        clv_data = {
+            'avg_clv': round(avg_clv, 2),
+            'positive_clv_rate': round(positive_clv_count / len(clv_values) * 100, 1),
+            'sample_size': len(clv_values),
+        }
+
+    return {
+        'brier_score': round(brier_score, 4),
+        'brier_skill_score': round(brier_skill, 4),
+        'calibration_curve': calibration_curve,
+        'by_stat': by_stat,
+        'by_confidence': by_confidence,
+        'decomposition': {
+            'reliability': round(reliability, 4),
+            'resolution': round(resolution, 4),
+            'uncertainty': round(uncertainty, 4),
+        },
+        'clv': clv_data,
+        'sample_size': n,
     }
 
 
