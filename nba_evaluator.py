@@ -284,6 +284,12 @@ class NBADataScraper:
         the full name string (in case BDL ever supports it), then fall back to
         last-name extraction so "Jaylen Brown" → search "Brown".
         """
+        # Check cache first (24h TTL)
+        cached = CacheManager.get('player_info', player_name.lower().strip(), expiry_type='player_info')
+        if cached is not None:
+            print(f"📋 Player info cached: {player_name}")
+            return cached
+
         print(f"🔍 Looking up player: {player_name}")
         try:
             bdl = get_bdl_client()
@@ -336,7 +342,7 @@ class NBADataScraper:
             # Fallback to BDL id if no nba.com mapping exists (new players)
             player_id = nba_id if nba_id is not None else bdl_id
 
-            return {
+            result = {
                 'player_id': player_id,
                 'player_name': full_name,
                 'team_id': bdl_team_id,
@@ -344,10 +350,12 @@ class NBADataScraper:
                 'team_name': team_name,
                 'position': position,
             }
+            CacheManager.set('player_info', result, player_name.lower().strip())
+            return result
         except Exception as e:
             print(f"⚠️ Error getting player info: {e}")
             return None
-    
+
     def get_todays_games(self):
         """Get today's NBA games via BallDontLie API (FREE tier)."""
         print("📅 Fetching today's schedule...")
@@ -399,11 +407,19 @@ class NBADataScraper:
         Uses a single date-range query covering today through today+7 days,
         filtered by the player's BDL team ID.
         """
+        team_abbrev = player_info.get('team_abbrev', '')
+        if not team_abbrev:
+            return None
+
+        # Check cache first (1h TTL via 'schedule')
+        today_str = datetime.now(ZoneInfo("America/New_York")).date().strftime('%Y-%m-%d')
+        cached = CacheManager.get('next_game', team_abbrev, today_str, expiry_type='schedule')
+        if cached is not None:
+            print(f"📋 Next game cached: {player_info['player_name']}")
+            return cached
+
         print(f"📆 Finding next game for {player_info['player_name']}...")
         try:
-            team_abbrev = player_info.get('team_abbrev', '')
-            if not team_abbrev:
-                return None
 
             team_mapper = get_team_mapper()
             bdl_team_id = team_mapper.abbrev_to_bdl_id(team_abbrev)
@@ -411,7 +427,6 @@ class NBADataScraper:
                 print(f"⚠️ No BDL team ID for abbreviation: {team_abbrev}")
                 return None
 
-            from zoneinfo import ZoneInfo
             today = datetime.now(ZoneInfo("America/New_York")).date()
             end_date = today + timedelta(days=7)
             start_str = today.strftime('%Y-%m-%d')
@@ -458,19 +473,21 @@ class NBADataScraper:
                 game_date_raw = g.get('date') or ''
                 game_date_str = game_date_raw[:10] if game_date_raw else start_str
 
-                return {
+                result = {
                     'matchup': matchup,
                     'game_date': pd.to_datetime(game_date_str),
                     'is_home': is_home,
                     'opponent': opp_abbrev,
                     'opponent_name': TEAM_ABBREV_TO_NAME.get(opp_abbrev, opp_abbrev),
                 }
+                CacheManager.set('next_game', result, team_abbrev, today_str)
+                return result
 
             return None
         except Exception as e:
             print(f"⚠️ Error finding next game: {e}")
             return None
-    
+
     def get_player_game_log(self, player_id, seasons=None):
         """Get player's game log for specified seasons via BallDontLie API (ALL-STAR tier).
 
