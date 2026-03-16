@@ -324,6 +324,8 @@ class PredictionService:
                     })
                     seen_normalized.add(norm)
             logger.info("nba_api augmented %d additional players", len(player_list) - before)
+        except ImportError:
+            logger.debug("nba_api not installed — using BDL player list only")
         except Exception as exc:
             logger.warning("Failed to inject nba_api players: %s", exc)
         return player_list

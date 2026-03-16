@@ -65,13 +65,15 @@ async def lifespan(app: FastAPI):
         from nba_evaluator import MODEL_DIR
         game_model_path = MODEL_DIR / "games" / "game_predictor.pkl"
         if not game_model_path.exists():
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
+            ok = await asyncio.get_event_loop().run_in_executor(
                 None, model_storage.download_game_model, game_model_path
             )
-            _logger.info("Game model pre-downloaded from Supabase")
+            if ok:
+                _logger.info("Game model pre-downloaded from Supabase")
+            else:
+                _logger.info("Game model not in Supabase — will train on first prediction request")
     except Exception as exc:
-        _logger.warning("Game model pre-download failed (non-fatal): %s", exc)
+        _logger.info("Game model not available yet — will train on first use")
 
     yield
 

@@ -107,5 +107,10 @@ def _download_file(storage_key: str, local_path: Path, label: str) -> bool:
         _logger.info("Downloaded %s from Supabase (%d bytes)", label, len(data))
         return True
     except Exception as exc:
-        _logger.warning("Failed to download %s from Supabase: %s", label, exc)
+        # 404 = model doesn't exist yet (expected after fresh deploy or bucket clear)
+        exc_str = str(exc)
+        if 'not_found' in exc_str or '404' in exc_str:
+            _logger.debug("Model %s not found in Supabase (will train on demand)", label)
+        else:
+            _logger.warning("Failed to download %s from Supabase: %s", label, exc)
         return False
