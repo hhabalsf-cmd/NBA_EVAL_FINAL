@@ -86,7 +86,7 @@ class BDLClient:
                 time.sleep(delay)
 
             try:
-                resp = self._session.request(method, url, params=params, timeout=30)
+                resp = self._session.request(method, url, params=params, timeout=45)
             except requests.RequestException as exc:
                 last_exc = exc
                 logger.warning("BDL request error (attempt %d): %s", attempt, exc)
