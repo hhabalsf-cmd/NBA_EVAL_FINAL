@@ -2700,12 +2700,13 @@ class MLPredictor:
             # --- Hard Deviation Cap (upside + downside) ---
             # Prevents runaway predictions when outlier games dominate features.
             # Caps prediction to a bounded range around the L10 average.
+            # REB caps are position-aware: guards rarely spike rebounds,
+            # so use L10 REB avg as position proxy (<5 = guard, 5-8 = forward, >8 = center).
             if hasattr(self, 'recent_averages') and stat in self.recent_averages:
                 recent_avg = self.recent_averages[stat]
                 if recent_avg > 0:
                     stat_upside_caps = {
                         'AST': 1.40,  # max 40% above recent L10 avg
-                        'REB': 1.55,  # max 55% above
                         'PTS': 1.60,  # max 60% above
                         'PRA': 1.50,  # max 50% above
                     }
@@ -2715,6 +2716,20 @@ class MLPredictor:
                         'PTS': 0.50,  # min 50% of recent L10 avg
                         'PRA': 0.50,  # min 50% of recent L10 avg
                     }
+
+                    # Position-aware REB upside caps using L10 REB avg as proxy
+                    if stat == 'REB':
+                        reb_avg = self.recent_averages.get('REB', 5.0)
+                        if reb_avg < 5:        # Guard: rarely spikes rebounds
+                            reb_upside = 1.25
+                        elif reb_avg < 8:      # Forward: moderate upside
+                            reb_upside = 1.40
+                        else:                  # Center: can legitimately spike
+                            reb_upside = 1.55
+                        stat_upside_caps['REB'] = reb_upside
+                    else:
+                        stat_upside_caps.setdefault('REB', 1.55)
+
                     upside_mult = stat_upside_caps.get(stat, 1.50)
                     downside_mult = stat_downside_caps.get(stat, 0.50)
                     upper_cap = recent_avg * upside_mult
@@ -2732,9 +2747,21 @@ class MLPredictor:
             if hasattr(self, 'season_averages') and stat in self.season_averages:
                 season_avg = self.season_averages[stat]
                 if season_avg > 0:
+                    # Position-aware season REB cap (mirrors L10 cap logic)
+                    if stat == 'REB' and hasattr(self, 'recent_averages'):
+                        reb_avg = self.recent_averages.get('REB', 5.0)
+                        if reb_avg < 5:
+                            reb_season_upside = 1.20
+                        elif reb_avg < 8:
+                            reb_season_upside = 1.30
+                        else:
+                            reb_season_upside = 1.40
+                    else:
+                        reb_season_upside = 1.40
+
                     season_upside = {
                         'AST': 1.30,
-                        'REB': 1.40,
+                        'REB': reb_season_upside,
                         'PTS': 1.35,
                         'PRA': 1.35,
                     }
@@ -2854,9 +2881,18 @@ class MLPredictor:
             if stat in result:
                 result[stat] = result[stat] * (1 - discount)
 
-        # REB less affected by blowout (garbage time rebounds still happen)
+        # REB discount is position-aware: guards/wings lose rebounds in
+        # blowouts (bigs dominate garbage time boards, starters sit early).
+        # Use predicted REB value as position proxy.
         if 'REB' in result:
-            result['REB'] = result['REB'] * (1 - discount * 0.3)
+            reb_val = result['REB']
+            if reb_val < 5:        # Guard/wing: rebounds dry up in blowouts
+                reb_discount_factor = 0.7
+            elif reb_val < 8:      # Forward: moderate impact
+                reb_discount_factor = 0.5
+            else:                  # Center: still grabs boards in garbage time
+                reb_discount_factor = 0.3
+            result['REB'] = result['REB'] * (1 - discount * reb_discount_factor)
 
         # Reconcile PRA
         if all(s in result for s in ('PTS', 'REB', 'AST')):

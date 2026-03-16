@@ -81,8 +81,8 @@ def _get_best_headshot_url(player_name: str) -> Optional[str]:
     return _get_nba_headshot_url(player_name)
 
 # ── Configuration ───────────────────────────────────────────────
-MIN_EDGE_PCT = 20.0          # Minimum absolute edge to include
-MAX_EDGE_PCT = 46.0          # Maximum absolute edge to include
+MIN_EDGE_PCT = 10.0          # Minimum absolute edge to include
+MAX_EDGE_PCT = 30.0          # Maximum absolute edge — edges >30% hit poorly historically
 MIN_CONFIDENCE = 60.0        # Minimum model confidence
 MAX_PICKS = 10               # Cap on total picks returned
 MIN_MINUTES_AVG = 20.0       # Minimum average minutes to evaluate
@@ -578,6 +578,27 @@ def generate_daily_picks() -> list[dict]:
         try:
             predictions = predictor.predict(features_df, estimated_minutes=estimated_minutes)
             predictions = predictor.apply_injury_boost(predictions, injuries_team, injuries_opp)
+            predictions = predictor.apply_blowout_discount(
+                predictions,
+                opp_net_rating=opp_ctx.get('opp_net_rating', 0),
+                avg_min_l10=estimated_minutes,
+            )
+
+            # DTD / questionable self-injury dampener — player returning
+            # from injury or listed as questionable gets predictions reduced.
+            player_injury_status = scraper.get_player_injury_status(
+                player_name, injuries
+            )
+            if (
+                player_injury_status.get('is_injured', False)
+                and player_injury_status.get('status') in ('questionable', 'doubtful')
+            ):
+                dampening = 0.88  # 12% reduction
+                predictions = {
+                    stat: val * dampening for stat, val in predictions.items()
+                }
+                if all(s in predictions for s in ('PTS', 'REB', 'AST')):
+                    predictions['PRA'] = predictions['PTS'] + predictions['REB'] + predictions['AST']
         except Exception as e:
             logger.warning(f"  ⚠️ Prediction failed for {player_name}: {e}")
             continue
@@ -657,11 +678,20 @@ def generate_daily_picks() -> list[dict]:
                 range_low = pred_value
                 range_high = pred_value
 
-            # Probability over (use isotonic calibration if available)
+            # Probability over — use ProbabilityCalculator with std for
+            # proper z-score based calculation (same as LineEvaluator).
             try:
-                prob_over = conf_data.get('prob_over')
-                if prob_over is None:
-                    # Fallback: estimate from confidence + direction
+                from nba_evaluator import ProbabilityCalculator
+                std = conf_data.get('std')
+                if std is not None and std > 0:
+                    calibrator_data = None
+                    if hasattr(predictor, 'probability_calibrator') and stat in predictor.probability_calibrator:
+                        calibrator_data = predictor.probability_calibrator[stat]
+                    prob_over = ProbabilityCalculator.calculate(
+                        pred_value, line_used, std, calibrator_data
+                    )
+                else:
+                    # No std available — estimate from confidence + direction
                     prob_over = confidence if direction == 'OVER' else (100 - confidence)
             except Exception:
                 prob_over = 50.0
