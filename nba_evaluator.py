@@ -2166,9 +2166,29 @@ class MLPredictor:
                 validation_fraction=0.15, n_iter_no_change=15, tol=1e-4,
             )
             tscv = TimeSeriesSplit(n_splits=5)
-            scores = self._weighted_cv_mae(model, X, y, weights, tscv)
-            # Prioritize last fold (most recent data)
-            return scores[-1]
+
+            # Combined objective: MAE + calibration penalty
+            # The Brier penalty encourages models whose residual distribution
+            # produces well-calibrated probabilities (research: calibration > accuracy for ROI)
+            maes = []
+            brier_penalties = []
+            for train_idx, val_idx in tscv.split(X):
+                m = sklearn_clone(model)
+                m.fit(X[train_idx], y[train_idx], sample_weight=weights[train_idx])
+                pred = m.predict(X[val_idx])
+                mae = np.mean(np.abs(y[val_idx] - pred))
+                maes.append(mae)
+
+                # Brier-style penalty: how well do residuals predict over/under?
+                residual_std = np.std(y[val_idx] - pred) or 1.0
+                z_scores = -pred / (residual_std + 0.1)  # negative = predicted above 0
+                raw_probs = 1 - scipy_stats.norm.cdf(z_scores)
+                actual_over = (y[val_idx] > pred).astype(float)
+                brier = np.mean((raw_probs - actual_over) ** 2)
+                brier_penalties.append(brier)
+
+            # Weight: 80% MAE (last fold), 20% calibration (mean across folds)
+            return 0.8 * maes[-1] + 0.2 * np.mean(brier_penalties) * 10  # scale brier to MAE range
 
         study = optuna.create_study(direction='minimize')
         study.optimize(objective, n_trials=40, timeout=60, show_progress_bar=False)

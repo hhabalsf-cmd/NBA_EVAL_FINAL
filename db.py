@@ -1330,6 +1330,99 @@ def get_calibration_stats(user_id: str = None) -> dict:
     }
 
 
+def update_closing_lines() -> dict:
+    """Fetch closing lines from BDL odds API for pending picks and store them.
+
+    Called by cron before nightly auto-grade. For each ungraded pick with a
+    game_date of today (or yesterday), fetches the latest odds and stores the
+    closing line.
+
+    Returns:
+        Dict with 'updated' count and 'errors' list.
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        # Get pending picks that need closing lines (today's and yesterday's games)
+        cursor.execute("""
+            SELECT id, player, stat, game_date, direction, line, opening_line
+            FROM picks
+            WHERE won IS NULL
+              AND closing_line IS NULL
+              AND game_date IS NOT NULL
+              AND (voided IS NULL OR voided = 0)
+              AND game_date >= (CURRENT_DATE - INTERVAL '1 day')::text
+        """)
+        pending = cursor.fetchall()
+    finally:
+        put_connection(conn)
+
+    if not pending:
+        return {'updated': 0, 'errors': []}
+
+    # Fetch odds for the relevant dates
+    updated = 0
+    errors = []
+    try:
+        from bdl_client import get_bdl_client
+        bdl = get_bdl_client()
+
+        dates = list({p['game_date'] for p in pending if p.get('game_date')})
+        odds_data = bdl.get_odds(dates=dates)
+
+        # Build lookup: (date, player_name_lower) → prop lines
+        # For now, use the game spread/total as a proxy since player prop
+        # closing lines require matching specific prop types.
+        # The key CLV signal is: did the line move from opening to closing?
+        # This is populated when the pick's player prop line is found in odds_data.
+        for pick in pending:
+            try:
+                game_date = pick['game_date']
+                # Search odds for player props matching this pick
+                for odds_game in odds_data:
+                    game = odds_game.get('game', {})
+                    odds_date = game.get('date', '')[:10]
+                    if odds_date != game_date:
+                        continue
+
+                    # Check all books for player props matching this stat/player
+                    for book in odds_game.get('books', []):
+                        for prop in book.get('player_props', []):
+                            prop_player = prop.get('player', {}).get('full_name', '').lower()
+                            if pick['player'].lower() not in prop_player and prop_player not in pick['player'].lower():
+                                continue
+
+                            # Match stat type
+                            stat_map = {'PTS': 'points', 'REB': 'rebounds', 'AST': 'assists', 'PRA': 'points_rebounds_assists'}
+                            prop_type = prop.get('type', '')
+                            if stat_map.get(pick['stat'], '') not in prop_type:
+                                continue
+
+                            closing = prop.get('line')
+                            if closing is not None:
+                                conn2 = get_connection()
+                                try:
+                                    cur2 = conn2.cursor()
+                                    cur2.execute(
+                                        "UPDATE picks SET closing_line = %s WHERE id = %s",
+                                        (float(closing), pick['id'])
+                                    )
+                                    conn2.commit()
+                                    updated += 1
+                                finally:
+                                    put_connection(conn2)
+                                break
+                        else:
+                            continue
+                        break
+            except Exception as e:
+                errors.append(f"Pick {pick['id']}: {str(e)}")
+    except Exception as e:
+        errors.append(f"BDL odds fetch failed: {str(e)}")
+
+    return {'updated': updated, 'errors': errors}
+
+
 def get_cumulative_profit(user_id: str = None) -> list:
     """
     Get cumulative profit over time for charting.

@@ -158,6 +158,19 @@ async def delete_pick(request: Request, pick_id: int, current_user: dict = Depen
     return {"message": "Pick deleted", "id": pick_id}
 
 
+@router.post("/update-closing-lines")
+@limiter.limit("3/minute")
+async def update_closing_lines(request: Request):
+    """Fetch and store closing lines for pending picks from BDL odds API.
+
+    Should be called ~30 min before nightly auto-grade to capture closing lines
+    before games are graded. Protected by X-Service-Key header.
+    """
+    verify_service_key(request)
+    result = db.update_closing_lines()
+    return result
+
+
 @router.post("/auto-grade")
 @limiter.limit("3/minute")
 async def auto_grade_picks(request: Request):
