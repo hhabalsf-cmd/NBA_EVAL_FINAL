@@ -91,19 +91,30 @@ TEAM_TIMEZONE = {
 # ── Elo Rating System ──────────────────────────────────────────
 
 class EloTracker:
-    """Self-computed Elo ratings from game results (FiveThirtyEight-style)."""
+    """Dual-track Elo ratings from game results (FiveThirtyEight-style).
 
-    K_FACTOR = 20
+    Maintains two parallel rating tracks per team:
+    - 'fast' track (K=20): reacts quickly to recent form, best for regular season
+    - 'slow' track (K=10): captures longer-term team quality, better for playoffs
+
+    The blended rating uses 70% fast + 30% slow during regular season,
+    shifting to 50/50 in playoffs where long-term quality matters more.
+    """
+
+    K_FACTOR = 20         # Fast track
+    K_FACTOR_SLOW = 10    # Slow track (more stable)
     HOME_ADVANTAGE = 100
     INITIAL_ELO = 1500
-    SEASON_REVERSION = 0.75  # Carry 75% forward between seasons
+    SEASON_REVERSION = 0.75
 
     def __init__(self):
-        self.ratings = {}
+        self.ratings = {}       # Fast track (default, backwards compatible)
+        self.ratings_slow = {}  # Slow track (new)
 
     def initialize(self, team_list):
         for t in team_list:
             self.ratings[t] = self.INITIAL_ELO
+            self.ratings_slow[t] = self.INITIAL_ELO
 
     def expected_score(self, elo_a, elo_b):
         return 1.0 / (1.0 + 10 ** ((elo_b - elo_a) / 400.0))
@@ -122,22 +133,50 @@ class EloTracker:
         else:
             mov_mult = 1.0
 
-        k = self.K_FACTOR * mov_mult
+        # Fast track (K=20)
+        k_fast = self.K_FACTOR * mov_mult
+        self.ratings[home_team] = self.ratings.get(home_team, self.INITIAL_ELO) + k_fast * (actual_home - expected_home)
+        self.ratings[away_team] = self.ratings.get(away_team, self.INITIAL_ELO) + k_fast * (expected_home - actual_home)
 
-        self.ratings[home_team] = self.ratings.get(home_team, self.INITIAL_ELO) + k * (actual_home - expected_home)
-        self.ratings[away_team] = self.ratings.get(away_team, self.INITIAL_ELO) + k * (expected_home - actual_home)
+        # Slow track (K=10) — captures longer-term quality
+        k_slow = self.K_FACTOR_SLOW * mov_mult
+        home_elo_slow = self.ratings_slow.get(home_team, self.INITIAL_ELO) + self.HOME_ADVANTAGE
+        away_elo_slow = self.ratings_slow.get(away_team, self.INITIAL_ELO)
+        expected_slow = self.expected_score(home_elo_slow, away_elo_slow)
+        self.ratings_slow[home_team] = self.ratings_slow.get(home_team, self.INITIAL_ELO) + k_slow * (actual_home - expected_slow)
+        self.ratings_slow[away_team] = self.ratings_slow.get(away_team, self.INITIAL_ELO) + k_slow * (expected_slow - actual_home)
 
     def new_season(self):
         """Revert ratings toward mean between seasons."""
         mean_elo = np.mean(list(self.ratings.values())) if self.ratings else self.INITIAL_ELO
         for team in self.ratings:
             self.ratings[team] = self.SEASON_REVERSION * self.ratings[team] + (1 - self.SEASON_REVERSION) * mean_elo
+        # Slow track reverts less (more stable across seasons)
+        mean_slow = np.mean(list(self.ratings_slow.values())) if self.ratings_slow else self.INITIAL_ELO
+        slow_reversion = 0.85  # Carry 85% forward (more stable than fast track)
+        for team in self.ratings_slow:
+            self.ratings_slow[team] = slow_reversion * self.ratings_slow[team] + (1 - slow_reversion) * mean_slow
 
     def get_rating(self, team):
         return self.ratings.get(team, self.INITIAL_ELO)
 
+    def get_rating_slow(self, team):
+        return self.ratings_slow.get(team, self.INITIAL_ELO)
+
+    def get_blended_rating(self, team, is_playoff=False):
+        """Blend fast and slow ratings. Regular season favors fast (recent form),
+        playoffs favor slow (long-term quality)."""
+        fast = self.get_rating(team)
+        slow = self.get_rating_slow(team)
+        if is_playoff:
+            return 0.5 * fast + 0.5 * slow
+        return 0.7 * fast + 0.3 * slow
+
     def get_diff(self, home_team, away_team):
         return self.get_rating(home_team) - self.get_rating(away_team)
+
+    def get_blended_diff(self, home_team, away_team, is_playoff=False):
+        return self.get_blended_rating(home_team, is_playoff) - self.get_blended_rating(away_team, is_playoff)
 
     def get_expected(self, home_team, away_team):
         home_elo = self.get_rating(home_team) + self.HOME_ADVANTAGE

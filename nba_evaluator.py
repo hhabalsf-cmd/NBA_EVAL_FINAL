@@ -2132,14 +2132,29 @@ class MLPredictor:
 
     @staticmethod
     def _weighted_cv_mae(model_or_factory, X, y, weights, tscv):
-        """Manual cross-validation with sample_weight support (works on all sklearn versions)."""
+        """Purged walk-forward cross-validation with sample_weight support.
+
+        Uses a 3-sample embargo gap between train and validation sets to prevent
+        leakage through rolling window features (L5 rolling avg, etc.).
+        Replaces standard TimeSeriesSplit which has no purge gap.
+        """
+        n = len(X)
+        n_splits, purge_gap = 5, 3
+        fold_size = n // (n_splits + 1)
         scores = []
-        for train_idx, val_idx in tscv.split(X):
+        for i in range(n_splits):
+            train_end = fold_size * (i + 1)
+            val_start = train_end + purge_gap
+            val_end = min(val_start + fold_size, n)
+            if val_start >= n or val_end <= val_start:
+                continue
+            train_idx = np.arange(0, train_end)
+            val_idx = np.arange(val_start, val_end)
+
             m = sklearn_clone(model_or_factory) if hasattr(model_or_factory, 'get_params') else model_or_factory
             m.fit(X[train_idx], y[train_idx], sample_weight=weights[train_idx])
             pred = m.predict(X[val_idx])
-            mae = np.mean(np.abs(y[val_idx] - pred))
-            scores.append(mae)
+            scores.append(np.mean(np.abs(y[val_idx] - pred)))
         return np.array(scores)
 
     def _optimize_hyperparameters(self, X, y, weights, stat):
@@ -2582,6 +2597,30 @@ class MLPredictor:
                 for name, ens_model in self.ensemble_models[stat].items():
                     ens_model.fit(X_scaled, y, sample_weight=recency_weights)
 
+        # --- Two-Step Rate Models (Phase 4b) ---
+        # Train separate per-minute rate models. At prediction time, the rate
+        # prediction × estimated_minutes is blended with the raw stat prediction.
+        # This separates "how productive per minute" from "how many minutes" —
+        # different factors drive each (matchup vs blowout risk/rotation).
+        if 'MIN_NUMERIC' in df_clean.columns and self.model_type != 'neural':
+            min_vals = df_clean['MIN_NUMERIC'].values
+            valid_min = min_vals > 10  # Only games with meaningful minutes
+            if valid_min.sum() >= 20:
+                if not hasattr(self, 'rate_models'):
+                    self.rate_models = {}
+                for stat_r in stats:
+                    y_rate = df_clean[stat_r].values[valid_min] / min_vals[valid_min]
+                    X_rate = X_scaled[valid_min]
+                    w_rate = recency_weights[valid_min]
+                    rate_model = GradientBoostingRegressor(
+                        n_estimators=200, max_depth=4, learning_rate=0.05,
+                        min_samples_leaf=5, subsample=0.8,
+                        loss='huber', alpha=0.9, random_state=42,
+                    )
+                    rate_model.fit(X_rate, y_rate, sample_weight=w_rate)
+                    self.rate_models[stat_r] = rate_model
+                print(f"  Trained per-minute rate models for {', '.join(stats)}")
+
         # Train PRA model
         if all(s in df_clean.columns for s in ['PTS', 'REB', 'AST']):
             y_pra = (df_clean['PTS'] + df_clean['REB'] + df_clean['AST']).values
@@ -2909,12 +2948,25 @@ class MLPredictor:
                     others = [v for k, v in ens_preds_dict.items() if k != 'main']
                     pred = 0.5 * pred + 0.5 * np.mean(others)
 
-            # --- Minutes-Based Scaling ---
-            # Scale prediction proportionally if expected minutes differ from baseline
-            if estimated_minutes is not None and baseline_minutes and baseline_minutes > 15 and stat != 'PRA':
+            # --- Two-Step Rate Prediction (Phase 4b) ---
+            # Blend raw prediction with rate × minutes prediction.
+            # 70% raw (captures game-level patterns), 30% rate-based (separates minutes from production).
+            if (estimated_minutes is not None and stat != 'PRA'
+                    and hasattr(self, 'rate_models') and stat in self.rate_models):
+                try:
+                    rate_pred = self.rate_models[stat].predict(X_scaled)[0]
+                    rate_based = rate_pred * estimated_minutes
+                    # Sanity: only blend if rate prediction is reasonable
+                    if rate_based > 0 and abs(rate_based - pred) / max(pred, 1) < 0.5:
+                        pred = 0.7 * pred + 0.3 * rate_based
+                except Exception:
+                    pass  # Fall through to legacy minutes scaling
+
+            # --- Minutes-Based Scaling (legacy, dampened) ---
+            # Only applies if no rate model available or rate model sanity check failed
+            elif estimated_minutes is not None and baseline_minutes and baseline_minutes > 15 and stat != 'PRA':
                 minutes_ratio = estimated_minutes / baseline_minutes
-                # Dampen the ratio to avoid extreme swings (e.g., 0.85 - 1.15 range)
-                minutes_ratio = 0.5 + 0.5 * minutes_ratio  # Blend toward 1.0
+                minutes_ratio = 0.5 + 0.5 * minutes_ratio
                 minutes_ratio = max(0.85, min(1.15, minutes_ratio))
                 pred = pred * minutes_ratio
 
@@ -3361,6 +3413,59 @@ class MLPredictor:
         recent = relevant[-window:]
         return np.mean([abs(h['predicted'] - h['actual']) for h in recent])
 
+    def detect_drift(self, stat, window_recent=10, window_old=20, threshold=1.5):
+        """ADWIN-style drift detection on prediction residuals.
+
+        Compares recent prediction errors to older errors. If the recent
+        window's mean residual differs significantly from the older window,
+        the model's assumptions have shifted (trade, injury return, role change).
+
+        Args:
+            stat: stat type to check
+            window_recent: number of recent predictions to check
+            window_old: number of older predictions to compare against
+            threshold: z-score threshold for drift signal (1.5 = ~87% confidence)
+
+        Returns:
+            Dict with 'drift_detected' (bool), 'z_score', 'recent_bias', 'old_bias'
+        """
+        relevant = [h for h in self.performance_history if h['stat'] == stat]
+        total_needed = window_recent + window_old
+        if len(relevant) < total_needed:
+            return {'drift_detected': False, 'z_score': 0, 'recent_bias': 0, 'old_bias': 0}
+
+        recent = relevant[-window_recent:]
+        old = relevant[-(window_recent + window_old):-window_recent]
+
+        recent_residuals = [h['predicted'] - h['actual'] for h in recent]
+        old_residuals = [h['predicted'] - h['actual'] for h in old]
+
+        recent_mean = np.mean(recent_residuals)
+        old_mean = np.mean(old_residuals)
+        pooled_std = np.std(old_residuals + recent_residuals) or 1.0
+
+        z_score = abs(recent_mean - old_mean) / (pooled_std / np.sqrt(window_recent))
+
+        return {
+            'drift_detected': z_score > threshold,
+            'z_score': round(z_score, 2),
+            'recent_bias': round(recent_mean, 2),
+            'old_bias': round(old_mean, 2),
+        }
+
+    def needs_retrain(self):
+        """Check if any stat model shows drift warranting a full retrain.
+
+        Returns:
+            List of stats that need retraining, empty if model is stable.
+        """
+        drifted = []
+        for stat in ('PTS', 'REB', 'AST'):
+            result = self.detect_drift(stat)
+            if result['drift_detected']:
+                drifted.append(stat)
+        return drifted
+
     def save(self, player_name):
         """Save model to disk"""
         filename = MODEL_DIR / f"{player_name.replace(' ', '_')}_model.pkl"
@@ -3386,6 +3491,7 @@ class MLPredictor:
             'optimized_params': getattr(self, 'optimized_params', {}),
             'performance_history': getattr(self, 'performance_history', []),
             'meta_learners': getattr(self, 'meta_learners', {}),
+            'rate_models': getattr(self, 'rate_models', {}),
         }
 
         if self.model_type == 'neural' and TF_AVAILABLE:
@@ -3425,6 +3531,7 @@ class MLPredictor:
         self.optimized_params = data.get('optimized_params', {})
         self.performance_history = data.get('performance_history', [])
         self.meta_learners = data.get('meta_learners', {})
+        self.rate_models = data.get('rate_models', {})
 
         if data['models']:
             self.models = data['models']
