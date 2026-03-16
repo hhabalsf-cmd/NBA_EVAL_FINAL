@@ -1185,6 +1185,24 @@ class GamePredictor:
         features['home_star_pts_lost'] = home_inj['star_pts_lost']
         features['away_star_pts_lost'] = away_inj['star_pts_lost']
 
+        # === Player-level team strength adjustment ===
+        # When stars are out, adjust team ratings proportionally to their scoring impact.
+        # A team losing 25+ ppg player drops ~3-5 net rating points (research-based).
+        # This bridges the gap between team-level-only and lineup-aware models.
+        home_pts_lost = home_inj['star_pts_lost']
+        away_pts_lost = away_inj['star_pts_lost']
+
+        # Approximate net rating impact: ~0.15 net rating per point of star scoring lost
+        home_adj = -home_pts_lost * 0.15
+        away_adj = -away_pts_lost * 0.15
+
+        features['home_lineup_adj_net'] = features.get('home_net_rating', 0) + home_adj
+        features['away_lineup_adj_net'] = features.get('away_net_rating', 0) + away_adj
+        features['lineup_adj_net_diff'] = features['home_lineup_adj_net'] - features['away_lineup_adj_net']
+
+        # Lineup-adjusted Elo: shift Elo by star impact (scale: ~5 Elo pts per scoring point)
+        features['lineup_adj_elo_diff'] = features.get('elo_diff', 0) + (away_pts_lost - home_pts_lost) * 5
+
         return features
 
     def _generate_key_factors(self, features):

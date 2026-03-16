@@ -668,6 +668,43 @@ class PredictionService:
         except Exception:
             pass  # Defaults in get_prediction_features handle missing values
 
+        # Fetch Vegas lines for this game (BDL odds endpoint)
+        vegas_ctx = {}
+        try:
+            game_date_str = game_info.get('game_date', '')
+            if game_date_str:
+                bdl = ev.get_bdl_client()
+                odds_data = bdl.get_odds(dates=[game_date_str])
+                team_abbrev = player_info.get('team_abbrev', '')
+                for odds_game in odds_data:
+                    game_teams = odds_game.get('game', {})
+                    home_abbrev = game_teams.get('home_team', {}).get('abbreviation', '')
+                    away_abbrev = game_teams.get('visitor_team', {}).get('abbreviation', '')
+                    if team_abbrev in (home_abbrev, away_abbrev):
+                        # Extract consensus spread and total from first available book
+                        for book in odds_game.get('books', []):
+                            lines = book.get('lines', [])
+                            for line in lines:
+                                if line.get('type') == 'total' and 'total' in line:
+                                    vegas_ctx['vegas_game_total'] = float(line['total'])
+                                if line.get('type') == 'spread':
+                                    # Spread from home team perspective
+                                    spread_val = float(line.get('spread', 0))
+                                    if team_abbrev == home_abbrev:
+                                        vegas_ctx['vegas_spread'] = spread_val
+                                    else:
+                                        vegas_ctx['vegas_spread'] = -spread_val
+                            if vegas_ctx:
+                                break
+                        # Compute implied team total
+                        if 'vegas_game_total' in vegas_ctx and 'vegas_spread' in vegas_ctx:
+                            gt = vegas_ctx['vegas_game_total']
+                            sp = vegas_ctx['vegas_spread']
+                            vegas_ctx['vegas_implied_team_total'] = (gt - sp) / 2
+                        break
+        except Exception:
+            pass  # Vegas features optional — defaults in get_prediction_features
+
         # Offload prediction to thread pool (matrix operations)
         def _run_prediction():
             pred_features = ev.FeatureEngineer.get_prediction_features(
@@ -681,6 +718,7 @@ class PredictionService:
                 player_info=player_info,
                 **opp_ctx,
                 **schedule_ctx,
+                **vegas_ctx,
             )
             estimated_minutes = ev.FeatureEngineer.estimate_minutes(
                 df_features, is_home, days_rest, injuries_team,

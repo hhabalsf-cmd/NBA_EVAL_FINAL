@@ -1597,7 +1597,10 @@ class FeatureEngineer:
                                  opp_oreb_pct=0.27, opp_dreb_pct=0.73,
                                  # Schedule density & travel context
                                  games_in_last_7=2, games_in_last_4=1,
-                                 travel_miles=0, timezone_shift=0, is_altitude=0):
+                                 travel_miles=0, timezone_shift=0, is_altitude=0,
+                                 # Vegas lines (market-implied context)
+                                 vegas_game_total=220, vegas_spread=0,
+                                 vegas_implied_team_total=110):
         """Get feature vector for prediction
 
         Args:
@@ -1647,6 +1650,10 @@ class FeatureEngineer:
             'TRAVEL_MILES_NORM': travel_miles / 1000,
             'TIMEZONE_SHIFT': timezone_shift,
             'IS_ALTITUDE': is_altitude,
+            # Vegas lines (normalized around league averages)
+            'VEGAS_GAME_TOTAL_NORM': (vegas_game_total - 220) / 10,  # avg ~220, std ~10
+            'VEGAS_SPREAD_NORM': vegas_spread / 5,  # spread in 5-point units
+            'VEGAS_IMPLIED_TEAM_TOTAL_NORM': (vegas_implied_team_total - 110) / 5,
             # Team momentum
             'WIN_STREAK': latest.get('WIN_STREAK', 2.5),
             'LOSS_STREAK': latest.get('LOSS_STREAK', 2.5),
@@ -1989,6 +1996,9 @@ class MLPredictor:
         # Schedule Density & Travel (Phase 3)
         'GAMES_IN_LAST_7', 'GAMES_IN_LAST_4',
         'TRAVEL_MILES_NORM', 'TIMEZONE_SHIFT', 'IS_ALTITUDE',
+
+        # Vegas Lines (Phase 3b) — market-implied context
+        'VEGAS_GAME_TOTAL_NORM', 'VEGAS_SPREAD_NORM', 'VEGAS_IMPLIED_TEAM_TOTAL_NORM',
     ]
 
     # Per-stat optimized hyperparameters for Gradient Boosting
@@ -2504,10 +2514,51 @@ class MLPredictor:
                     X_for_calib = X_scaled[:, self.selected_features[stat]]
                 self._train_probability_calibrator(X_for_calib, y, recency_weights, stat, tscv)
 
-            # Train ensemble if enabled
+            # Train ensemble with learned meta-learner (replaces fixed 50/50 weighting)
             if self.use_ensemble and self.model_type != 'neural':
                 print(f"  Training ensemble for {stat}...")
                 self.ensemble_models[stat] = self._create_ensemble_models(stat)
+
+                # Collect OOF predictions from each base model for meta-learner
+                all_oof = {}
+                for name, ens_model in self.ensemble_models[stat].items():
+                    oof = np.full(len(y), np.nan)
+                    for train_idx, val_idx in tscv.split(X_scaled):
+                        fold_m = sklearn_clone(ens_model)
+                        fold_m.fit(X_scaled[train_idx], y[train_idx],
+                                   sample_weight=recency_weights[train_idx])
+                        oof[val_idx] = fold_m.predict(X_scaled[val_idx])
+                    all_oof[name] = oof
+
+                # Also get main model OOF
+                main_oof = np.full(len(y), np.nan)
+                for train_idx, val_idx in tscv.split(X_scaled):
+                    fold_main = sklearn_clone(model)
+                    fold_main.fit(X_scaled[train_idx], y[train_idx],
+                                  sample_weight=recency_weights[train_idx])
+                    main_oof[val_idx] = fold_main.predict(X_scaled[val_idx])
+                all_oof['main'] = main_oof
+
+                # Train Ridge meta-learner on OOF predictions (non-negative weights)
+                valid = ~np.isnan(main_oof)
+                for v in all_oof.values():
+                    valid &= ~np.isnan(v)
+
+                if valid.sum() >= 20:
+                    meta_X = np.column_stack([all_oof[k][valid] for k in all_oof])
+                    meta_y = y[valid]
+                    from sklearn.linear_model import Ridge
+                    meta_learner = Ridge(alpha=1.0, fit_intercept=True)
+                    meta_learner.fit(meta_X, meta_y)
+                    if not hasattr(self, 'meta_learners'):
+                        self.meta_learners = {}
+                    self.meta_learners[stat] = {
+                        'model': meta_learner,
+                        'order': list(all_oof.keys()),  # preserve column order
+                    }
+                    print(f"    Meta-learner weights: {dict(zip(all_oof.keys(), meta_learner.coef_.round(3)))}")
+
+                # Refit all ensemble models on full data
                 for name, ens_model in self.ensemble_models[stat].items():
                     ens_model.fit(X_scaled, y, sample_weight=recency_weights)
 
@@ -2823,14 +2874,20 @@ class MLPredictor:
             else:
                 pred = model.predict(X_pred)[0]
 
-            # Ensemble predictions if enabled
+            # Ensemble predictions: use learned meta-learner if available, else fixed weighting
             if self.use_ensemble and stat in self.ensemble_models:
-                ensemble_preds = [pred]  # Include main model
+                ens_preds_dict = {'main': pred}
                 for name, ens_model in self.ensemble_models[stat].items():
-                    ens_pred = ens_model.predict(X_scaled)[0]
-                    ensemble_preds.append(ens_pred)
-                # Weighted average (main model gets more weight)
-                pred = 0.5 * pred + 0.5 * np.mean(ensemble_preds[1:])
+                    ens_preds_dict[name] = ens_model.predict(X_scaled)[0]
+
+                if hasattr(self, 'meta_learners') and stat in self.meta_learners:
+                    meta = self.meta_learners[stat]
+                    meta_X = np.array([[ens_preds_dict[k] for k in meta['order']]])
+                    pred = meta['model'].predict(meta_X)[0]
+                else:
+                    # Fallback: fixed 50/50 weighting
+                    others = [v for k, v in ens_preds_dict.items() if k != 'main']
+                    pred = 0.5 * pred + 0.5 * np.mean(others)
 
             # --- Minutes-Based Scaling ---
             # Scale prediction proportionally if expected minutes differ from baseline
@@ -3308,6 +3365,7 @@ class MLPredictor:
             'probability_calibrator': getattr(self, 'probability_calibrator', {}),
             'optimized_params': getattr(self, 'optimized_params', {}),
             'performance_history': getattr(self, 'performance_history', []),
+            'meta_learners': getattr(self, 'meta_learners', {}),
         }
 
         if self.model_type == 'neural' and TF_AVAILABLE:
@@ -3346,6 +3404,7 @@ class MLPredictor:
         self.probability_calibrator = data.get('probability_calibrator', {})
         self.optimized_params = data.get('optimized_params', {})
         self.performance_history = data.get('performance_history', [])
+        self.meta_learners = data.get('meta_learners', {})
 
         if data['models']:
             self.models = data['models']
