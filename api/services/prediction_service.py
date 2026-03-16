@@ -683,7 +683,11 @@ class PredictionService:
                 **schedule_ctx,
             )
             estimated_minutes = ev.FeatureEngineer.estimate_minutes(
-                df_features, is_home, days_rest, injuries_team
+                df_features, is_home, days_rest, injuries_team,
+                games_in_last_7=schedule_ctx.get('games_in_last_7', 2),
+                travel_miles=schedule_ctx.get('travel_miles', 0),
+                is_altitude=schedule_ctx.get('is_altitude', 0),
+                opp_net_rating=opp_ctx.get('opp_net_rating', 0),
             )
             predictor._update_recent_averages(df_features)
             preds = predictor.predict(pred_features, estimated_minutes=estimated_minutes)

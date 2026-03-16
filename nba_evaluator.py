@@ -1808,35 +1808,65 @@ class FeatureEngineer:
         return pd.DataFrame([features])
 
     @staticmethod
-    def estimate_minutes(df, is_home, days_rest, injuries_team=0):
-        """Estimate expected minutes based on context"""
+    def estimate_minutes(df, is_home, days_rest, injuries_team=0,
+                          games_in_last_7=2, travel_miles=0, is_altitude=0,
+                          opp_net_rating=0):
+        """Estimate expected minutes based on context.
+
+        Enhanced with schedule density, travel fatigue, altitude, and
+        blowout risk (projected lopsided games reduce starter minutes).
+        """
         latest = df.iloc[-1]
 
-        # Base minutes from recent average
-        base_min = latest.get('EMA_5_MIN_NUMERIC', latest.get('ROLL_5_MIN_NUMERIC', 30))
+        # Base minutes from recent average (blend EMA + season avg for stability)
+        ema_min = latest.get('EMA_5_MIN_NUMERIC', latest.get('ROLL_5_MIN_NUMERIC', 30))
+        season_min = latest.get('ROLL_20_MIN_NUMERIC', ema_min)
+        base_min = 0.7 * ema_min + 0.3 * season_min
 
-        # Adjustments
-        adj = 0
+        adj = 0.0
 
-        # Home games typically have slightly more minutes for starters
+        # Home court: starters play slightly more
         if is_home:
             adj += 0.5
 
-        # Back-to-back usually means fewer minutes
+        # Back-to-back: significant minutes reduction (research: 3-5% scoring decline)
         if days_rest == 1:
             adj -= 2.0
+        elif days_rest >= 3:
+            adj += 1.0  # Extended rest = fresh legs
 
-        # Extended rest can mean fresh legs, more minutes
-        if days_rest >= 3:
-            adj += 1.0
+        # Schedule congestion: 4+ games in 7 days → fatigue accumulates
+        if games_in_last_7 >= 4:
+            adj -= 1.5
+        elif games_in_last_7 >= 3:
+            adj -= 0.5
 
-        # More team injuries might mean more minutes
+        # Cross-country travel: >1500 miles adds fatigue
+        if travel_miles > 2000:
+            adj -= 1.0
+        elif travel_miles > 1500:
+            adj -= 0.5
+
+        # Altitude: visiting Denver/Utah reduces aerobic capacity
+        if is_altitude:
+            adj -= 0.5
+
+        # Team injuries → expanded rotation minutes for remaining players
         if injuries_team >= 2:
             adj += 1.5
+        elif injuries_team >= 1:
+            adj += 0.5
 
-        # Cap adjustments
+        # Blowout risk: projected lopsided games reduce starter minutes
+        # opp_net_rating > 8 means opponent is elite → player's team likely loses big
+        # opp_net_rating < -8 means opponent is bad → player's team likely wins big
+        if abs(opp_net_rating) > 8:
+            adj -= 1.5  # Starters pulled early in blowouts either way
+        elif abs(opp_net_rating) > 5:
+            adj -= 0.5
+
         estimated = base_min + adj
-        return max(20, min(42, estimated))  # Reasonable bounds
+        return max(20, min(42, estimated))
 
 
 class MLPredictor:
@@ -2960,16 +2990,21 @@ class MLPredictor:
 
         return predictions
 
-    def apply_injury_boost(self, predictions, injuries_team=0, injuries_opp=0):
-        """Apply post-prediction usage adjustment based on injury counts.
+    def apply_injury_boost(self, predictions, injuries_team=0, injuries_opp=0,
+                            injured_usage_pct=0.0, player_usage_pct=0.0):
+        """Apply usage-aware injury adjustment to predictions.
 
-        Each teammate OUT redistributes their minutes/usage to remaining players.
-        Each opponent OUT slightly eases the defensive matchup for scoring.
+        When teammates are out, their usage gets redistributed. The boost depends
+        on HOW MUCH usage the injured players had (a 30% usage star being out is
+        very different from a 12% bench player). When specific usage data isn't
+        available, falls back to count-based heuristic with diminishing returns.
 
         Args:
             predictions: dict of {stat: predicted_value} from predict()
             injuries_team: number of the player's own teammates ruled OUT
             injuries_opp: number of opponent players ruled OUT
+            injured_usage_pct: total usage % of injured teammates (0-100, from on/off data)
+            player_usage_pct: this player's own usage % (0-100, for redistribution share)
 
         Returns:
             New predictions dict with injury adjustments applied.
@@ -2979,16 +3014,27 @@ class MLPredictor:
 
         result = dict(predictions)
 
-        # Teammate OUT → usage redistribution: +2.5% per player, capped at +10%
         if injuries_team > 0:
-            boost = min(injuries_team * 0.025, 0.10)
+            if injured_usage_pct > 0 and player_usage_pct > 0:
+                # Usage-weighted redistribution: player gets a share proportional
+                # to their own usage among remaining players (~60% of usage stays
+                # at same position, rest distributed by usage share)
+                remaining_usage = 100 - injured_usage_pct
+                player_share = player_usage_pct / remaining_usage if remaining_usage > 0 else 0.15
+                redistributed = injured_usage_pct * player_share * 0.6  # 60% efficiency
+                boost = min(redistributed / 100, 0.12)  # Cap at 12%
+            else:
+                # Fallback: count-based with diminishing returns
+                # 1 out: +2.5%, 2 out: +4.5%, 3 out: +6%, 4+: +7% (diminishing)
+                boost = min(0.025 * injuries_team ** 0.75, 0.10)
+
             for stat in ('PTS', 'REB', 'AST'):
                 if stat in result:
                     result[stat] = result[stat] * (1 + boost)
 
-        # Opponent OUT → easier scoring: +1% per player, capped at +4%, PTS only
+        # Opponent OUT → easier scoring with diminishing returns
         if injuries_opp > 0:
-            pts_boost = min(injuries_opp * 0.010, 0.04)
+            pts_boost = min(0.01 * injuries_opp ** 0.75, 0.04)
             if 'PTS' in result:
                 result['PTS'] = result['PTS'] * (1 + pts_boost)
 
