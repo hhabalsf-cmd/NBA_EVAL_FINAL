@@ -16,8 +16,8 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    await login(email, password)
-    onSuccess?.()
+    const success = await login(email, password)
+    if (success) onSuccess?.()
   }
 
   const handleForgotPassword = async () => {
@@ -40,12 +40,12 @@ export default function LoginForm({ onSuccess }: LoginFormProps) {
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
       <div>
-        <label className="block text-xs font-medium text-text-muted mb-2 uppercase tracking-wider">Email</label>
+        <label className="block text-xs font-medium text-text-muted mb-2 uppercase tracking-wider">Email or Username</label>
         <input
-          type="email"
+          type="text"
           value={email}
           onChange={e => setEmail(e.target.value)}
-          placeholder="you@example.com"
+          placeholder="you@example.com or username"
           required
           className="w-full"
         />

@@ -17,7 +17,7 @@ export default function LoginPage() {
         <div className="text-center mb-8">
           <img src="/logo-icon2.png" alt="Bettin' Jrys" className="h-[55px] mx-auto mb-5" />
           <h1 className="text-xl font-semibold text-text-primary mb-1.5 tracking-tight">Sign in to Bettin' Jrys</h1>
-          <p className="text-sm text-text-secondary">Enter your credentials to continue</p>
+          <p className="text-sm text-text-secondary">Sign in with your email or username</p>
         </div>
         <div className="card p-6">
           <LoginForm onSuccess={() => navigate('/')} />

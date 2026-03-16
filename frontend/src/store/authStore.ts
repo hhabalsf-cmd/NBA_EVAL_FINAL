@@ -11,7 +11,7 @@ interface AuthStore {
   isUploadingAvatar: boolean
   error: string | null
   needsEmailConfirmation: boolean
-  login: (email: string, password: string) => Promise<void>
+  login: (emailOrUsername: string, password: string) => Promise<boolean>
   signup: (email: string, username: string, password: string) => Promise<void>
   logout: () => Promise<void>
   checkAuth: () => Promise<void>
@@ -42,9 +42,20 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   error: null,
   needsEmailConfirmation: false,
 
-  login: async (email, password) => {
+  login: async (emailOrUsername, password) => {
     set({ isLoading: true, error: null })
     try {
+      // Resolve username → email if input doesn't look like an email
+      let email = emailOrUsername.trim()
+      if (!email.includes('@')) {
+        const { data: resolvedEmail, error: rpcError } = await supabase
+          .rpc('get_email_by_username', { lookup_username: email })
+        if (rpcError || !resolvedEmail) {
+          throw new Error('Invalid credentials')
+        }
+        email = resolvedEmail
+      }
+
       const { data, error } = await supabase.auth.signInWithPassword({ email, password })
       if (error) throw error
       const profile = await fetchProfile(data.user.id)
@@ -62,8 +73,10 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         isAuthenticated: true,
         isLoading: false,
       })
+      return true
     } catch (err) {
       set({ error: (err as Error).message, isLoading: false })
+      return false
     }
   },
 
