@@ -9,7 +9,7 @@ import unicodedata
 logger = logging.getLogger(__name__)
 from collections import defaultdict
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any, Generator
 import asyncio
@@ -646,6 +646,28 @@ class PredictionService:
             and player_injury_status.get('status') in ('questionable', 'doubtful')
         )
 
+        # Compute schedule density & travel context for Phase 3 features
+        schedule_ctx = {}
+        try:
+            game_dates = pd.to_datetime(df_features['GAME_DATE'])
+            now = datetime.now()
+            recent_7 = game_dates[game_dates >= (now - timedelta(days=7))]
+            recent_4 = game_dates[game_dates >= (now - timedelta(days=4))]
+            schedule_ctx['games_in_last_7'] = len(recent_7)
+            schedule_ctx['games_in_last_4'] = len(recent_4)
+
+            # Travel: last game location → next game location
+            team_abbrev = player_info.get('team_abbrev', '')
+            last_opp = df_features['MATCHUP'].iloc[-1]
+            last_is_home = 'vs.' in str(last_opp)
+            last_loc = team_abbrev if last_is_home else str(last_opp).split(' ')[-1]
+            next_loc = team_abbrev if is_home else opponent
+            schedule_ctx['travel_miles'] = ev._travel_miles(last_loc, next_loc)
+            schedule_ctx['timezone_shift'] = ev._timezone_shift(last_loc, next_loc)
+            schedule_ctx['is_altitude'] = 1 if (not is_home and opponent in ev.HIGH_ALTITUDE_TEAMS) else 0
+        except Exception:
+            pass  # Defaults in get_prediction_features handle missing values
+
         # Offload prediction to thread pool (matrix operations)
         def _run_prediction():
             pred_features = ev.FeatureEngineer.get_prediction_features(
@@ -658,6 +680,7 @@ class PredictionService:
                 vs_stats=vs_stats,
                 player_info=player_info,
                 **opp_ctx,
+                **schedule_ctx,
             )
             estimated_minutes = ev.FeatureEngineer.estimate_minutes(
                 df_features, is_home, days_rest, injuries_team

@@ -1108,6 +1108,53 @@ class OddsAPI:
             return None
 
 
+# NBA arena locations for travel/altitude features
+# Format: {team_abbrev: (latitude, longitude, altitude_ft, timezone_offset_from_ET)}
+NBA_ARENAS = {
+    'ATL': (33.757, -84.396, 1050, 0), 'BOS': (42.366, -71.062, 20, 0),
+    'BKN': (40.683, -73.976, 30, 0), 'CHA': (35.225, -80.839, 750, 0),
+    'CHI': (41.881, -87.674, 590, -1), 'CLE': (41.497, -81.688, 650, 0),
+    'DAL': (32.790, -96.810, 430, -1), 'DEN': (39.749, -105.008, 5280, -2),
+    'DET': (42.341, -83.055, 600, 0), 'GSW': (37.768, -122.388, 10, -3),
+    'HOU': (29.751, -95.362, 50, -1), 'IND': (39.764, -86.156, 720, 0),
+    'LAC': (33.944, -118.340, 200, -3), 'LAL': (34.043, -118.267, 270, -3),
+    'MEM': (35.138, -90.051, 260, -1), 'MIA': (25.781, -80.187, 10, 0),
+    'MIL': (43.045, -87.917, 620, -1), 'MIN': (44.980, -93.276, 830, -1),
+    'NOP': (29.949, -90.082, 5, -1), 'NYK': (40.751, -73.994, 30, 0),
+    'OKC': (35.463, -97.515, 1200, -1), 'ORL': (28.539, -81.384, 80, 0),
+    'PHI': (39.901, -75.172, 40, 0), 'PHX': (33.446, -112.071, 1100, -2),
+    'POR': (45.532, -122.667, 50, -3), 'SAC': (38.580, -121.500, 30, -3),
+    'SAS': (29.427, -98.438, 650, -1), 'TOR': (43.643, -79.379, 250, 0),
+    'UTA': (40.768, -111.901, 4226, -2), 'WAS': (38.898, -77.021, 40, 0),
+}
+
+# Teams at high altitude (>4000 ft) — documented performance advantage
+HIGH_ALTITUDE_TEAMS = {'DEN', 'UTA'}
+
+
+def _travel_miles(team_from: str, team_to: str) -> float:
+    """Approximate great-circle distance between two NBA arenas in miles."""
+    import math
+    a = NBA_ARENAS.get(team_from)
+    b = NBA_ARENAS.get(team_to)
+    if not a or not b:
+        return 0.0
+    lat1, lon1 = math.radians(a[0]), math.radians(a[1])
+    lat2, lon2 = math.radians(b[0]), math.radians(b[1])
+    dlat, dlon = lat2 - lat1, lon2 - lon1
+    h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return 3959 * 2 * math.asin(math.sqrt(h))
+
+
+def _timezone_shift(team_from: str, team_to: str) -> int:
+    """Timezone shift (hours) traveling from one arena to another. Positive = eastward."""
+    a = NBA_ARENAS.get(team_from)
+    b = NBA_ARENAS.get(team_to)
+    if not a or not b:
+        return 0
+    return b[3] - a[3]
+
+
 class FeatureEngineer:
     """Creates features for ML models"""
 
@@ -1301,6 +1348,47 @@ class FeatureEngineer:
         df['SEASON_PHASE'] = pd.cut(df['GAME_NUM'],
                                      bins=[0, 25, 55, 82, 110],
                                      labels=[1, 2, 3, 4]).astype(float).fillna(2)
+
+        # =====================
+        # SCHEDULE DENSITY & TRAVEL FEATURES
+        # =====================
+        # Games in last 7 days (schedule congestion)
+        game_dates = df['GAME_DATE']
+        games_in_7 = []
+        games_in_4 = []
+        for i, date in enumerate(game_dates):
+            past_7 = game_dates.iloc[:i][(date - game_dates.iloc[:i]).dt.days <= 7]
+            past_4 = game_dates.iloc[:i][(date - game_dates.iloc[:i]).dt.days <= 4]
+            games_in_7.append(len(past_7))
+            games_in_4.append(len(past_4))
+        df['GAMES_IN_LAST_7'] = games_in_7
+        df['GAMES_IN_LAST_4'] = games_in_4
+
+        # Travel features (opponent location → distance and timezone)
+        # Player's team extracted from MATCHUP (e.g., "LAL vs. GSW" → "LAL")
+        df['PLAYER_TEAM'] = df['MATCHUP'].apply(
+            lambda x: str(x).split(' ')[0] if pd.notna(x) else ''
+        )
+        # Where the game is played
+        df['GAME_LOCATION'] = df.apply(
+            lambda row: row['OPPONENT'] if row['IS_HOME'] == 0 else row['PLAYER_TEAM'], axis=1
+        )
+        # Previous game location (for travel distance)
+        df['PREV_LOCATION'] = df['GAME_LOCATION'].shift(1)
+        df['TRAVEL_MILES'] = df.apply(
+            lambda row: _travel_miles(row['PREV_LOCATION'], row['GAME_LOCATION'])
+            if pd.notna(row.get('PREV_LOCATION')) else 0, axis=1
+        )
+        df['TRAVEL_MILES_NORM'] = df['TRAVEL_MILES'] / 1000  # Normalize (~0-3 range)
+        df['TIMEZONE_SHIFT'] = df.apply(
+            lambda row: _timezone_shift(row['PREV_LOCATION'], row['GAME_LOCATION'])
+            if pd.notna(row.get('PREV_LOCATION')) else 0, axis=1
+        )
+        # Altitude flag (Denver/Utah visiting teams face oxygen disadvantage)
+        df['IS_ALTITUDE'] = df.apply(
+            lambda row: 1 if (row['IS_HOME'] == 0 and row['OPPONENT'] in HIGH_ALTITUDE_TEAMS) else 0,
+            axis=1
+        )
 
         # Win/Loss momentum
         df['WL_NUM'] = df['WL'].apply(lambda x: 1 if x == 'W' else 0)
@@ -1506,7 +1594,10 @@ class FeatureEngineer:
                                  # Enhanced opponent context (from BDL advanced stats)
                                  opp_off_rating=110, opp_net_rating=0,
                                  opp_efg_pct=0.50, opp_tov_pct=14.0,
-                                 opp_oreb_pct=0.27, opp_dreb_pct=0.73):
+                                 opp_oreb_pct=0.27, opp_dreb_pct=0.73,
+                                 # Schedule density & travel context
+                                 games_in_last_7=2, games_in_last_4=1,
+                                 travel_miles=0, timezone_shift=0, is_altitude=0):
         """Get feature vector for prediction
 
         Args:
@@ -1550,6 +1641,12 @@ class FeatureEngineer:
             'DAYS_REST': days_rest,
             'B2B': 1 if days_rest == 1 else 0,
             'EXTENDED_REST': 1 if days_rest >= 3 else 0,
+            # Schedule density & travel
+            'GAMES_IN_LAST_7': games_in_last_7,
+            'GAMES_IN_LAST_4': games_in_last_4,
+            'TRAVEL_MILES_NORM': travel_miles / 1000,
+            'TIMEZONE_SHIFT': timezone_shift,
+            'IS_ALTITUDE': is_altitude,
             # Team momentum
             'WIN_STREAK': latest.get('WIN_STREAK', 2.5),
             'LOSS_STREAK': latest.get('LOSS_STREAK', 2.5),
@@ -1858,6 +1955,10 @@ class MLPredictor:
 
         # Per-36 Rebound Splits
         'ROLL_5_OREB_PER36', 'ROLL_5_DREB_PER36',
+
+        # Schedule Density & Travel (Phase 3)
+        'GAMES_IN_LAST_7', 'GAMES_IN_LAST_4',
+        'TRAVEL_MILES_NORM', 'TIMEZONE_SHIFT', 'IS_ALTITUDE',
     ]
 
     # Per-stat optimized hyperparameters for Gradient Boosting
