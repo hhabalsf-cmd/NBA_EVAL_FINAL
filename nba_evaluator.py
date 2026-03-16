@@ -81,8 +81,8 @@ for d in [DATA_DIR, MODEL_DIR, HISTORY_DIR, CACHE_DIR]:
 # ── In-memory model cache (avoids repeated pickle.load from disk) ──
 _MODEL_CACHE: dict = {}          # player_name -> (data_dict, loaded_at)
 _MODEL_CACHE_LOCK = threading.Lock()
-_MODEL_CACHE_MAX = 30            # keep at most 30 players in memory
-_MODEL_CACHE_TTL = 3600          # 1 hour before re-reading from disk
+_MODEL_CACHE_MAX = 8             # keep at most 8 players in memory (was 30 — each model is ~50-100MB in RAM)
+_MODEL_CACHE_TTL = 1800          # 30 min before re-reading from disk (was 1h)
 
 
 def _model_cache_get(player_name: str) -> 'dict | None':
@@ -105,6 +105,16 @@ def _model_cache_put(player_name: str, data: dict) -> None:
         if len(_MODEL_CACHE) > _MODEL_CACHE_MAX:
             oldest_key = min(_MODEL_CACHE, key=lambda k: _MODEL_CACHE[k][1])
             del _MODEL_CACHE[oldest_key]
+
+
+def flush_memory_caches():
+    """Clear all in-memory caches to free RAM. Safe to call anytime —
+    models/data will reload from disk/Supabase on next request."""
+    import gc
+    with _MODEL_CACHE_LOCK:
+        _MODEL_CACHE.clear()
+    CacheManager._mem.clear()
+    gc.collect()
 
 
 # Timezone for NBA game completion check
@@ -176,7 +186,7 @@ class CacheManager:
     Falls back to the file-based L2 cache on memory miss.
     """
     _mem: dict = {}          # cache_key -> (data, timestamp)
-    _MEM_MAX = 100           # max entries in L1
+    _MEM_MAX = 20            # max entries in L1 (was 100 — each can hold full game log DataFrames)
 
     @staticmethod
     def get_cache_key(prefix, *args):

@@ -174,6 +174,24 @@ async def health_check():
     return {"status": "healthy", "service": "nba-prop-evaluator"}
 
 
+@app.post("/api/flush-cache")
+async def flush_cache(request: Request):
+    """Flush in-memory model and data caches to free RAM.
+
+    Protected by X-Service-Key. Call when Railway memory is high.
+    """
+    from .routers.auth import verify_service_key
+    verify_service_key(request)
+    import gc
+    try:
+        from nba_evaluator import flush_memory_caches
+        flush_memory_caches()
+    except Exception:
+        pass
+    gc.collect()
+    return {"status": "flushed"}
+
+
 @app.get("/")
 async def root():
     """Root endpoint — health check only in production."""
