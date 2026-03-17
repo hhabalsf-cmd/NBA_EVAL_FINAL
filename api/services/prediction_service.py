@@ -33,17 +33,6 @@ def _load_nba_evaluator():
     return _nba_ev
 
 
-_line_predictor_mod = None
-
-def _load_line_predictor():
-    """Lazy-load line_predictor module."""
-    global _line_predictor_mod
-    if _line_predictor_mod is None:
-        import line_predictor as _mod
-        _line_predictor_mod = _mod
-    return _line_predictor_mod
-
-
 # BDL prop_type value -> our stat abbreviation
 _BDL_PROP_TYPE_MAP: Dict[str, str] = {
     "points": "PTS",
@@ -237,11 +226,8 @@ class PredictionService:
         self._injuries_cache_time: float = 0
         self._odds_cache: Optional[Dict] = None
         self._odds_cache_time: float = 0
-        self._bdl_props_cache: Optional[Dict[str, Dict[str, float]]] = None
-        self._bdl_props_cache_time: float = 0
         self._CACHE_TTL = 60 * 60       # 1 hour for stats/injuries
         self._ODDS_CACHE_TTL = 30 * 60  # 30 minutes
-        self._BDL_PROPS_TTL = 30 * 60   # 30 minutes
 
     @property
     def scraper(self):
@@ -272,33 +258,6 @@ class PredictionService:
             self._injuries_cache = self.scraper.get_injury_report()
             self._injuries_cache_time = now
         return self._injuries_cache
-
-    def _get_cached_bdl_props(self) -> Dict[str, Dict[str, float]]:
-        """Return today's BDL props keyed by lowercase player name.
-
-        Cached for 30 minutes. Returns e.g.:
-        {"lebron james": {"PTS": 25.5, "REB": 8.0, "AST": 7.5, "PRA": 41.0}}
-        """
-        now = time.time()
-        if self._bdl_props_cache is not None and (now - self._bdl_props_cache_time) < self._BDL_PROPS_TTL:
-            return self._bdl_props_cache
-
-        try:
-            raw = _fetch_bdl_todays_props()
-        except Exception:
-            raw = []
-
-        by_player = {}
-        for p in raw:
-            name = (p.get("player") or "").lower().strip()
-            stat = p.get("stat")
-            line = p.get("consensus_line")
-            if name and stat and line is not None:
-                by_player.setdefault(name, {})[stat] = float(line)
-
-        self._bdl_props_cache = by_player
-        self._bdl_props_cache_time = now
-        return by_player
 
     @staticmethod
     def _normalize_name(name: str) -> str:
@@ -569,14 +528,14 @@ class PredictionService:
             "message": "Fetching player data..."
         }
 
-        # Fetch game log, next game, team stats, injuries, and BDL props in parallel
+        # Fetch game log, next game, team stats, and injuries in parallel
+        # All four are independent after player_info is resolved
         loop = asyncio.get_event_loop()
-        game_log, game_info, team_stats, injuries, bdl_props = await asyncio.gather(
+        game_log, game_info, team_stats, injuries = await asyncio.gather(
             loop.run_in_executor(None, self.scraper.get_player_game_log, player_info['player_id']),
             loop.run_in_executor(None, self.scraper.get_player_next_game, player_info),
             loop.run_in_executor(None, self.get_team_stats),
             loop.run_in_executor(None, self.get_injuries),
-            loop.run_in_executor(None, self._get_cached_bdl_props),
         )
 
         if game_log is None or game_log.empty:
@@ -613,11 +572,44 @@ class PredictionService:
             "message": "Loading or training model..."
         }
 
-        # Line-anchored model loads/trains inside _run_prediction() below
+        predictor = ev.MLPredictor(model_type=model_type, use_ensemble=use_ensemble)
+
+        # Enforce once-per-night retrain policy
+        retrain_skipped = False
+        if retrain and not ev.should_retrain(player_info['player_name']):
+            retrain = False
+            retrain_skipped = True
+
+        # Offload blocking model load/train/save to thread pool so the
+        # event loop stays responsive for SSE and other requests.
+        def _load_or_train():
+            with _player_model_lock(player_info['player_name']):
+                loaded = not retrain and predictor.load(player_info['player_name'])
+                if loaded:
+                    predictor.update(df_features)
+                else:
+                    if not predictor.train(df_features):
+                        return False, False  # train_failed, loaded
+                predictor.save(player_info['player_name'])
+            return True, loaded  # success, loaded
+
+        success, loaded = await loop.run_in_executor(None, _load_or_train)
+
+        if not success:
+            yield {
+                "stage": "error",
+                "progress": 100,
+                "message": "Insufficient data for training",
+                "data": None
+            }
+            return
+
         yield {
             "stage": "training_model",
             "progress": 70,
-            "message": "Loading line-anchored model..."
+            "message": "Model already retrained tonight — using latest data..." if retrain_skipped else (
+                "Updating model with recent games..." if loaded else "Training new model..."
+            )
         }
 
         # Stage 4: Making predictions
@@ -715,65 +707,52 @@ class PredictionService:
         except Exception:
             pass  # Vegas features optional — defaults in get_prediction_features
 
-        # Offload prediction to thread pool
+        # Offload prediction to thread pool (matrix operations)
         def _run_prediction():
-            lp_mod = _load_line_predictor()
-            line_pred = lp_mod.LineAnchoredPredictor()
-            line_model_loaded = line_pred.load(player_info['player_name'])
+            pred_features = ev.FeatureEngineer.get_prediction_features(
+                df_features,
+                is_home=is_home,
+                opponent=opponent,
+                injuries_team=injuries_team,
+                injuries_opp=injuries_opp,
+                days_rest=days_rest,
+                vs_stats=vs_stats,
+                player_info=player_info,
+                **opp_ctx,
+                **schedule_ctx,
+                **vegas_ctx,
+            )
+            estimated_minutes = ev.FeatureEngineer.estimate_minutes(
+                df_features, is_home, days_rest, injuries_team,
+                games_in_last_7=schedule_ctx.get('games_in_last_7', 2),
+                travel_miles=schedule_ctx.get('travel_miles', 0),
+                is_altitude=schedule_ctx.get('is_altitude', 0),
+                opp_net_rating=opp_ctx.get('opp_net_rating', 0),
+            )
+            predictor._update_recent_averages(df_features)
+            preds = predictor.predict(pred_features, estimated_minutes=estimated_minutes)
+            preds = predictor.apply_injury_boost(preds, injuries_team, injuries_opp)
+            preds = predictor.apply_blowout_discount(
+                preds,
+                opp_net_rating=opp_ctx.get('opp_net_rating', 0),
+                avg_min_l10=estimated_minutes,
+            )
 
-            if not line_model_loaded:
-                # Train on the spot
-                metrics = line_pred.train_all(df_features)
-                if metrics:
-                    line_pred.save(player_info['player_name'])
+            # DTD / questionable self-injury dampener — player returning
+            # from injury or listed as questionable gets predictions reduced.
+            # They typically play fewer minutes or on a minutes restriction.
+            if player_is_questionable:
+                dampening = 0.88  # 12% reduction
+                preds = {
+                    stat: val * dampening for stat, val in preds.items()
+                }
+                # Reconcile PRA with dampened components
+                if all(s in preds for s in ('PTS', 'REB', 'AST')):
+                    preds['PRA'] = preds['PTS'] + preds['REB'] + preds['AST']
 
-            # Anchor to BDL prop line when available, else fall back to ROLL_15
-            player_lines = bdl_props.get(player_info['player_name'].lower().strip(), {})
+            return pred_features, preds
 
-            preds = {}
-            pred_details = {}
-            for stat in ['PTS', 'REB', 'AST', 'PRA']:
-                # Priority: BDL prop line > ROLL_15 > L10 average
-                bdl_line = player_lines.get(stat)
-                if bdl_line is not None and bdl_line > 0:
-                    anchor = float(bdl_line)
-                else:
-                    roll_col = f'ROLL_15_{stat}'
-                    if roll_col in df_features.columns:
-                        anchor = float(df_features[roll_col].iloc[-1])
-                    elif stat == 'PRA' and all(f'ROLL_15_{s}' in df_features.columns for s in ['PTS', 'REB', 'AST']):
-                        anchor = float(
-                            df_features['ROLL_15_PTS'].iloc[-1]
-                            + df_features['ROLL_15_REB'].iloc[-1]
-                            + df_features['ROLL_15_AST'].iloc[-1]
-                        )
-                    elif stat == 'PRA' and all(s in df_features.columns for s in ['PTS', 'REB', 'AST']):
-                        anchor = float((df_features['PTS'] + df_features['REB'] + df_features['AST']).tail(10).mean())
-                    elif stat in df_features.columns:
-                        anchor = float(df_features[stat].tail(10).mean())
-                    else:
-                        continue
-
-                if not line_pred.has_stat(stat) or anchor <= 0:
-                    preds[stat] = round(anchor, 1)
-                    pred_details[stat] = {'residual_std': 5.0, 'prob_over': 50.0}
-                    continue
-
-                try:
-                    features = line_pred._extract_features(
-                        df_features, stat, injuries_opp=injuries_opp,
-                    )
-                    row = features.iloc[[-1]]
-                    result = line_pred.predict(row, stat, anchor)
-                    preds[stat] = result['prediction']
-                    pred_details[stat] = result
-                except Exception:
-                    preds[stat] = round(anchor, 1)
-                    pred_details[stat] = {'residual_std': 5.0, 'prob_over': 50.0}
-
-            return preds, pred_details, line_pred
-
-        predictions, pred_details, line_predictor = await loop.run_in_executor(None, _run_prediction)
+        pred_features, predictions = await loop.run_in_executor(None, _run_prediction)
 
         yield {
             "stage": "predicting",
@@ -787,19 +766,19 @@ class PredictionService:
         if all(c in l10.columns for c in ['PTS', 'REB', 'AST']):
             l10_avgs['PRA'] = round((l10['PTS'] + l10['REB'] + l10['AST']).mean(), 1)
 
-        # Build response from line-anchored predictions
+        # Build response
         stat_predictions = {}
         for stat, pred in predictions.items():
-            details = pred_details.get(stat, {})
-            residual_std = details.get('residual_std', 5.0)
+            confidence_info = predictor.get_confidence(df_features, stat, pred)
+            uncertainty = predictor.get_prediction_uncertainty(pred_features, stat)
 
             stat_predictions[stat] = {
                 "stat": stat,
                 "prediction": round(pred, 1),
-                "confidence": round(details.get('prob_over', 50.0), 0),
-                "range_low": round(pred - 1.5 * residual_std, 1),
-                "range_high": round(pred + 1.5 * residual_std, 1),
-                "uncertainty_std": round(residual_std, 1),
+                "confidence": confidence_info.get('confidence', 70),
+                "range_low": round(confidence_info.get('low', pred * 0.8), 1),
+                "range_high": round(confidence_info.get('high', pred * 1.2), 1),
+                "uncertainty_std": round(uncertainty['std'], 1) if uncertainty else None,
                 "recent_avg": l10_avgs.get(stat),
             }
 
@@ -870,8 +849,8 @@ class PredictionService:
             "game_info": game_info_response,
             "opponent_context": opponent_context,
             "vs_stats": vs_stats_response,
-            "model_type": "line_anchored",
-            "games_trained_on": line_predictor.games_trained_on,
+            "model_type": model_type,
+            "games_trained_on": predictor.games_trained_on,
             "game_log": game_log_data,
             "avg_min_l10": avg_min_l10,
         }
