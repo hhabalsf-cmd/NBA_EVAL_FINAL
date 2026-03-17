@@ -2427,8 +2427,8 @@ class MLPredictor:
             min_threshold = max(15, avg_min * 0.5)  # At least 50% of average or 15 min
             df_clean = df_clean[df_clean['MIN_NUMERIC'] >= min_threshold]
 
-        if len(df_clean) < 20:
-            print("⚠️ Insufficient data for training (need at least 20 games)")
+        if len(df_clean) < 25:
+            print("⚠️ Insufficient data for training (need at least 25 games)")
             return False
 
         # Apply exponential recency weighting.
@@ -3283,37 +3283,46 @@ class MLPredictor:
         sorted_features = sorted(importance.items(), key=lambda x: x[1], reverse=True)
         return sorted_features[:top_n]
     
-    # Per-stat confidence caps — prevents overconfidence on harder-to-predict stats
+    # Per-stat confidence caps — prevents overconfidence on harder-to-predict stats.
+    # Lowered significantly after Brier score analysis (Mar 2026): model was
+    # outputting 60-75% probabilities but hitting ~47%, creating massive
+    # calibration error.  These caps must stay below observed hit rates.
     CONFIDENCE_CAPS = {
-        'PTS': 88,
-        'REB': 82,
-        'AST': 78,  # Hardest to predict — was showing 93% but hitting 38%
-        'PRA': 80,
+        'PTS': 72,   # was 88, actual hit rate ~42%
+        'REB': 68,   # was 82, actual hit rate ~50%
+        'AST': 62,   # was 78, actual hit rate ~50%
+        'PRA': 70,   # was 80
     }
 
-    # Scale factor per stat — normalizes std impact across different stat magnitudes
+    # Scale factor per stat — higher values produce LOWER confidence for the
+    # same std, making the model more conservative.  Increased after Brier
+    # score analysis showed overconfidence across the board.
     CONFIDENCE_STD_SCALE = {
-        'PTS': 3.0,
-        'REB': 5.0,   # REB std is smaller in absolute terms, scale up
-        'AST': 6.0,   # AST std is smallest, scale up most
-        'PRA': 2.5,
+        'PTS': 4.5,   # was 3.0
+        'REB': 7.0,   # was 5.0
+        'AST': 8.0,   # was 6.0
+        'PRA': 3.5,   # was 2.5
     }
 
     def _sample_size_penalty(self):
         """Reduce confidence for models trained on few games.
 
         Returns a multiplier (0-1) that scales down confidence for small samples.
-        Players with <75 games get up to 15% penalty, <100 gets 5%.
+        Steepened after Brier score analysis (Mar 2026): 100+ features on <80 games
+        means heavy overfitting — confidence must be discounted aggressively.
         """
         n = getattr(self, 'games_trained_on', 200)
-        if n >= 100:
+        if n >= 120:
             return 1.0
-        elif n >= 75:
-            # Linear interpolation: 75 games → 0.95, 100 games → 1.0
-            return 0.95 + 0.05 * (n - 75) / 25
+        elif n >= 80:
+            # Linear: 80 → 0.88, 120 → 1.0
+            return 0.88 + 0.12 * (n - 80) / 40
+        elif n >= 50:
+            # Linear: 50 → 0.72, 80 → 0.88
+            return 0.72 + 0.16 * (n - 50) / 30
         else:
-            # Linear interpolation: 30 games → 0.80, 75 games → 0.95
-            return max(0.80, 0.80 + 0.15 * (n - 30) / 45)
+            # Linear: 25 → 0.55, 50 → 0.72
+            return max(0.55, 0.55 + 0.17 * (n - 25) / 25)
 
     def get_confidence(self, df, stat, prediction, features_df=None):
         """Calculate confidence interval using quantile regression when available,
@@ -3362,7 +3371,7 @@ class MLPredictor:
                 scale = self.CONFIDENCE_STD_SCALE.get(stat, 3.0)
                 cap = self.CONFIDENCE_CAPS.get(stat, 85)
                 raw_confidence = 100 - quantile_std * scale
-                confidence = min(cap, max(55, raw_confidence))
+                confidence = min(cap, max(50, raw_confidence))
                 confidence = confidence * sample_penalty  # Apply sample-size discount
 
                 return {
@@ -3383,7 +3392,7 @@ class MLPredictor:
             scale = self.CONFIDENCE_STD_SCALE.get(stat, 3.0)
             cap = self.CONFIDENCE_CAPS.get(stat, 85)
             raw_confidence = 100 - combined_std * scale
-            confidence = min(cap, max(55, raw_confidence))
+            confidence = min(cap, max(50, raw_confidence))
             confidence = confidence * sample_penalty  # Apply sample-size discount
 
             return {
@@ -3606,9 +3615,12 @@ class ProbabilityCalculator:
     """Unified probability calculation used by both LineEvaluator and EnhancedMLPredictor (Improvement #3)."""
 
     # Probability bounds: prevents overconfident extremes that destroy Brier score.
-    # Research shows isotonic regression with y_min=0.02 overfits on small NBA samples.
-    PROB_FLOOR = 15.0
-    PROB_CEIL = 85.0
+    # Tightened from 15/85 after Mar 2026 Brier analysis (0.3238, skill -0.30):
+    # model was assigning 60-75% probabilities but hitting ~47%.  Narrower bounds
+    # push probabilities toward 50% — correct for a model that can't reliably
+    # differentiate winners from losers at the current accuracy level.
+    PROB_FLOOR = 25.0
+    PROB_CEIL = 75.0
 
     @staticmethod
     def calculate(prediction, line, std, calibrator_data=None):
@@ -3624,7 +3636,11 @@ class ProbabilityCalculator:
         Returns:
             Probability of going over (0-100), clipped to [PROB_FLOOR, PROB_CEIL]
         """
-        z = (line - prediction) / (std + 0.1)
+        # Inflate std by 1.5x to account for model error not captured in
+        # historical variance.  The model's residual distribution is wider than
+        # the raw std suggests because features overfit to training noise.
+        adjusted_std = std * 1.5
+        z = (line - prediction) / (adjusted_std + 0.1)
         raw_prob_over = 1 - scipy_stats.norm.cdf(z)
 
         if calibrator_data and 'calibrator' in calibrator_data:

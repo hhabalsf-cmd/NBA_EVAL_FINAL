@@ -81,12 +81,12 @@ def _get_best_headshot_url(player_name: str) -> Optional[str]:
     return _get_nba_headshot_url(player_name)
 
 # ── Configuration ───────────────────────────────────────────────
-MIN_EDGE_PCT = 10.0          # Minimum absolute edge to include
-MAX_EDGE_PCT = 30.0          # Maximum absolute edge — edges >30% hit poorly historically
-MIN_CONFIDENCE = 60.0        # Minimum model confidence
+MIN_EDGE_PCT = 15.0          # Minimum absolute edge (raised from 10: marginal edges are noise)
+MAX_EDGE_PCT = 25.0          # Maximum absolute edge (lowered from 30: extreme edges are model error)
+MIN_CONFIDENCE = 65.0        # Minimum model confidence (raised from 60)
 MAX_PICKS = 10               # Cap on total picks returned
 MIN_MINUTES_AVG = 20.0       # Minimum average minutes to evaluate
-MIN_GAMES_TO_TRAIN = 15      # Minimum historical games to train a model
+MIN_GAMES_TO_TRAIN = 25      # Minimum historical games to train a model (raised from 15)
 STATS_TO_EVALUATE = ['PTS', 'REB', 'AST', 'PRA']
 
 logging.basicConfig(
@@ -618,6 +618,13 @@ def generate_daily_picks() -> list[dict]:
             if l10_avg is None or l10_avg == 0:
                 continue
 
+            # Shrink extreme predictions toward L10 average.
+            # With 50-80 training games and 100+ features the model overfits,
+            # producing extreme point estimates.  Blending 70% model + 30% L10
+            # pulls predictions toward observed recent behavior.
+            SHRINKAGE_ALPHA = 0.70
+            pred_value = round(SHRINKAGE_ALPHA * pred_value + (1 - SHRINKAGE_ALPHA) * l10_avg, 1)
+
             # Try to get real prop line from BDL
             prediction = predictions.get(stat)
             if prediction is None:
@@ -695,6 +702,13 @@ def generate_daily_picks() -> list[dict]:
                     prob_over = confidence if direction == 'OVER' else (100 - confidence)
             except Exception:
                 prob_over = 50.0
+
+            # L10 agreement filter — only pick when L10 average confirms the
+            # model's direction vs the line.  Prevents picks driven solely by
+            # model noise (e.g. model says OVER but L10 avg is clearly UNDER).
+            l10_direction = 'OVER' if l10_avg > line_used else 'UNDER'
+            if l10_direction != direction:
+                continue
 
             # Apply filters
             if confidence < MIN_CONFIDENCE:
