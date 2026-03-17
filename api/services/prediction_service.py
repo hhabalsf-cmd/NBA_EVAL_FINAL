@@ -237,8 +237,11 @@ class PredictionService:
         self._injuries_cache_time: float = 0
         self._odds_cache: Optional[Dict] = None
         self._odds_cache_time: float = 0
+        self._bdl_props_cache: Optional[Dict[str, Dict[str, float]]] = None
+        self._bdl_props_cache_time: float = 0
         self._CACHE_TTL = 60 * 60       # 1 hour for stats/injuries
         self._ODDS_CACHE_TTL = 30 * 60  # 30 minutes
+        self._BDL_PROPS_TTL = 30 * 60   # 30 minutes
 
     @property
     def scraper(self):
@@ -269,6 +272,33 @@ class PredictionService:
             self._injuries_cache = self.scraper.get_injury_report()
             self._injuries_cache_time = now
         return self._injuries_cache
+
+    def _get_cached_bdl_props(self) -> Dict[str, Dict[str, float]]:
+        """Return today's BDL props keyed by lowercase player name.
+
+        Cached for 30 minutes. Returns e.g.:
+        {"lebron james": {"PTS": 25.5, "REB": 8.0, "AST": 7.5, "PRA": 41.0}}
+        """
+        now = time.time()
+        if self._bdl_props_cache is not None and (now - self._bdl_props_cache_time) < self._BDL_PROPS_TTL:
+            return self._bdl_props_cache
+
+        try:
+            raw = _fetch_bdl_todays_props()
+        except Exception:
+            raw = []
+
+        by_player = {}
+        for p in raw:
+            name = (p.get("player") or "").lower().strip()
+            stat = p.get("stat")
+            line = p.get("consensus_line")
+            if name and stat and line is not None:
+                by_player.setdefault(name, {})[stat] = float(line)
+
+        self._bdl_props_cache = by_player
+        self._bdl_props_cache_time = now
+        return by_player
 
     @staticmethod
     def _normalize_name(name: str) -> str:
@@ -539,14 +569,14 @@ class PredictionService:
             "message": "Fetching player data..."
         }
 
-        # Fetch game log, next game, team stats, and injuries in parallel
-        # All four are independent after player_info is resolved
+        # Fetch game log, next game, team stats, injuries, and BDL props in parallel
         loop = asyncio.get_event_loop()
-        game_log, game_info, team_stats, injuries = await asyncio.gather(
+        game_log, game_info, team_stats, injuries, bdl_props = await asyncio.gather(
             loop.run_in_executor(None, self.scraper.get_player_game_log, player_info['player_id']),
             loop.run_in_executor(None, self.scraper.get_player_next_game, player_info),
             loop.run_in_executor(None, self.get_team_stats),
             loop.run_in_executor(None, self.get_injuries),
+            loop.run_in_executor(None, self._get_cached_bdl_props),
         )
 
         if game_log is None or game_log.empty:
@@ -697,23 +727,27 @@ class PredictionService:
                 if metrics:
                     line_pred.save(player_info['player_name'])
 
-            # Use ROLL_15 as anchor (consistent with training proxy)
-            # For each stat, predict residual from L15 baseline
+            # Anchor to BDL prop line when available, else fall back to ROLL_15
+            player_lines = bdl_props.get(player_info['player_name'].lower().strip(), {})
+
             preds = {}
             pred_details = {}
             for stat in ['PTS', 'REB', 'AST', 'PRA']:
-                roll_col = f'ROLL_15_{stat}'
-                if roll_col in df_features.columns:
-                    anchor = float(df_features[roll_col].iloc[-1])
-                elif stat == 'PRA' and all(f'ROLL_15_{s}' in df_features.columns for s in ['PTS', 'REB', 'AST']):
-                    anchor = float(
-                        df_features['ROLL_15_PTS'].iloc[-1]
-                        + df_features['ROLL_15_REB'].iloc[-1]
-                        + df_features['ROLL_15_AST'].iloc[-1]
-                    )
+                # Priority: BDL prop line > ROLL_15 > L10 average
+                bdl_line = player_lines.get(stat)
+                if bdl_line is not None and bdl_line > 0:
+                    anchor = float(bdl_line)
                 else:
-                    # Fallback to L10 average
-                    if stat == 'PRA' and all(s in df_features.columns for s in ['PTS', 'REB', 'AST']):
+                    roll_col = f'ROLL_15_{stat}'
+                    if roll_col in df_features.columns:
+                        anchor = float(df_features[roll_col].iloc[-1])
+                    elif stat == 'PRA' and all(f'ROLL_15_{s}' in df_features.columns for s in ['PTS', 'REB', 'AST']):
+                        anchor = float(
+                            df_features['ROLL_15_PTS'].iloc[-1]
+                            + df_features['ROLL_15_REB'].iloc[-1]
+                            + df_features['ROLL_15_AST'].iloc[-1]
+                        )
+                    elif stat == 'PRA' and all(s in df_features.columns for s in ['PTS', 'REB', 'AST']):
                         anchor = float((df_features['PTS'] + df_features['REB'] + df_features['AST']).tail(10).mean())
                     elif stat in df_features.columns:
                         anchor = float(df_features[stat].tail(10).mean())
