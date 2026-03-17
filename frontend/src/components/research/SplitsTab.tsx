@@ -1,8 +1,12 @@
 import {
   TrendingUp, TrendingDown,
   Home, Plane, Zap, RefreshCw, Shield, ShieldOff, Trophy, ThumbsDown,
+  UserMinus, Swords, Loader2,
 } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import type { StatSplits } from '../../api/client'
+import { getPlayerScenarios } from '../../api/client'
+import type { PlayerScenario } from '../../api/client'
 import type { ResearchTabProps, Stat } from './types'
 import { STAT_LABELS, getStatValue, delta } from './types'
 
@@ -66,7 +70,81 @@ function SplitCard({
   )
 }
 
-export default function SplitsTab({ data, activeStat, seasonAvg }: ResearchTabProps) {
+function ScenarioCard({
+  scenario,
+  stat,
+}: {
+  scenario: PlayerScenario
+  stat: Stat
+}) {
+  const withVal = getStatValue(scenario.with_splits, stat)
+  const withoutVal = getStatValue(scenario.without_splits, stat)
+  const d = delta(withoutVal, withVal)
+  const isUp = d > 0
+  const Arrow = isUp ? TrendingUp : TrendingDown
+  const arrowColor = isUp ? 'var(--accent-success)' : 'var(--accent-danger)'
+
+  return (
+    <div
+      className="rounded-xl p-4 flex flex-col gap-2 min-w-[160px] flex-shrink-0"
+      style={{ background: 'var(--bg-elevated)', border: '1px solid rgba(255,255,255,0.06)' }}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+          {scenario.player_name}
+        </span>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {scenario.currently_out && (
+            <span
+              className="text-[10px] font-bold px-1.5 py-0.5 rounded"
+              style={{ background: 'rgba(239,68,68,0.15)', color: 'var(--accent-danger)' }}
+            >OUT</span>
+          )}
+          <span
+            className="text-[10px] rounded px-1.5 py-0.5 font-mono"
+            style={{ background: 'rgba(255,255,255,0.04)', color: 'var(--text-muted)' }}
+          >{scenario.without_splits.games}G</span>
+        </div>
+      </div>
+      <div>
+        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Without: </span>
+        <span className="text-xl font-bold font-mono" style={{ color: 'var(--text-primary)' }}>
+          {withoutVal.toFixed(1)}
+        </span>
+      </div>
+      <div className="flex items-center gap-1" style={{ color: arrowColor }}>
+        <Arrow className="w-3 h-3" strokeWidth={2.5} />
+        <span className="text-xs font-semibold">{d > 0 ? `+${d}` : d} vs with</span>
+      </div>
+      <div className="pt-1" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+        <span className="text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>
+          With ({scenario.with_splits.games}G): {withVal.toFixed(1)}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+export default function SplitsTab({ data, activeStat, seasonAvg, playerName }: ResearchTabProps) {
+  const { data: scenarios, isLoading: scenariosLoading } = useQuery({
+    queryKey: ['player-scenarios', playerName],
+    queryFn: () => getPlayerScenarios(playerName),
+    enabled: !!playerName,
+    staleTime: 1000 * 60 * 5,
+    retry: 1,
+  })
+
+  // Re-sort scenarios by active stat impact
+  const sortedTeammates = (scenarios?.teammate_scenarios ?? []).slice().sort(
+    (a, b) => Math.abs(getStatValue(b.without_splits, activeStat) - getStatValue(b.with_splits, activeStat))
+            - Math.abs(getStatValue(a.without_splits, activeStat) - getStatValue(a.with_splits, activeStat))
+  )
+
+  const sortedOpponents = (scenarios?.opponent_scenarios ?? []).slice().sort(
+    (a, b) => Math.abs(getStatValue(b.without_splits, activeStat) - getStatValue(b.with_splits, activeStat))
+            - Math.abs(getStatValue(a.without_splits, activeStat) - getStatValue(a.with_splits, activeStat))
+  )
+
   return (
     <div className="flex flex-col gap-5">
       <div>
@@ -88,6 +166,60 @@ export default function SplitsTab({ data, activeStat, seasonAvg }: ResearchTabPr
           )}
         </div>
       </div>
+
+      {/* ── Teammate Absence Scenarios ── */}
+      <div>
+        <div className="flex items-center gap-1.5 mb-3">
+          <UserMinus className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
+          <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
+            Without Key Teammates
+          </h2>
+        </div>
+        {scenariosLoading ? (
+          <div className="flex items-center gap-2 py-4">
+            <Loader2 className="w-4 h-4 animate-spin" style={{ color: 'var(--text-muted)' }} />
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Loading scenarios...</span>
+          </div>
+        ) : sortedTeammates.length > 0 ? (
+          <div className="flex gap-3 overflow-x-auto pb-2 no-scrollbar">
+            {sortedTeammates.map(s => (
+              <ScenarioCard key={s.player_id} scenario={s} stat={activeStat} />
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs py-3" style={{ color: 'var(--text-muted)' }}>
+            No significant teammate absences found
+          </p>
+        )}
+      </div>
+
+      {/* ── Opponent Absence Scenarios ── */}
+      {data.next_game && (
+        <div>
+          <div className="flex items-center gap-1.5 mb-3">
+            <Swords className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
+            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
+              vs {data.next_game.opponent} Without Key Players
+            </h2>
+          </div>
+          {scenariosLoading ? (
+            <div className="flex items-center gap-2 py-4">
+              <Loader2 className="w-4 h-4 animate-spin" style={{ color: 'var(--text-muted)' }} />
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Loading scenarios...</span>
+            </div>
+          ) : sortedOpponents.length > 0 ? (
+            <div className="flex gap-3 overflow-x-auto pb-2 no-scrollbar">
+              {sortedOpponents.map(s => (
+                <ScenarioCard key={s.player_id} scenario={s} stat={activeStat} />
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs py-3" style={{ color: 'var(--text-muted)' }}>
+              No matchup history available
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Season average reference */}
       <div

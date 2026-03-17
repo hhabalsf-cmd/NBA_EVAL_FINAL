@@ -27,9 +27,12 @@ from ..schemas.prediction import (
     StatAnalysis,
     RollingAverages,
     PlayerResearchResponse,
+    PlayerScenario,
+    ScenariosResponse,
 )
 from ..services.prediction_service import PredictionService
-from bdl_id_mapper import get_team_mapper
+from bdl_id_mapper import get_team_mapper, get_player_mapper
+from bdl_client import get_bdl_client
 
 router = APIRouter(prefix="/api/players", tags=["players"])
 
@@ -42,6 +45,10 @@ def get_prediction_service() -> PredictionService:
     if _prediction_service is None:
         _prediction_service = PredictionService()
     return _prediction_service
+
+
+# Scenarios cache: player_id → (timestamp, ScenariosResponse). 1-hour TTL.
+_scenarios_cache: dict = {}
 
 
 @router.get("/search", response_model=PlayerSearchResult)
@@ -543,6 +550,274 @@ async def get_player_research(request: Request, player_name: str):
         vs_stats=vs_stats_obj,
         analysis=analysis,
     )
+
+
+@router.get("/{player_name}/scenarios", response_model=ScenariosResponse)
+@limiter.limit("20/minute")
+async def get_player_scenarios(request: Request, player_name: str):
+    """
+    Get 'with/without' absence splits for teammates and opponents.
+    Shows how the player's stats change when specific teammates or opponent
+    players are absent. Loaded separately from /research for performance.
+    """
+    import time as _time
+
+    service = get_prediction_service()
+
+    # --- Player info ---
+    player_info = service.get_player_info(player_name)
+    if not player_info:
+        raise HTTPException(status_code=404, detail=f"Player '{player_name}' not found")
+
+    player_id = player_info.get('id') or player_info.get('player_id')
+    team_abbrev = (player_info.get('team_abbrev', '')
+                   or player_info.get('team_abbreviation', ''))
+
+    # --- Check cache ---
+    cache_key = f"scenarios_{player_id}"
+    cached = _scenarios_cache.get(cache_key)
+    if cached is not None:
+        ts, result = cached
+        if (_time.time() - ts) < 3600:  # 1-hour TTL
+            return result
+
+    # --- Game log ---
+    try:
+        raw_df = service.scraper.get_player_game_log(player_id)
+    except Exception as e:
+        logger.error("Scenarios: failed to fetch game log for %s: %s", player_id, e)
+        return ScenariosResponse(teammate_scenarios=[], opponent_scenarios=[])
+
+    if raw_df is None or raw_df.empty:
+        return ScenariosResponse(teammate_scenarios=[], opponent_scenarios=[])
+
+    # Use last 40 games (same window as research endpoint)
+    if 'GAME_DATE' in raw_df.columns:
+        raw_df = raw_df.copy()
+        raw_df['_sort_dt'] = pd.to_datetime(raw_df['GAME_DATE'], format='mixed')
+        raw_df = (raw_df.sort_values('_sort_dt', ascending=True)
+                  .drop(columns=['_sort_dt']).reset_index(drop=True))
+    df = raw_df.tail(40).copy()
+
+    # Extract Game_ID list (BDL game IDs)
+    if 'Game_ID' not in df.columns:
+        return ScenariosResponse(teammate_scenarios=[], opponent_scenarios=[])
+
+    game_ids = [int(gid) for gid in df['Game_ID'].dropna().unique().tolist()]
+    if not game_ids:
+        return ScenariosResponse(teammate_scenarios=[], opponent_scenarios=[])
+
+    # --- Fetch all player stats for these games (batched) ---
+    bdl = get_bdl_client()
+
+    all_stats = []
+    batch_size = 15
+    for i in range(0, len(game_ids), batch_size):
+        chunk = game_ids[i:i + batch_size]
+        try:
+            all_stats.extend(bdl.get_player_stats(game_ids=chunk))
+        except Exception as e:
+            logger.warning("Scenarios: BDL batch %d failed: %s", i, e)
+
+    if not all_stats:
+        return ScenariosResponse(teammate_scenarios=[], opponent_scenarios=[])
+
+    # --- Build player -> set(game_ids_played) mapping ---
+    player_games: dict = {}       # bdl_player_id -> set of game_ids
+    player_names: dict = {}       # bdl_player_id -> full name
+    player_team_per_game: dict = {}  # (bdl_player_id, game_id) -> team_abbrev
+
+    for stat in all_stats:
+        p_obj = stat.get('player') or {}
+        p_id = p_obj.get('id')
+        g_obj = stat.get('game') or {}
+        g_id = g_obj.get('id')
+        if p_id is None or g_id is None:
+            continue
+
+        player_games.setdefault(p_id, set()).add(g_id)
+
+        if p_id not in player_names:
+            first = (p_obj.get('first_name') or '').strip()
+            last = (p_obj.get('last_name') or '').strip()
+            player_names[p_id] = f"{first} {last}".strip()
+
+        # Resolve team abbreviation for this stat line
+        stat_team = stat.get('team') or {}
+        t_abbrev = str(stat_team.get('abbreviation') or '').upper()
+        if not t_abbrev:
+            p_team = p_obj.get('team') or {}
+            t_abbrev = str(p_team.get('abbreviation') or '').upper()
+        player_team_per_game[(p_id, g_id)] = t_abbrev
+
+    # --- Identify target player's BDL ID ---
+    player_mapper = get_player_mapper()
+    bdl_player_id = player_mapper.nba_to_bdl(int(player_id), player_name)
+    if bdl_player_id is None:
+        bdl_player_id = int(player_id)
+
+    target_game_id_set = set(game_ids)
+
+    # --- Helper: compute StatSplits from a sub-DataFrame ---
+    def _f(row, col, default=0.0):
+        v = row.get(col, default)
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return 0.0
+        return float(v)
+
+    def _splits_from_df(sub: pd.DataFrame):
+        n = len(sub)
+        if n == 0:
+            return StatSplits(games=0, pts=0, reb=0, ast=0, pra=0, min=0)
+        pts = [_f(r, 'PTS') for _, r in sub.iterrows()]
+        reb = [_f(r, 'REB') for _, r in sub.iterrows()]
+        ast = [_f(r, 'AST') for _, r in sub.iterrows()]
+        stl = [_f(r, 'STL') for _, r in sub.iterrows()]
+        blk = [_f(r, 'BLK') for _, r in sub.iterrows()]
+        tov = [_f(r, 'TOV') for _, r in sub.iterrows()]
+        fg3m = [_f(r, 'FG3M') for _, r in sub.iterrows()]
+        mins = [_f(r, 'MIN') for _, r in sub.iterrows()]
+        avg = lambda vals: round(sum(vals) / n, 1)
+        return StatSplits(
+            games=n,
+            pts=avg(pts), reb=avg(reb), ast=avg(ast),
+            pra=avg([p + r + a for p, r, a in zip(pts, reb, ast)]),
+            pr=avg([p + r for p, r in zip(pts, reb)]),
+            pa=avg([p + a for p, a in zip(pts, ast)]),
+            stl=avg(stl), blk=avg(blk), tov=avg(tov),
+            fg3m=avg(fg3m), min=avg(mins),
+        )
+
+    # --- Injuries (for currently_out flag) ---
+    try:
+        injuries = service.get_injuries()
+    except Exception:
+        injuries = {}
+
+    injured_names = set()
+    for _team_abbr, team_data in injuries.items():
+        for p in team_data.get('players', []):
+            if p.get('status') == 'out':
+                injured_names.add(p.get('name', '').strip().lower())
+
+    # --- Teammate scenarios ---
+    teammate_scenarios = []
+
+    for p_id, games_played in player_games.items():
+        if p_id == bdl_player_id:
+            continue  # skip self
+
+        # Check if this player was on the same team in any game
+        same_team_games = set()
+        for gid in games_played:
+            if player_team_per_game.get((p_id, gid), '') == team_abbrev:
+                same_team_games.add(gid)
+
+        # Must have played 5+ games WITH the target (trade filter)
+        games_with = same_team_games & target_game_id_set
+        if len(games_with) < 5:
+            continue
+
+        games_without = target_game_id_set - same_team_games
+        if len(games_without) < 3:
+            continue  # not enough absence data
+
+        # Compute splits
+        with_df = df[df['Game_ID'].isin(games_with)]
+        without_df = df[df['Game_ID'].isin(games_without)]
+
+        with_splits = _splits_from_df(with_df)
+        without_splits = _splits_from_df(without_df)
+
+        name = player_names.get(p_id, f"Player {p_id}")
+        is_out = name.strip().lower() in injured_names
+
+        teammate_scenarios.append(PlayerScenario(
+            player_name=name,
+            player_id=p_id,
+            role="teammate",
+            with_splits=with_splits,
+            without_splits=without_splits,
+            currently_out=is_out,
+        ))
+
+    # Sort by PTS impact (descending absolute delta)
+    teammate_scenarios.sort(
+        key=lambda s: abs(s.without_splits.pts - s.with_splits.pts),
+        reverse=True,
+    )
+    teammate_scenarios = teammate_scenarios[:8]  # cap at 8
+
+    # --- Opponent scenarios ---
+    opponent_scenarios = []
+
+    # Only compute for next game opponent
+    try:
+        game_info_raw = service.scraper.get_player_next_game(player_info)
+    except Exception:
+        game_info_raw = None
+
+    if game_info_raw:
+        opp_abbrev = game_info_raw.get('opponent', '')
+        if opp_abbrev:
+            def _opp_abbrev(matchup: str) -> str:
+                if not matchup:
+                    return ''
+                parts = matchup.replace('vs.', '@').split('@')
+                return parts[-1].strip().upper() if len(parts) >= 2 else ''
+
+            # Filter target player's games vs this opponent
+            vs_opp_mask = df['MATCHUP'].apply(
+                lambda m: _opp_abbrev(str(m)) == opp_abbrev
+            )
+            vs_opp_game_ids = set(
+                df[vs_opp_mask]['Game_ID'].dropna().astype(int).tolist()
+            )
+
+            if vs_opp_game_ids:
+                for p_id, games_played in player_games.items():
+                    opp_games = set()
+                    for gid in games_played:
+                        if (player_team_per_game.get((p_id, gid), '')
+                                == opp_abbrev):
+                            opp_games.add(gid)
+
+                    opp_h2h_present = opp_games & vs_opp_game_ids
+                    opp_h2h_absent = vs_opp_game_ids - opp_games
+
+                    if not opp_h2h_present or not opp_h2h_absent:
+                        continue  # need both present and absent games
+
+                    with_df = df[df['Game_ID'].isin(opp_h2h_present)]
+                    without_df = df[df['Game_ID'].isin(opp_h2h_absent)]
+
+                    with_splits = _splits_from_df(with_df)
+                    without_splits = _splits_from_df(without_df)
+
+                    name = player_names.get(p_id, f"Player {p_id}")
+                    is_out = name.strip().lower() in injured_names
+
+                    opponent_scenarios.append(PlayerScenario(
+                        player_name=name,
+                        player_id=p_id,
+                        role="opponent",
+                        with_splits=with_splits,
+                        without_splits=without_splits,
+                        currently_out=is_out,
+                    ))
+
+            opponent_scenarios.sort(
+                key=lambda s: abs(s.without_splits.pts - s.with_splits.pts),
+                reverse=True,
+            )
+            opponent_scenarios = opponent_scenarios[:8]
+
+    response = ScenariosResponse(
+        teammate_scenarios=teammate_scenarios,
+        opponent_scenarios=opponent_scenarios,
+    )
+    _scenarios_cache[cache_key] = (_time.time(), response)
+    return response
 
 
 @router.post("/evaluate-line", response_model=LineEvaluation)

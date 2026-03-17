@@ -910,6 +910,28 @@ export async function getPlayerResearch(playerName: string): Promise<PlayerResea
   return res.json()
 }
 
+// ── Scenarios (with/without teammate/opponent splits) ─────────────────────
+
+export interface PlayerScenario {
+  player_name: string
+  player_id: number
+  role: 'teammate' | 'opponent'
+  with_splits: StatSplits
+  without_splits: StatSplits
+  currently_out: boolean
+}
+
+export interface ScenariosData {
+  teammate_scenarios: PlayerScenario[]
+  opponent_scenarios: PlayerScenario[]
+}
+
+export async function getPlayerScenarios(playerName: string): Promise<ScenariosData> {
+  const res = await apiFetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/scenarios`)
+  if (!res.ok) throw new Error(`Failed to fetch scenarios for ${playerName}`)
+  return res.json()
+}
+
 // ── Social / Leaderboard Types ──────────────────────────────────────────────
 
 export interface LeaderboardEntry {

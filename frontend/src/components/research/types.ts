@@ -55,4 +55,5 @@ export interface ResearchTabProps {
   setActiveStat: (s: Stat) => void
   parsedLine: number | null
   seasonAvg: number
+  playerName: string
 }

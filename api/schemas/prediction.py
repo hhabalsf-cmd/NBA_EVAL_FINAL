@@ -472,6 +472,23 @@ class PlayerResearchResponse(BaseModel):
     analysis: Optional[Dict[str, StatAnalysis]] = None  # keyed by stat name
 
 
+# === Scenarios Schemas ===
+
+class PlayerScenario(BaseModel):
+    """A teammate or opponent with 'with/without' stat splits."""
+    player_name: str
+    player_id: int
+    role: str  # "teammate" or "opponent"
+    with_splits: StatSplits
+    without_splits: StatSplits
+    currently_out: bool = False
+
+
+class ScenariosResponse(BaseModel):
+    teammate_scenarios: List[PlayerScenario]
+    opponent_scenarios: List[PlayerScenario]
+
+
 # === Parlay Schemas ===
 
 class ParlayLegDetail(BaseModel):

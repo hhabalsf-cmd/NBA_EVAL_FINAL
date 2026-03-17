@@ -119,7 +119,7 @@ export default function ResearchPage() {
 
   // ── Shared tab props ──────────────────────────────────────────────────────
 
-  const tabProps = { data, activeStat, setActiveStat, parsedLine, seasonAvg }
+  const tabProps = { data, activeStat, setActiveStat, parsedLine, seasonAvg, playerName: decoded }
 
   // ── Render ────────────────────────────────────────────────────────────────
 
