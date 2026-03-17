@@ -3615,12 +3615,8 @@ class ProbabilityCalculator:
     """Unified probability calculation used by both LineEvaluator and EnhancedMLPredictor (Improvement #3)."""
 
     # Probability bounds: prevents overconfident extremes that destroy Brier score.
-    # Tightened from 15/85 after Mar 2026 Brier analysis (0.3238, skill -0.30):
-    # model was assigning 60-75% probabilities but hitting ~47%.  Narrower bounds
-    # push probabilities toward 50% — correct for a model that can't reliably
-    # differentiate winners from losers at the current accuracy level.
-    PROB_FLOOR = 25.0
-    PROB_CEIL = 75.0
+    PROB_FLOOR = 20.0
+    PROB_CEIL = 80.0
 
     @staticmethod
     def calculate(prediction, line, std, calibrator_data=None):
@@ -3636,11 +3632,7 @@ class ProbabilityCalculator:
         Returns:
             Probability of going over (0-100), clipped to [PROB_FLOOR, PROB_CEIL]
         """
-        # Inflate std by 1.5x to account for model error not captured in
-        # historical variance.  The model's residual distribution is wider than
-        # the raw std suggests because features overfit to training noise.
-        adjusted_std = std * 1.5
-        z = (line - prediction) / (adjusted_std + 0.1)
+        z = (line - prediction) / (std + 0.1)
         raw_prob_over = 1 - scipy_stats.norm.cdf(z)
 
         if calibrator_data and 'calibrator' in calibrator_data:

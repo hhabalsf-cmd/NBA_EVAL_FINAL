@@ -574,31 +574,15 @@ def generate_daily_picks() -> list[dict]:
         # Ensure recent averages are fresh (not stale from pickle) before predicting
         predictor._update_recent_averages(df)
 
-        # Predict and apply injury-based usage adjustments
+        # Predict — raw model output only.
+        # Removed apply_injury_boost, apply_blowout_discount, and DTD dampening:
+        # these hard-coded adjustments inflated predictions far beyond the raw
+        # model (e.g. 4.6 → 7.0), creating a disconnect with PlayerPage and
+        # adding noise.  The model already has injury/defensive context in its
+        # features (OPP_DEF_RATING, opponent injury stats).  L10 shrinkage
+        # below is the only post-model adjustment.
         try:
             predictions = predictor.predict(features_df, estimated_minutes=estimated_minutes)
-            predictions = predictor.apply_injury_boost(predictions, injuries_team, injuries_opp)
-            predictions = predictor.apply_blowout_discount(
-                predictions,
-                opp_net_rating=opp_ctx.get('opp_net_rating', 0),
-                avg_min_l10=estimated_minutes,
-            )
-
-            # DTD / questionable self-injury dampener — player returning
-            # from injury or listed as questionable gets predictions reduced.
-            player_injury_status = scraper.get_player_injury_status(
-                player_name, injuries
-            )
-            if (
-                player_injury_status.get('is_injured', False)
-                and player_injury_status.get('status') in ('questionable', 'doubtful')
-            ):
-                dampening = 0.88  # 12% reduction
-                predictions = {
-                    stat: val * dampening for stat, val in predictions.items()
-                }
-                if all(s in predictions for s in ('PTS', 'REB', 'AST')):
-                    predictions['PRA'] = predictions['PTS'] + predictions['REB'] + predictions['AST']
         except Exception as e:
             logger.warning(f"  ⚠️ Prediction failed for {player_name}: {e}")
             continue
