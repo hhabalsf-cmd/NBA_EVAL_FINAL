@@ -21,11 +21,15 @@ import time
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
 _RETRY_DELAYS = [1, 2, 4, 8, 16]   # seconds — one entry per retry attempt
 _BASE_URL = "https://api.balldontlie.io"
+_CONNECT_TIMEOUT = 10   # seconds — TCP handshake
+_READ_TIMEOUT = 30      # seconds — waiting for response body
 _DEFAULT_PER_PAGE = 100
 _MAX_PAGES = 500   # safety cap for unbounded pagination
 
@@ -46,6 +50,19 @@ class BDLClient:
     def __init__(self, api_key: str) -> None:
         self._session = requests.Session()
         self._session.headers.update({"Authorization": api_key, "Accept": "application/json"})
+
+        # Transport-level retry for connection errors and broken pipes.
+        # Application-level retry in _request_with_retry handles 429 / 5xx.
+        transport_retry = Retry(
+            total=2,
+            backoff_factor=0.5,
+            status_forcelist=[],  # handled by _request_with_retry
+            allowed_methods=["GET"],
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=transport_retry)
+        self._session.mount("https://", adapter)
+        self._session.mount("http://", adapter)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -86,7 +103,7 @@ class BDLClient:
                 time.sleep(delay)
 
             try:
-                resp = self._session.request(method, url, params=params, timeout=45)
+                resp = self._session.request(method, url, params=params, timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT))
             except requests.RequestException as exc:
                 last_exc = exc
                 logger.warning("BDL request error (attempt %d): %s", attempt, exc)
