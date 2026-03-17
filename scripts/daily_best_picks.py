@@ -41,10 +41,10 @@ import db
 from nba_evaluator import (
     NBADataScraper,
     FeatureEngineer,
-    MLPredictor,
     MODEL_DIR,
     CURRENT_SEASON,
 )
+from line_predictor import LineAnchoredPredictor
 
 # ── NBA CDN headshot fallback ──────────────────────────────────
 _nba_name_to_id: dict[str, int] = {}
@@ -81,9 +81,9 @@ def _get_best_headshot_url(player_name: str) -> Optional[str]:
     return _get_nba_headshot_url(player_name)
 
 # ── Configuration ───────────────────────────────────────────────
-MIN_EDGE_PCT = 10.0          # Minimum absolute edge (shrinkage already dampens edges)
-MAX_EDGE_PCT = 28.0          # Maximum absolute edge (lowered from 30: extreme edges are model error)
-MIN_CONFIDENCE = 55.0        # Minimum model confidence (lowered: caps + sample penalty are stricter now)
+MIN_EDGE_PCT = 5.0           # Residual-based edges are smaller and more meaningful
+MAX_EDGE_PCT = 25.0          # Large residual edge = genuine signal, not noise
+MIN_CONFIDENCE = 55.0        # Confidence derived from prob_over
 MAX_PICKS = 20               # Cap on total picks returned
 MIN_MINUTES_AVG = 20.0       # Minimum average minutes to evaluate
 MIN_GAMES_TO_TRAIN = 25      # Minimum historical games to train a model (raised from 15)
@@ -500,197 +500,100 @@ def generate_daily_picks() -> list[dict]:
             players_skipped += 1
             continue
 
-        # Load or train model
-        predictor = MLPredictor(model_type='gradient_boost')
+        # ── Load or train line-anchored model ───────────────────────
+        predictor = LineAnchoredPredictor()
         model_loaded = predictor.load(player_name)
 
         if not model_loaded:
-            # Train a new model on the spot
-            logger.info(f"  🔧 Training new model for {player_name} ({len(df)} games)...")
+            logger.info(f"  🔧 Training line-anchored model for {player_name} ({len(df)} games)...")
             try:
-                train_success = predictor.train(df, stats=STATS_TO_EVALUATE[:3])  # PTS, REB, AST
-                if not train_success:
-                    logger.warning(f"  ⚠️ Training failed for {player_name}")
+                metrics = predictor.train_all(df)
+                if not metrics:
+                    logger.warning(f"  ⚠️ Line model training failed for {player_name}")
                     players_skipped += 1
                     continue
                 predictor.save(player_name)
                 models_trained += 1
             except Exception as e:
-                logger.warning(f"  ⚠️ Training error for {player_name}: {e}")
+                logger.warning(f"  ⚠️ Line model training error for {player_name}: {e}")
                 players_skipped += 1
                 continue
-        else:
-            # Warm-start update with latest game data
-            try:
-                predictor.update(df)
-                predictor.save(player_name)
-            except Exception as e:
-                logger.warning(f"  ⚠️ Update error for {player_name}: {e}")
 
-        # Calculate actual days rest from game log
-        days_rest = 2
-        if 'GAME_DATE' in df.columns and len(df) > 1:
-            try:
-                last_game = pd.to_datetime(df['GAME_DATE'].iloc[-1])
-                days_rest = min((datetime.now() - last_game).days, 7)
-            except Exception:
-                pass
-
-        # Get full opponent context (enhanced stats)
-        opp_ctx = FeatureEngineer.extract_opp_stats(team_stats, opponent)
-
-        # Get injury counts for this matchup
-        injuries_team = injuries.get(team_abbrev, {}).get('out', 0)
+        # Get injury count for opponent
         injuries_opp = injuries.get(opponent, {}).get('out', 0)
 
-        # Get head-to-head stats from already-loaded game log (zero API calls)
-        vs_stats = _compute_vs_stats(game_log, opponent)
+        # Look up BDL player ID for prop line matching
+        bdl_id = None
+        if player_mapper is not None:
+            try:
+                bdl_id = player_mapper.nba_to_bdl(int(player_id), player_name=player_name)
+            except Exception as exc:
+                logger.debug(f"BDL ID lookup failed for {player_name} (NBA ID: {player_id}): {exc}")
 
-        # Get prediction features for today's game
-        try:
-            features_df = FeatureEngineer.get_prediction_features(
-                df,
-                is_home=1 if is_home else 0,
-                opponent=opponent,
-                injuries_team=injuries_team,
-                injuries_opp=injuries_opp,
-                days_rest=days_rest,
-                vs_stats=vs_stats,
-                player_info=player_info,
-                **opp_ctx,
-            )
-        except Exception as e:
-            logger.warning(f"  ⚠️ Prediction features failed for {player_name}: {e}")
-            continue
+        # Get player's prop lines
+        player_props = None
+        if bdl_id is not None:
+            player_props = props_lookup.get('by_id', {}).get(bdl_id, {})
+        if not player_props:
+            player_name_lower = str(player_name or '').strip().lower()
+            player_props = props_lookup.get('by_name', {}).get(player_name_lower, {})
 
-        # Estimate minutes
-        estimated_minutes = FeatureEngineer.estimate_minutes(
-            df,
-            is_home=1 if is_home else 0,
-            days_rest=days_rest,
-            injuries_team=injuries_team,
-        )
-
-        # Ensure recent averages are fresh (not stale from pickle) before predicting
-        predictor._update_recent_averages(df)
-
-        # Predict — raw model output only.
-        # Removed apply_injury_boost, apply_blowout_discount, and DTD dampening:
-        # these hard-coded adjustments inflated predictions far beyond the raw
-        # model (e.g. 4.6 → 7.0), creating a disconnect with PlayerPage and
-        # adding noise.  The model already has injury/defensive context in its
-        # features (OPP_DEF_RATING, opponent injury stats).  L10 shrinkage
-        # below is the only post-model adjustment.
-        try:
-            predictions = predictor.predict(features_df, estimated_minutes=estimated_minutes)
-        except Exception as e:
-            logger.warning(f"  ⚠️ Prediction failed for {player_name}: {e}")
+        if not player_props:
+            skipped_missing_lines += 1
             continue
 
         players_evaluated += 1
 
-        # Evaluate each stat
+        # ── Evaluate each stat using line-anchored prediction ─────
         for stat in STATS_TO_EVALUATE:
-            pred_value = predictions.get(stat)
-            if pred_value is None or np.isnan(pred_value):
+            if not predictor.has_stat(stat):
                 continue
 
-            pred_value = round(float(pred_value), 1)
-
-            # L10 average (always computed as secondary reference)
-            l10_avg = _compute_l10_avg(game_log, stat)
-            if l10_avg is None or l10_avg == 0:
-                continue
-
-            # Shrink extreme predictions toward L10 average.
-            # With 50-80 training games and 100+ features the model overfits,
-            # producing extreme point estimates.  Blending 70% model + 30% L10
-            # pulls predictions toward observed recent behavior.
-            SHRINKAGE_ALPHA = 0.80
-            pred_value = round(SHRINKAGE_ALPHA * pred_value + (1 - SHRINKAGE_ALPHA) * l10_avg, 1)
-
-            # Try to get real prop line from BDL
-            prediction = predictions.get(stat)
-            if prediction is None:
-                continue
-
-            # Need odds line to evaluate edge
-            # 1. Try BDL ID first
-            bdl_id = None
-            if player_mapper is not None:
-                try:
-                    bdl_id = player_mapper.nba_to_bdl(int(player_id), player_name=player_name)
-                except Exception as exc:
-                    logger.debug(f"BDL ID lookup failed for {player_name} (NBA ID: {player_id}): {exc}")
-            
-            # 2. Extract props
-            player_props = None
-            if bdl_id is not None:
-                player_props = props_lookup.get('by_id', {}).get(bdl_id, {})
-                
-            # 3. Fallback to name search if ID failed or no props
-            if not player_props:
-                player_name_lower = str(player_name or '').strip().lower()
-                player_props = props_lookup.get('by_name', {}).get(player_name_lower, {})
-                if player_props:
-                    logger.debug(f"Used name fallback for props lookup on {player_name}")
-
-            if not player_props:
-                skipped_missing_lines += 1
-                continue
-
+            # Must have a prop line to anchor to
             odds_line = player_props.get(stat)
             if odds_line is None:
                 skipped_missing_lines += 1
                 continue
-            odds_line = round(float(odds_line), 1) # Ensure odds_line is rounded float
-
-            # Use real line if available, else fall back to L10 average
-            line_used = odds_line if odds_line is not None else l10_avg
-            if line_used is None or line_used == 0:
+            odds_line = round(float(odds_line), 1)
+            if odds_line <= 0:
                 continue
 
-            # Recompute edge against whichever line is used
-            edge_pct = round(((pred_value - line_used) / line_used) * 100, 1)
+            # L10 average for agreement filter
+            l10_avg = _compute_l10_avg(game_log, stat)
+            if l10_avg is None or l10_avg == 0:
+                continue
+
+            # Extract features and predict residual from line
+            try:
+                la_features = predictor._extract_features(
+                    df, stat, injuries_opp=injuries_opp,
+                )
+                la_row = la_features.iloc[[-1]]  # last row = current context
+                result = predictor.predict(la_row, stat, odds_line)
+            except Exception as e:
+                logger.debug(f"  Line prediction failed for {player_name}/{stat}: {e}")
+                continue
+
+            if result is None:
+                continue
+
+            pred_value = result['prediction']
+            prob_over = result['prob_over']
+            edge_pct = result['edge_pct']
+            residual_std = result['residual_std']
+
+            direction = 'OVER' if result['residual'] > 0 else 'UNDER'
             abs_edge = abs(edge_pct)
 
-            # Direction
-            direction = 'OVER' if pred_value > line_used else 'UNDER'
+            # Confidence: how far prob_over is from 50% (coin flip)
+            confidence = prob_over if direction == 'OVER' else (100 - prob_over)
 
-            # Get confidence + range
-            conf_data: dict = {}
-            try:
-                conf_data = predictor.get_confidence(df, stat, pred_value, features_df=features_df)
-                confidence = conf_data.get('confidence', 0)
-                range_low = conf_data.get('low', pred_value)
-                range_high = conf_data.get('high', pred_value)
-            except Exception:
-                confidence = 0
-                range_low = pred_value
-                range_high = pred_value
+            # Range from residual std
+            range_low = round(odds_line - 1.5 * residual_std, 1)
+            range_high = round(odds_line + 1.5 * residual_std, 1)
 
-            # Probability over — use ProbabilityCalculator with std for
-            # proper z-score based calculation (same as LineEvaluator).
-            try:
-                from nba_evaluator import ProbabilityCalculator
-                std = conf_data.get('std')
-                if std is not None and std > 0:
-                    calibrator_data = None
-                    if hasattr(predictor, 'probability_calibrator') and stat in predictor.probability_calibrator:
-                        calibrator_data = predictor.probability_calibrator[stat]
-                    prob_over = ProbabilityCalculator.calculate(
-                        pred_value, line_used, std, calibrator_data
-                    )
-                else:
-                    # No std available — estimate from confidence + direction
-                    prob_over = confidence if direction == 'OVER' else (100 - confidence)
-            except Exception:
-                prob_over = 50.0
-
-            # L10 agreement filter — only pick when L10 average confirms the
-            # model's direction vs the line.  Prevents picks driven solely by
-            # model noise (e.g. model says OVER but L10 avg is clearly UNDER).
-            l10_direction = 'OVER' if l10_avg > line_used else 'UNDER'
+            # L10 agreement filter — only pick when L10 direction matches model
+            l10_direction = 'OVER' if l10_avg > odds_line else 'UNDER'
             if l10_direction != direction:
                 continue
 
@@ -710,18 +613,18 @@ def generate_daily_picks() -> list[dict]:
                 'stat': stat,
                 'prediction': pred_value,
                 'confidence': round(float(confidence), 1),
-                'range_low': round(float(range_low), 1),
-                'range_high': round(float(range_high), 1),
+                'range_low': range_low,
+                'range_high': range_high,
                 'recent_avg': l10_avg,
-                'odds_line': odds_line,  # real prop line, or None if using L10 avg
+                'odds_line': odds_line,
                 'edge': edge_pct,
                 'direction': direction,
                 'opponent': opponent,
                 'is_home': is_home,
                 'matchup': matchup,
                 'game_date': active_date_str,
-                'model_type': 'gradient_boost',
-                'prob_over': round(float(prob_over), 1) if prob_over is not None else None,
+                'model_type': 'line_anchored',
+                'prob_over': round(float(prob_over), 1),
             })
 
     logger.info(

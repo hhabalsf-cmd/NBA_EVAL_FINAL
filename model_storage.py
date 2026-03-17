@@ -63,6 +63,23 @@ def download_game_model(local_path: Path) -> bool:
     return _download_file(storage_key, local_path, "game_predictor")
 
 
+# ── Line-anchored models ─────────────────────────────────────────────────────
+
+_LINE_PREFIX = "line_anchored/"
+
+
+def upload_line_model(player_name: str, local_path: Path) -> bool:
+    """Upload a line-anchored model pkl to Supabase Storage."""
+    storage_key = f"{_LINE_PREFIX}{local_path.name}"
+    return _upload_file(local_path, storage_key, f"line:{player_name}")
+
+
+def download_line_model(player_name: str, local_path: Path) -> bool:
+    """Download a line-anchored model from Supabase Storage."""
+    storage_key = f"{_LINE_PREFIX}{local_path.name}"
+    return _download_file(storage_key, local_path, f"line:{player_name}")
+
+
 # ── Listing (migration / diagnostics) ────────────────────────────────────────
 
 def list_player_models() -> list[str]:

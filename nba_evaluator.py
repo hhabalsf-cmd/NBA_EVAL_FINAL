@@ -1289,6 +1289,7 @@ class FeatureEngineer:
                 # Standard rolling averages
                 df[f'ROLL_5_{stat}'] = df[stat].rolling(5, min_periods=1).mean().shift(1)
                 df[f'ROLL_10_{stat}'] = df[stat].rolling(10, min_periods=1).mean().shift(1)
+                df[f'ROLL_15_{stat}'] = df[stat].rolling(15, min_periods=1).mean().shift(1)
                 df[f'ROLL_20_{stat}'] = df[stat].rolling(20, min_periods=1).mean().shift(1)
                 df[f'STD_10_{stat}'] = df[stat].rolling(10, min_periods=1).std().shift(1)
 
@@ -1328,6 +1329,7 @@ class FeatureEngineer:
         df['PRA'] = df['PTS'] + df['REB'] + df['AST']
         df['ROLL_5_PRA'] = df['PRA'].rolling(5, min_periods=1).mean().shift(1)
         df['ROLL_10_PRA'] = df['PRA'].rolling(10, min_periods=1).mean().shift(1)
+        df['ROLL_15_PRA'] = df['PRA'].rolling(15, min_periods=1).mean().shift(1)
         df['EMA_5_PRA'] = df['PRA'].ewm(span=5, min_periods=1).mean().shift(1)
 
         # Trend (recent vs longer term)
