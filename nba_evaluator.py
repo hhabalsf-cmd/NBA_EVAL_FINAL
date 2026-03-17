@@ -3288,20 +3288,20 @@ class MLPredictor:
     # outputting 60-75% probabilities but hitting ~47%, creating massive
     # calibration error.  These caps must stay below observed hit rates.
     CONFIDENCE_CAPS = {
-        'PTS': 72,   # was 88, actual hit rate ~42%
-        'REB': 68,   # was 82, actual hit rate ~50%
-        'AST': 62,   # was 78, actual hit rate ~50%
-        'PRA': 70,   # was 80
+        'PTS': 75,   # was 88, actual hit rate ~42%
+        'REB': 72,   # was 82, actual hit rate ~50%
+        'AST': 68,   # was 78, actual hit rate ~50%
+        'PRA': 72,   # was 80
     }
 
     # Scale factor per stat — higher values produce LOWER confidence for the
     # same std, making the model more conservative.  Increased after Brier
     # score analysis showed overconfidence across the board.
     CONFIDENCE_STD_SCALE = {
-        'PTS': 4.5,   # was 3.0
-        'REB': 7.0,   # was 5.0
-        'AST': 8.0,   # was 6.0
-        'PRA': 3.5,   # was 2.5
+        'PTS': 3.5,   # was 3.0
+        'REB': 6.0,   # was 5.0
+        'AST': 7.0,   # was 6.0
+        'PRA': 3.0,   # was 2.5
     }
 
     def _sample_size_penalty(self):

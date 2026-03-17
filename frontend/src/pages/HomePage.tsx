@@ -22,7 +22,7 @@ const statCardVariant: Variants = {
   show:   { opacity: 1, y: 0, scale: 1 },
 }
 
-const PICKS_PER_PAGE = 5
+const PICKS_PER_PAGE = 9
 
 function BestBetsSection() {
   const [visibleCount, setVisibleCount] = useState(PICKS_PER_PAGE)
@@ -64,7 +64,7 @@ function BestBetsSection() {
       </div>
 
       {isLoading && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {Array.from({ length: 2 }).map((_, i) => (
             <div key={i} className="card p-5 animate-pulse">
               <div className="skeleton h-4 w-32 rounded mb-3" />
@@ -77,7 +77,7 @@ function BestBetsSection() {
 
       {!isLoading && dailyPicks && dailyPicks.length > 0 && (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {dailyPicks.slice(0, visibleCount).map((pick) => (
               <BetCard
                 key={pick.id}
