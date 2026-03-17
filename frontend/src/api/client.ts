@@ -460,6 +460,7 @@ export async function saveDailyPickToMyPicks(pick: DailyPick): Promise<Pick> {
   return createPick({
     player: pick.player,
     player_id: pick.player_id,
+    headshot_url: pick.headshot_url,
     team_abbrev: pick.team_abbrev,
     stat: pick.stat as Pick['stat'],
     line: pick.odds_line ?? pick.recent_avg ?? 0,
@@ -469,7 +470,7 @@ export async function saveDailyPickToMyPicks(pick: DailyPick): Promise<Pick> {
     confidence: pick.confidence,
     opponent: pick.opponent,
     is_home: pick.is_home,
-    model_type: pick.model_type ?? 'gradient_boost',
+    model_type: pick.model_type ?? 'line_anchored',
     game_date: pick.game_date,
     prob_over: pick.prob_over,
   })
