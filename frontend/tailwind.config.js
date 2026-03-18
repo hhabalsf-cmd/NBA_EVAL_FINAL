@@ -42,7 +42,8 @@ export default {
         },
       },
       fontFamily: {
-        sans: ['"Space Grotesk"', 'system-ui', '-apple-system', 'sans-serif'],
+        sans: ['"Bricolage Grotesque"', 'system-ui', '-apple-system', 'sans-serif'],
+        display: ['"Syne"', '"Bricolage Grotesque"', 'system-ui', 'sans-serif'],
         mono: ['"JetBrains Mono"', 'Consolas', 'monospace'],
       },
       animation: {
