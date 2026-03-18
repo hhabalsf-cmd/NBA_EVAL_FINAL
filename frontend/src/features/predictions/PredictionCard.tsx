@@ -1,6 +1,27 @@
+import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { TrendingUp, TrendingDown, BarChart2 } from 'lucide-react'
 import { StatPrediction } from './api'
+
+function useCountUp(target: number, duration = 800): number {
+  const [value, setValue] = useState(0)
+  const started = useRef(false)
+
+  useEffect(() => {
+    if (started.current || target === 0) return
+    started.current = true
+    const startTime = performance.now()
+    const tick = (now: number) => {
+      const p = Math.min((now - startTime) / duration, 1)
+      const eased = 1 - Math.pow(1 - p, 3) // easeOut cubic
+      setValue(eased * target)
+      if (p < 1) requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  }, [target, duration])
+
+  return value
+}
 
 interface PredictionCardProps {
   stat: string
@@ -9,6 +30,7 @@ interface PredictionCardProps {
 }
 
 export default function PredictionCard({ stat, prediction, onChartClick }: PredictionCardProps) {
+  const animatedPrediction = useCountUp(prediction.prediction)
   const getStatLabel = () => {
     switch (stat) {
       case 'PTS': return 'Points'
@@ -59,7 +81,7 @@ export default function PredictionCard({ stat, prediction, onChartClick }: Predi
 
       <div className="mb-4">
         <div className="font-mono text-3xl font-bold text-text-primary tracking-tight">
-          {prediction.prediction.toFixed(1)}
+          {animatedPrediction.toFixed(1)}
         </div>
         <div className="text-xs text-text-muted mt-1.5">
           {prediction.range_low.toFixed(1)} – {prediction.range_high.toFixed(1)}

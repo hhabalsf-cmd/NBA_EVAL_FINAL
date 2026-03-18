@@ -57,7 +57,7 @@ function BestBetsSection() {
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-2">
           <TrendingUp className="w-5 h-5 text-accent" />
-          <h2 className="text-xl font-semibold text-text-primary tracking-tight">Best Bets Today</h2>
+          <h2 className="heading-display text-2xl font-semibold text-text-primary">Best Bets Today</h2>
         </div>
         {dailyPicks && dailyPicks.length > 0 && (
           <span className="text-xs text-text-muted font-mono">{dailyPicks.length} picks</span>
@@ -127,7 +127,7 @@ export default function HomePage() {
         variants={fadeUp}
         transition={{ duration: 0.4, ease: 'easeOut' }}
       >
-        <h1 className="text-3xl md:text-4xl font-bold text-text-primary tracking-tight mb-3">
+        <h1 className="heading-display text-4xl md:text-5xl font-bold text-text-primary mb-3">
           Evaluate Player Props
         </h1>
         <p className="text-text-secondary mb-8 max-w-lg text-[15px] leading-relaxed">
@@ -206,7 +206,7 @@ export default function HomePage() {
 
       {/* Performance by Stat */}
       <motion.section variants={fadeUp} transition={{ duration: 0.38, ease: 'easeOut' }}>
-        <h2 className="text-xl font-semibold text-text-primary tracking-tight mb-6">Performance by Stat</h2>
+        <h2 className="heading-display text-2xl font-semibold text-text-primary mb-6">Performance by Stat</h2>
         {stats && Object.keys(stats.by_stat).length > 0 ? (
           <motion.div
             className="grid grid-cols-2 sm:grid-cols-4 gap-4"
@@ -266,7 +266,7 @@ export default function HomePage() {
         variants={fadeUp}
         transition={{ duration: 0.38, ease: 'easeOut' }}
       >
-        <h2 className="text-lg font-semibold text-text-primary mb-8 tracking-tight">How It Works</h2>
+        <h2 className="heading-display text-2xl font-semibold text-text-primary mb-8">How It Works</h2>
         <motion.div
           className="grid grid-cols-1 md:grid-cols-3 gap-8"
           variants={stagger}

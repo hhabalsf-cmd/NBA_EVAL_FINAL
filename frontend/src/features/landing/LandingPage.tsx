@@ -202,7 +202,7 @@ export default function LandingPage() {
             </span>
           </div>
 
-          <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold text-text-primary tracking-tighter mb-4 sm:mb-5 leading-none">
+          <h1 className="heading-display text-5xl sm:text-6xl md:text-7xl font-bold text-text-primary mb-4 sm:mb-5 leading-none">
             Stop guessing.<br />
             <span className="text-accent">Start evaluating.</span>
           </h1>
@@ -274,7 +274,7 @@ export default function LandingPage() {
       {/* ── Sample Predictions ──────────────────────────────────────── */}
       <section>
         <div className="mb-6">
-          <h2 className="text-2xl font-semibold text-text-primary tracking-tight">Live Predictions</h2>
+          <h2 className="heading-display text-3xl font-semibold text-text-primary">Live Predictions</h2>
           <p className="text-sm text-text-secondary mt-1">See what our ML models produce for today's players</p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -329,7 +329,7 @@ export default function LandingPage() {
           }}
         />
         <div className="relative">
-          <h2 className="text-lg font-semibold text-text-primary mb-8 tracking-tight">How It Works</h2>
+          <h2 className="heading-display text-2xl font-semibold text-text-primary mb-8">How It Works</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8 relative">
             {/* Connecting line — desktop only */}
             <div className="absolute top-6 left-[16.67%] right-[16.67%] h-px hidden md:block"
@@ -367,7 +367,7 @@ export default function LandingPage() {
       {stats && Object.keys(stats.by_stat).length > 0 && (
         <section>
           <div className="mb-6">
-            <h2 className="text-2xl font-semibold text-text-primary tracking-tight">Track Record</h2>
+            <h2 className="heading-display text-3xl font-semibold text-text-primary">Track Record</h2>
             <p className="text-sm text-text-secondary mt-1">Updated in real time from graded picks</p>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

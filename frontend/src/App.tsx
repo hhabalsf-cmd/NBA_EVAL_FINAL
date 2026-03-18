@@ -125,18 +125,30 @@ function App() {
                     key={to}
                     to={to}
                     className={({ isActive }) =>
-                      `flex items-center gap-2 px-3.5 py-2 text-sm font-medium rounded-lg transition-all duration-150 ${isActive
-                        ? 'bg-accent-muted text-accent'
+                      `relative flex items-center gap-2 px-3.5 py-2 text-sm font-medium rounded-lg transition-all duration-150 ${isActive
+                        ? 'text-accent'
                         : 'text-text-muted hover:text-text-secondary hover:bg-bg-tertiary'
                       }`
                     }
                   >
-                    <Icon className="w-4 h-4" />
-                    {label}
-                    {badge != null && badge > 0 && (
-                      <span className="flex items-center justify-center w-4 h-4 rounded-full bg-accent text-white text-[10px] font-bold">
-                        {badge}
-                      </span>
+                    {({ isActive }) => (
+                      <>
+                        <Icon className="w-4 h-4" />
+                        {label}
+                        {badge != null && badge > 0 && (
+                          <span className="flex items-center justify-center w-4 h-4 rounded-full bg-accent text-white text-[10px] font-bold">
+                            {badge}
+                          </span>
+                        )}
+                        {isActive && (
+                          <motion.div
+                            layoutId="nav-underline"
+                            className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full"
+                            style={{ background: 'var(--accent)' }}
+                            transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                          />
+                        )}
+                      </>
                     )}
                   </NavLink>
                 ))}
@@ -159,8 +171,11 @@ function App() {
           </div>
         </nav>
 
+        {/* Accent glow */}
+        <div className="page-glow" />
+
         {/* Main Content */}
-        <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-8 py-6 sm:py-10 pb-24 sm:pb-10">
+        <main className="relative z-10 flex-1 max-w-5xl w-full mx-auto px-4 sm:px-8 py-6 sm:py-10 pb-24 sm:pb-10">
           <AppRoutes />
         </main>
 
@@ -201,6 +216,14 @@ function App() {
                       )}
                     </motion.div>
                     <span className={`text-[10px] font-medium ${isActive ? 'text-accent' : 'text-text-muted'}`}>{label}</span>
+                    {isActive && (
+                      <motion.div
+                        layoutId="mobile-nav-dot"
+                        className="absolute -bottom-0.5 w-1 h-1 rounded-full"
+                        style={{ background: 'var(--accent)' }}
+                        transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                      />
+                    )}
                   </>
                 )}
               </NavLink>

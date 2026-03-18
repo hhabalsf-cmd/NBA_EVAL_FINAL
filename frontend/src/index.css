@@ -58,6 +58,41 @@
   box-sizing: border-box;
 }
 
+/* ── Noise texture overlay ─────────────────────────────────────────────────── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+}
+
+:root.light body::before {
+  opacity: 0.015;
+}
+
+/* ── Radial accent glow behind content ─────────────────────────────────────── */
+.page-glow {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100vw;
+  max-width: 900px;
+  height: 60vh;
+  pointer-events: none;
+  z-index: 0;
+  background: radial-gradient(ellipse at 50% 0%, var(--accent) 0%, transparent 70%);
+  opacity: 0.03;
+}
+
+:root.light .page-glow {
+  opacity: 0.02;
+}
+
 html {
   scroll-behavior: smooth;
   -webkit-text-size-adjust: 100%;
@@ -125,7 +160,7 @@ body {
 
 .card-hover:hover {
   border-color: var(--border-default);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-md), 0 0 20px var(--accent-glow);
   transform: translateY(-1px);
 }
 
@@ -161,6 +196,31 @@ body {
   height: 100%;
   border-radius: 9999px;
   transition: width 0.5s ease;
+  position: relative;
+  background: linear-gradient(90deg, transparent 0%, var(--confidence-color, var(--accent)) 100%);
+}
+
+.confidence-fill::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--confidence-color, var(--accent));
+  box-shadow: 0 0 6px var(--confidence-color, var(--accent));
+  animation: confidence-pulse 2s ease-in-out infinite;
+}
+
+@keyframes confidence-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--confidence-color, var(--accent)); }
+  50%      { opacity: 0.5; box-shadow: 0 0 8px var(--confidence-color, var(--accent)); }
+}
+
+.confidence-meter-glow {
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--confidence-color, var(--accent)) 25%, transparent);
 }
 
 /* Inputs */
@@ -348,6 +408,13 @@ select {
   padding-right: 30px;
 }
 
+/* ── Display heading — Bebas Neue for hero / section titles ────────────────── */
+.heading-display {
+  font-family: 'Bebas Neue', 'Space Grotesk', system-ui, sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 /* ── Typography Utilities ─────────────────────────────────────── */
 
 /* Replaces repeated `text-[11px] text-text-muted uppercase tracking-wider` */
@@ -419,16 +486,31 @@ select {
 .confidence-high {
   border-top: 2px solid var(--accent-success);
   box-shadow: 0 0 24px rgba(107, 191, 138, 0.10), var(--shadow-sm);
+  --confidence-color: var(--accent-success);
+}
+
+.confidence-high:hover {
+  box-shadow: 0 0 24px rgba(107, 191, 138, 0.20), 0 0 40px rgba(107, 191, 138, 0.08), var(--shadow-md);
 }
 
 .confidence-medium {
   border-top: 2px solid var(--accent-warning);
   box-shadow: 0 0 24px rgba(232, 164, 48, 0.10), var(--shadow-sm);
+  --confidence-color: var(--accent-warning);
+}
+
+.confidence-medium:hover {
+  box-shadow: 0 0 24px rgba(232, 164, 48, 0.20), 0 0 40px rgba(232, 164, 48, 0.08), var(--shadow-md);
 }
 
 .confidence-low {
   border-top: 2px solid var(--accent-danger);
   box-shadow: 0 0 24px rgba(212, 115, 110, 0.10), var(--shadow-sm);
+  --confidence-color: var(--accent-danger);
+}
+
+.confidence-low:hover {
+  box-shadow: 0 0 24px rgba(212, 115, 110, 0.20), 0 0 40px rgba(212, 115, 110, 0.08), var(--shadow-md);
 }
 
 /* ── Mobile ripple touch feedback ───────────────────────────────────────────── */
