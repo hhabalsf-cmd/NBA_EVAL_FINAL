@@ -81,8 +81,8 @@ for d in [DATA_DIR, MODEL_DIR, HISTORY_DIR, CACHE_DIR]:
 # ── In-memory model cache (avoids repeated pickle.load from disk) ──
 _MODEL_CACHE: dict = {}          # player_name -> (data_dict, loaded_at)
 _MODEL_CACHE_LOCK = threading.Lock()
-_MODEL_CACHE_MAX = 8             # keep at most 8 players in memory (was 30 — each model is ~50-100MB in RAM)
-_MODEL_CACHE_TTL = 1800          # 30 min before re-reading from disk (was 1h)
+_MODEL_CACHE_MAX = 4             # keep at most 4 players in memory (was 8 — each model ~10-30MB in RAM)
+_MODEL_CACHE_TTL = 1800          # 30 min before re-reading from disk
 
 
 def _model_cache_get(player_name: str) -> 'dict | None':
@@ -100,11 +100,16 @@ def _model_cache_get(player_name: str) -> 'dict | None':
 
 def _model_cache_put(player_name: str, data: dict) -> None:
     """Store model data dict in the in-memory cache, evicting oldest if full."""
+    import gc
     with _MODEL_CACHE_LOCK:
         _MODEL_CACHE[player_name] = (data, time.time())
-        if len(_MODEL_CACHE) > _MODEL_CACHE_MAX:
+        evicted = False
+        while len(_MODEL_CACHE) > _MODEL_CACHE_MAX:
             oldest_key = min(_MODEL_CACHE, key=lambda k: _MODEL_CACHE[k][1])
             del _MODEL_CACHE[oldest_key]
+            evicted = True
+        if evicted:
+            gc.collect()
 
 
 def flush_memory_caches():
@@ -114,6 +119,12 @@ def flush_memory_caches():
     with _MODEL_CACHE_LOCK:
         _MODEL_CACHE.clear()
     CacheManager._mem.clear()
+    # Also clear the scenarios cache in the players router (if loaded)
+    try:
+        from api.routers.players import _scenarios_cache
+        _scenarios_cache.clear()
+    except ImportError:
+        pass
     gc.collect()
 
 
@@ -186,7 +197,7 @@ class CacheManager:
     Falls back to the file-based L2 cache on memory miss.
     """
     _mem: dict = {}          # cache_key -> (data, timestamp)
-    _MEM_MAX = 20            # max entries in L1 (was 100 — each can hold full game log DataFrames)
+    _MEM_MAX = 10            # max entries in L1 (was 20 — each can hold full game log DataFrames)
 
     @staticmethod
     def get_cache_key(prefix, *args):

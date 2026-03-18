@@ -47,8 +47,9 @@ def get_prediction_service() -> PredictionService:
     return _prediction_service
 
 
-# Scenarios cache: player_id → (timestamp, ScenariosResponse). 1-hour TTL.
+# Scenarios cache: player_id → (timestamp, ScenariosResponse). 1-hour TTL, max 50 entries.
 _scenarios_cache: dict = {}
+_SCENARIOS_CACHE_MAX = 50
 
 
 @router.get("/search", response_model=PlayerSearchResult)
@@ -816,7 +817,16 @@ async def get_player_scenarios(request: Request, player_name: str):
         teammate_scenarios=teammate_scenarios,
         opponent_scenarios=opponent_scenarios,
     )
-    _scenarios_cache[cache_key] = (_time.time(), response)
+    now = _time.time()
+    # Prune expired entries before inserting
+    expired = [k for k, (ts, _) in _scenarios_cache.items() if now - ts >= 3600]
+    for k in expired:
+        del _scenarios_cache[k]
+    # LRU eviction if still over limit
+    while len(_scenarios_cache) >= _SCENARIOS_CACHE_MAX:
+        oldest_key = min(_scenarios_cache, key=lambda k: _scenarios_cache[k][0])
+        del _scenarios_cache[oldest_key]
+    _scenarios_cache[cache_key] = (now, response)
     return response
 
 
