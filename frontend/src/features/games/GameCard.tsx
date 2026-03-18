@@ -1,6 +1,8 @@
 import { useState } from 'react'
+import { motion } from 'framer-motion'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import { GamePrediction } from './api'
+import { useTilt } from '../../shared/hooks/useTilt'
 
 interface GameCardProps {
   prediction: GamePrediction
@@ -11,9 +13,18 @@ export default function GameCard({ prediction }: GameCardProps) {
   const { matchup, predicted_winner, home_win_prob, away_win_prob, confidence, key_factors } = prediction
   const { home_team, away_team } = matchup
   const homeIsWinner = predicted_winner === home_team.team_abbrev
+  const tilt = useTilt({ maxTilt: 5, scale: 1.02 })
 
   return (
-    <div className="card p-5">
+    <motion.div
+      ref={tilt.ref}
+      onMouseMove={tilt.onMouseMove}
+      onMouseEnter={tilt.onMouseEnter}
+      onMouseLeave={tilt.onMouseLeave}
+      style={tilt.style}
+      className="card card-3d p-5"
+    >
+      <div className="tilt-glare" />
       {matchup.game_time && (
         <div className="text-[11px] text-text-muted text-center mb-4 uppercase tracking-wider">
           {matchup.game_time}
@@ -129,6 +140,6 @@ export default function GameCard({ prediction }: GameCardProps) {
           </div>
         </div>
       </div>
-    </div>
+    </motion.div>
   )
 }

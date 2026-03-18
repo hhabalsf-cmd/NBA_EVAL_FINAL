@@ -536,19 +536,6 @@ select {
   transform: scale(1);
 }
 
-/* ── Basketball bounce loader ────────────────────────────────────────────────── */
-
-@keyframes basketball-bounce {
-  0%, 100% { transform: translateY(0) rotate(0deg); }
-  40%       { transform: translateY(-18px) rotate(160deg); }
-  60%       { transform: translateY(-12px) rotate(200deg); }
-}
-
-.basketball-bounce {
-  display: inline-block;
-  animation: basketball-bounce 0.8s cubic-bezier(0.36, 0.07, 0.19, 0.97) infinite;
-}
-
 /* ── Mobile horizontal snap scroll for stat cards ───────────────────────────── */
 
 .snap-container {
@@ -575,6 +562,45 @@ select {
     overflow-x: visible;
     scroll-snap-type: none;
     padding-bottom: 0;
+  }
+}
+
+/* ── 3D Card Foundation ───────────────────────────────────────────────────── */
+
+.card-3d {
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+.card-3d-content {
+  transform: translateZ(20px);
+}
+
+.tilt-glare {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.08) 0%,
+    transparent 60%
+  );
+}
+
+.card-3d:hover .tilt-glare {
+  opacity: 1;
+}
+
+/* Disable tilt on touch devices */
+@media (hover: none) {
+  .card-3d {
+    transform: none !important;
+  }
+  .card-3d:hover .tilt-glare {
+    opacity: 0;
   }
 }
 

@@ -138,7 +138,7 @@ export default function PlayerPage() {
 
         {/* Progress indicator */}
         <div className="flex flex-col items-center gap-3 py-6">
-          <span className="text-3xl basketball-bounce">🏀</span>
+          <div className="w-8 h-8 rounded-full border-2 border-accent border-t-transparent animate-spin" />
           <div className="text-sm text-text-secondary font-medium">{message}</div>
           <div className="w-64 progress-bar">
             <div className="progress-bar-fill" style={{ width: `${progress}%` }} />

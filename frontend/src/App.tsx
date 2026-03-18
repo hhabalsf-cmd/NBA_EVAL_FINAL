@@ -21,9 +21,9 @@ import { useQuery } from '@tanstack/react-query'
 import { getPicks } from './features/picks/api'
 
 const pageVariants = {
-  initial: { opacity: 0, y: 8 },
-  animate: { opacity: 1, y: 0 },
-  exit: { opacity: 0, y: -6 },
+  initial: { opacity: 0, y: 12, rotateX: 2 },
+  animate: { opacity: 1, y: 0, rotateX: 0 },
+  exit: { opacity: 0, y: -8, rotateX: -1 },
 }
 
 function AppRoutes() {
@@ -38,7 +38,8 @@ function AppRoutes() {
         initial="initial"
         animate="animate"
         exit="exit"
-        transition={{ duration: 0.2, ease: 'easeOut' }}
+        transition={{ duration: 0.25, ease: 'easeOut' }}
+        style={{ perspective: 1200 }}
       >
         <Routes location={location}>
           <Route path="/" element={isAuthenticated ? <Navigate to="/app" replace /> : <LandingPage />} />
@@ -127,7 +128,7 @@ function App() {
                     className={({ isActive }) =>
                       `relative flex items-center gap-2 px-3.5 py-2 text-sm font-medium rounded-lg transition-all duration-150 ${isActive
                         ? 'text-accent'
-                        : 'text-text-muted hover:text-text-secondary hover:bg-bg-tertiary'
+                        : 'text-text-muted hover:text-text-secondary hover:bg-bg-tertiary hover:-translate-y-px'
                       }`
                     }
                   >
@@ -144,7 +145,11 @@ function App() {
                           <motion.div
                             layoutId="nav-underline"
                             className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full"
-                            style={{ background: 'var(--accent)' }}
+                            style={{
+                              background: 'var(--accent)',
+                              boxShadow: '0 2px 8px var(--accent-glow)',
+                              transform: 'translateZ(2px)',
+                            }}
                             transition={{ type: 'spring', stiffness: 380, damping: 30 }}
                           />
                         )}

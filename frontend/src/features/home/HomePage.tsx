@@ -7,6 +7,7 @@ import PlayerSearch from '../../shared/components/PlayerSearch'
 import BetCard from './BetCard'
 import { getTodaysDailyPicks, saveDailyPickToMyPicks, dailyPickToBestBet, type DailyPick } from './api'
 import { getPerformanceStats } from '../picks/api'
+import { useTilt } from '../../shared/hooks/useTilt'
 
 const fadeUp: Variants = {
   hidden: { opacity: 0, y: 16 },
@@ -21,6 +22,57 @@ const stagger: Variants = {
 const statCardVariant: Variants = {
   hidden: { opacity: 0, y: 12, scale: 0.97 },
   show:   { opacity: 1, y: 0, scale: 1 },
+}
+
+function StatCard({ stat, winRate, wins, total }: { stat: string; winRate: number; wins: number; total: number }) {
+  const tilt = useTilt({ maxTilt: 10, scale: 1.04 })
+  return (
+    <motion.div
+      ref={tilt.ref}
+      onMouseMove={tilt.onMouseMove}
+      onMouseEnter={tilt.onMouseEnter}
+      onMouseLeave={tilt.onMouseLeave}
+      style={tilt.style}
+      className="card card-3d card-accent p-5 text-center"
+      variants={statCardVariant}
+      transition={{ duration: 0.3, ease: 'easeOut' }}
+    >
+      <div className="tilt-glare" />
+      <div className="label-xs mb-2">{stat}</div>
+      <div className={`font-mono text-2xl font-bold ${
+        winRate >= 55 ? 'text-accent-success' : winRate >= 50 ? 'text-accent' : 'text-accent-danger'
+      }`}>
+        {winRate.toFixed(1)}%
+      </div>
+      <div className="text-xs text-text-secondary mt-1">{wins}W / {total} picks</div>
+    </motion.div>
+  )
+}
+
+function HowItWorksIcon({ icon: Icon, title, desc }: { icon: React.ElementType; title: string; desc: string }) {
+  const tilt = useTilt({ maxTilt: 12, scale: 1.08 })
+  return (
+    <motion.div
+      className="flex gap-4"
+      variants={fadeUp}
+      transition={{ duration: 0.3, ease: 'easeOut' }}
+    >
+      <motion.div
+        ref={tilt.ref}
+        onMouseMove={tilt.onMouseMove}
+        onMouseEnter={tilt.onMouseEnter}
+        onMouseLeave={tilt.onMouseLeave}
+        style={tilt.style}
+        className="flex-shrink-0 w-9 h-9 rounded-lg bg-accent/10 flex items-center justify-center card-3d"
+      >
+        <Icon className="w-4 h-4 text-accent" />
+      </motion.div>
+      <div>
+        <h3 className="font-medium text-text-primary text-sm mb-1">{title}</h3>
+        <p className="text-xs text-text-secondary leading-relaxed">{desc}</p>
+      </div>
+    </motion.div>
+  )
 }
 
 const PICKS_PER_PAGE = 9
@@ -231,21 +283,13 @@ export default function HomePage() {
                 )
               }
               return (
-                <motion.div
+                <StatCard
                   key={stat}
-                  className="card card-accent p-5 text-center"
-                  variants={statCardVariant}
-                  transition={{ duration: 0.3, ease: 'easeOut' }}
-                  whileHover={{ scale: 1.03, y: -2 }}
-                >
-                  <div className="label-xs mb-2">{stat}</div>
-                  <div className={`font-mono text-2xl font-bold ${
-                    statData.win_rate >= 55 ? 'text-accent-success' : statData.win_rate >= 50 ? 'text-accent' : 'text-accent-danger'
-                  }`}>
-                    {statData.win_rate.toFixed(1)}%
-                  </div>
-                  <div className="text-xs text-text-secondary mt-1">{statData.wins}W / {statData.total} picks</div>
-                </motion.div>
+                  stat={stat}
+                  winRate={statData.win_rate}
+                  wins={statData.wins}
+                  total={statData.total}
+                />
               )
             })}
           </motion.div>
@@ -277,25 +321,8 @@ export default function HomePage() {
             { icon: SearchIcon, title: 'Search Player',  desc: "Enter any NBA player's name to begin analysis" },
             { icon: BarChart3,  title: 'ML Prediction',  desc: 'Our model analyzes historical data, matchups, and trends' },
             { icon: Target,     title: 'Evaluate Lines', desc: 'Compare predictions to betting lines and save your picks' },
-          ].map(({ icon: Icon, title, desc }) => (
-            <motion.div
-              key={title}
-              className="flex gap-4"
-              variants={fadeUp}
-              transition={{ duration: 0.3, ease: 'easeOut' }}
-            >
-              <motion.div
-                className="flex-shrink-0 w-9 h-9 rounded-lg bg-accent/10 flex items-center justify-center"
-                whileHover={{ scale: 1.12 }}
-                transition={{ duration: 0.15 }}
-              >
-                <Icon className="w-4 h-4 text-accent" />
-              </motion.div>
-              <div>
-                <h3 className="font-medium text-text-primary text-sm mb-1">{title}</h3>
-                <p className="text-xs text-text-secondary leading-relaxed">{desc}</p>
-              </div>
-            </motion.div>
+          ].map(({ icon, title, desc }) => (
+            <HowItWorksIcon key={title} icon={icon} title={title} desc={desc} />
           ))}
         </motion.div>
       </motion.section>

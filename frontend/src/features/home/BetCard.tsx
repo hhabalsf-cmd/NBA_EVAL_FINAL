@@ -1,7 +1,9 @@
 import { ArrowRight, Bookmark } from 'lucide-react'
+import { motion } from 'framer-motion'
 import { BestBet } from './api'
 import { useNavigate } from 'react-router-dom'
 import { getHeadshotUrl } from '../../shared/utils/nba'
+import { useTilt } from '../../shared/hooks/useTilt'
 
 interface BetCardProps {
   bet: BestBet
@@ -13,6 +15,7 @@ interface BetCardProps {
 export default function BetCard({ bet, rank, onSave, isSaving }: BetCardProps) {
   const navigate = useNavigate()
   const isOver = bet.direction === 'OVER'
+  const tilt = useTilt({ maxTilt: 6, scale: 1.03 })
 
   const handleClick = () => {
     navigate(`/player/${encodeURIComponent(bet.player)}`, {
@@ -21,12 +24,18 @@ export default function BetCard({ bet, rank, onSave, isSaving }: BetCardProps) {
   }
 
   return (
-    <div
+    <motion.div
+      ref={tilt.ref}
       onClick={handleClick}
-      className={`card card-hover cursor-pointer p-2.5 relative border-l-2 ${
+      onMouseMove={tilt.onMouseMove}
+      onMouseEnter={tilt.onMouseEnter}
+      onMouseLeave={tilt.onMouseLeave}
+      style={tilt.style}
+      className={`card card-3d cursor-pointer p-2.5 relative border-l-2 ${
         isOver ? 'border-l-accent-success' : 'border-l-accent-danger'
       }`}
     >
+      <div className="tilt-glare" />
       {rank && (
         <div className="absolute top-2 right-2.5 text-[9px] font-mono text-text-muted">
           #{rank}
@@ -117,6 +126,6 @@ export default function BetCard({ bet, rank, onSave, isSaving }: BetCardProps) {
           {isSaving ? 'Saving...' : 'Save Pick'}
         </button>
       )}
-    </div>
+    </motion.div>
   )
 }

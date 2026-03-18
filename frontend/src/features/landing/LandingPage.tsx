@@ -130,26 +130,31 @@ export default function LandingPage() {
       `}</style>
 
       {/* ── Hero ─────────────────────────────────────────────────────────── */}
-      <section className="relative pt-8 sm:pt-14 pb-10 text-center max-w-3xl mx-auto">
+      <section
+        className="relative pt-8 sm:pt-14 pb-10 text-center max-w-3xl mx-auto"
+        style={{ perspective: '1200px', transformStyle: 'preserve-3d' }}
+      >
 
         {/* Background layer — orbs + dot grid */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none rounded-3xl">
-          {/* Cyan orb — top-left */}
+          {/* Cyan orb — top-left, pushed back for depth */}
           <div
-            className="absolute -top-20 -left-28 w-80 h-80 rounded-full blur-3xl"
+            className="absolute -top-20 -left-28 w-96 h-96 rounded-full blur-3xl"
             style={{
               background: 'radial-gradient(circle, var(--accent) 0%, transparent 70%)',
               opacity: 0.13,
               animation: 'orbDrift1 9s ease-in-out infinite',
+              transform: 'translateZ(-100px) scale(1.2)',
             }}
           />
-          {/* Amber orb — bottom-right */}
+          {/* Amber orb — bottom-right, pushed back */}
           <div
-            className="absolute -bottom-12 -right-20 w-64 h-64 rounded-full blur-3xl"
+            className="absolute -bottom-12 -right-20 w-80 h-80 rounded-full blur-3xl"
             style={{
               background: 'radial-gradient(circle, var(--accent-warning) 0%, transparent 70%)',
               opacity: 0.09,
               animation: 'orbDrift2 12s ease-in-out infinite',
+              transform: 'translateZ(-100px) scale(1.2)',
             }}
           />
           {/* Dot grid */}
@@ -163,34 +168,34 @@ export default function LandingPage() {
           />
         </div>
 
-        {/* Ghost floating stat cards */}
+        {/* Ghost floating stat cards — at different depth planes */}
         <div
           className="absolute top-6 -left-2 sm:-left-14 pointer-events-none select-none hidden sm:block"
-          style={{ animation: 'ghostFloat1 7s ease-in-out infinite', opacity: 0.12 }}
+          style={{ animation: 'ghostFloat1 7s ease-in-out infinite', opacity: 0.12, transform: 'translateZ(-40px)' }}
         >
           <GhostStatCard {...GHOST_CARDS[0]} />
         </div>
         <div
           className="absolute top-14 -right-2 sm:-right-14 pointer-events-none select-none hidden sm:block"
-          style={{ animation: 'ghostFloat2 8.5s ease-in-out infinite', opacity: 0.12 }}
+          style={{ animation: 'ghostFloat2 8.5s ease-in-out infinite', opacity: 0.12, transform: 'translateZ(-60px)' }}
         >
           <GhostStatCard {...GHOST_CARDS[1]} />
         </div>
         <div
           className="absolute bottom-8 -left-6 sm:-left-20 pointer-events-none select-none hidden md:block"
-          style={{ animation: 'ghostFloat3 6.5s ease-in-out infinite', opacity: 0.09 }}
+          style={{ animation: 'ghostFloat3 6.5s ease-in-out infinite', opacity: 0.09, transform: 'translateZ(-80px)' }}
         >
           <GhostStatCard {...GHOST_CARDS[2]} />
         </div>
         <div
           className="absolute bottom-16 -right-4 sm:-right-16 pointer-events-none select-none hidden md:block"
-          style={{ animation: 'ghostFloat4 9.5s ease-in-out infinite', opacity: 0.09 }}
+          style={{ animation: 'ghostFloat4 9.5s ease-in-out infinite', opacity: 0.09, transform: 'translateZ(-50px)' }}
         >
           <GhostStatCard {...GHOST_CARDS[3]} />
         </div>
 
-        {/* Content */}
-        <div className="relative z-10">
+        {/* Content — foreground layer */}
+        <div className="relative z-10" style={{ transform: 'translateZ(0)' }}>
           {/* Badge */}
           <div className="inline-flex items-center gap-2 mb-6 px-3.5 py-1.5 rounded-full border border-border-default bg-bg-secondary/80 backdrop-blur-sm">
             <span

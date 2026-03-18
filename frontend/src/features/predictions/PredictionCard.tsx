@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { TrendingUp, TrendingDown, BarChart2 } from 'lucide-react'
 import { StatPrediction } from './api'
+import { useTilt } from '../../shared/hooks/useTilt'
 
 function useCountUp(target: number, duration = 800): number {
   const [value, setValue] = useState(0)
@@ -31,6 +32,8 @@ interface PredictionCardProps {
 
 export default function PredictionCard({ stat, prediction, onChartClick }: PredictionCardProps) {
   const animatedPrediction = useCountUp(prediction.prediction)
+  const tilt = useTilt({ maxTilt: 8, scale: 1.03 })
+
   const getStatLabel = () => {
     switch (stat) {
       case 'PTS': return 'Points'
@@ -68,12 +71,16 @@ export default function PredictionCard({ stat, prediction, onChartClick }: Predi
 
   return (
     <motion.div
+      ref={tilt.ref}
       onClick={onChartClick}
-      className={`card ${getConfidenceClass()} p-5 h-full ${onChartClick ? 'cursor-pointer group' : ''}`}
-      whileHover={onChartClick ? { scale: 1.025, y: -3 } : {}}
+      onMouseMove={tilt.onMouseMove}
+      onMouseEnter={tilt.onMouseEnter}
+      onMouseLeave={tilt.onMouseLeave}
+      style={tilt.style}
+      className={`card card-3d ${getConfidenceClass()} p-5 h-full ${onChartClick ? 'cursor-pointer group' : ''}`}
       whileTap={onChartClick ? { scale: 0.97 } : {}}
-      transition={{ duration: 0.15, ease: 'easeOut' }}
     >
+      <div className="tilt-glare" />
       <div className="flex items-center justify-between mb-4">
         <span className="text-[11px] font-medium uppercase tracking-wider text-text-muted">{getStatLabel()}</span>
         <span className="font-mono font-semibold text-sm text-text-secondary">{stat}</span>
