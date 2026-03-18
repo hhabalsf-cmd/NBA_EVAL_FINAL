@@ -2384,6 +2384,9 @@ class MLPredictor:
         # Filter to available features
         available_features = [f for f in feature_cols if f in df.columns]
         self.feature_names = available_features
+        # Reset selected_features so stale indices from a previous model
+        # (trained on a different feature set) are never reused.
+        self.selected_features = None
 
         # Prepare data - filter out low-minute games (likely injury/rest games)
         df_clean = df.dropna(subset=available_features + stats)
@@ -3502,6 +3505,16 @@ class MLPredictor:
 
         # Load v3.0 artifacts (backward compatible)
         self.selected_features = data.get('selected_features', None)
+        # Invalidate selected_features if they reference indices beyond
+        # the current feature set (e.g., after pruning FEATURE_COLS).
+        if self.selected_features and self.feature_names:
+            n_features = len(self.feature_names)
+            for stat, indices in list(self.selected_features.items()):
+                if any(i >= n_features for i in indices):
+                    print(f"  ⚠️ Stale feature indices for {stat} (max index {max(indices)} >= {n_features} features) — clearing")
+                    del self.selected_features[stat]
+            if not self.selected_features:
+                self.selected_features = None
         self.quantile_models = data.get('quantile_models', {})
         self.residual_models = data.get('residual_models', {})
         self.probability_calibrator = data.get('probability_calibrator', {})
