@@ -38,7 +38,7 @@ Both servers must run simultaneously. Vite proxies `/api/*` → `localhost:8000`
 ```
 **CRITICAL:** Always use **lowercase** keys (`def_rating`, `pace`, `opp_ast`). Uppercase (`DEF_RATING`) silently returns fallback. API failure fallback: `def_rating: 110, pace: 100`.
 
-**`FeatureEngineer`** — 100 canonical features (`FEATURE_COLS`): rolling avgs (3/5/7/10/15/20 + EMA), efficiency metrics, opponent defensive features (`OPP_DEF_RATING_NORM`, `OPP_PACE_NORM`), enhanced opponent context (off_rating, net_rating, eFG%, TOV%, OREB%, DREB%), pace-adjusted stats, matchup history, home/away splits, B2B/rest, hot/cold streak, usage proxy, rebound splits (OREB/DREB), 3PT shooting features, FT rate, foul trouble, pace/elite opponent interaction flags. `extract_opp_stats()` helper extracts all opponent context from team_stats dict.
+**`FeatureEngineer`** — 82 canonical features (`FEATURE_COLS`): rolling avgs (5/10 + EMA for PTS/MIN), efficiency metrics, opponent defensive features (`OPP_DEF_RATING_NORM`, `OPP_PACE_NORM`), enhanced opponent context (off_rating, net_rating, eFG%, OREB%, DREB%), matchup history, home/away splits, B2B/rest, hot/cold streak, rebound splits (OREB/DREB), 3PT shooting features, FT rate, foul trouble, schedule density, travel, Vegas lines. `extract_opp_stats()` helper extracts all opponent context from team_stats dict. 26 dead/redundant features pruned (see commit `7ab42e3`).
 
 **`OddsAPI`** — Key lookup: function param → `ODDS_API_KEY` env var → `config.json`. Market map: `player_points→PTS`, `player_rebounds→REB`, `player_assists→AST`, `player_points_rebounds_assists→PRA`. **Status: quota exhausted** — replace key in `config.json` to re-enable (only affects line auto-population on PlayerPage).
 
@@ -99,20 +99,33 @@ Both servers must run simultaneously. Vite proxies `/api/*` → `localhost:8000`
 
 **Stack:** React 18, TypeScript, Vite 5, Tailwind CSS 3, React Query 5, Zustand 4, Recharts 2
 
-#### Pages
-- **`PlayerPage.tsx`** — SSE prediction, 4 stat cards, line inputs (odds auto-populate), save pick, → Research
-- **`ResearchPage.tsx`** — 5 tabs: Overview, Game Log, Chart, Splits, Matchup
-- **`HistoryPage.tsx`** — cumulative profit chart, manual/auto grading, by-stat breakdown
-- **`ParlayPage.tsx`** — multi-pick builder, dynamic odds calc
-- **`GamesPage.tsx`** — ELO win probabilities, key factors, accuracy tracker
-- **`HomePage.tsx`** / **`LandingPage.tsx`** — Best Bets section (active), performance stats, how-it-works
+Organized by **feature**, not file type. Each feature folder contains its page, components, hooks, and API functions.
 
-#### Key Components & Hooks
-- **`PlayerSearch.tsx`** — debounced (300ms) autocomplete, headshots via `utils/nba.ts`
-- **`PredictionCard.tsx`** — confidence color: green ≥80%, orange ≥65%, red <65%
-- **`hooks/usePrediction.ts`** — SSE lifecycle: `isLoading`, `progress`, `stage`, `result`, `error`
-- **`store/themeStore.ts`** — dark/light toggle, persisted to localStorage, class on `<html>`
-- **`store/parlayStore.ts`** — max 8 legs, no duplicate player+stat
+#### Feature Folders (`features/`)
+| Folder | Contents | Key Files |
+|--------|----------|-----------|
+| `predictions/` | Player prop predictions | `PlayerPage.tsx`, `PredictionCard.tsx`, `StatChartModal.tsx`, `usePrediction.ts`, `api.ts` |
+| `research/` | Player research & analysis | `ResearchPage.tsx`, 6 tab components (`OverviewTab`, `GameLogTab`, `ChartTab`, `SplitsTab`, `AnalysisTab`, `MatchupTab`), `ModelEdgeCard.tsx`, `types.ts`, `api.ts` |
+| `games/` | Game predictions | `GamesPage.tsx`, `GameCard.tsx`, `AccuracyTracker.tsx`, `api.ts` |
+| `picks/` | Pick history & tracking | `PicksPage.tsx`, `usePicksRealtime.ts`, `api.ts` |
+| `home/` | Home & best bets | `HomePage.tsx`, `BetCard.tsx`, `api.ts` |
+| `auth/` | Authentication | `LoginPage.tsx`, `SignupPage.tsx`, `LoginForm.tsx`, `SignupForm.tsx`, `ProtectedRoute.tsx`, `authStore.ts`, `types.ts` |
+| `social/` | Profiles & leaderboard | `LeaderboardPage.tsx`, `PublicProfilePage.tsx`, `api.ts` |
+| `settings/` | User settings | `SettingsPage.tsx`, `AvatarCropModal.tsx` |
+| `landing/` | Marketing landing | `LandingPage.tsx` |
+
+#### Shared (`shared/`)
+- **`components/PlayerSearch.tsx`** — debounced (300ms) autocomplete, used by predictions, research, home
+- **`components/UserMenu.tsx`** — nav auth menu (App.tsx)
+- **`components/TermsModal.tsx`** — TOS acceptance modal
+- **`utils/nba.ts`** — headshot URLs, team mappings
+- **`lib/supabase.ts`** — Supabase client singleton
+- **`store/themeStore.ts`** — dark/light toggle, persisted to localStorage
+
+#### API Layer (`api/`)
+- **`client.ts`** — `apiFetch` wrapper with auth token injection (~50 lines). All feature API functions import from here.
+- **`types.ts`** — all shared TypeScript interfaces (PlayerInfo, Pick, GamePrediction, etc.)
+- Each feature has its own `api.ts` that imports `apiFetch` from `../../api/client` and exports feature-specific functions.
 
 #### Theme
 - **Always use `var(--x)` CSS variables — never hardcoded hex values**
