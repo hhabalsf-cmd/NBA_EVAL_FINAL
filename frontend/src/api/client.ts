@@ -387,33 +387,6 @@ export async function predictPlayer(
   return result
 }
 
-export async function predictPlayerSync(
-  playerName: string,
-  options: {
-    modelType?: string
-    useEnsemble?: boolean
-    retrain?: boolean
-  } = {}
-): Promise<PredictionResult> {
-  const response = await apiFetch(`${API_BASE}/players/predict/sync`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      player_name: playerName,
-      model_type: options.modelType || 'gradient_boost',
-      use_ensemble: options.useEnsemble || false,
-      retrain: options.retrain || false,
-    }),
-  })
-
-  if (!response.ok) {
-    const error = await response.json()
-    throw new Error(error.detail || 'Prediction failed')
-  }
-
-  return response.json()
-}
-
 export async function evaluateLine(
   playerName: string,
   stat: string,
@@ -792,37 +765,6 @@ export interface TeamInjuriesData {
 export async function getTeamInjuries(playerName: string): Promise<TeamInjuriesData> {
   const res = await apiFetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/team-injuries`)
   if (!res.ok) throw new Error('Failed to fetch injuries')
-  return res.json()
-}
-
-// === Standings Types ===
-
-export interface StandingsTeam {
-  team_id: number
-  team: string
-  conference: string
-  rank: number
-  wins: number
-  losses: number
-  pct: number
-  gb: number | string
-  home: string
-  away: string
-  l10: string
-  streak: string
-}
-
-export interface StandingsData {
-  east: StandingsTeam[]
-  west: StandingsTeam[]
-  fetched_at: number
-}
-
-// === Standings API Functions ===
-
-export async function getStandings(): Promise<StandingsData> {
-  const res = await apiFetch(`${API_BASE}/standings`)
-  if (!res.ok) throw new Error('Failed to fetch standings')
   return res.json()
 }
 

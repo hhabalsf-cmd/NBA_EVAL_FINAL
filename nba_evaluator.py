@@ -1647,10 +1647,8 @@ class FeatureEngineer:
             'ROLL_10_AST': latest.get('ROLL_10_AST', 0),
             'ROLL_5_MIN_NUMERIC': latest.get('ROLL_5_MIN_NUMERIC', 30),
             'ROLL_10_MIN_NUMERIC': latest.get('ROLL_10_MIN_NUMERIC', 30),
-            # Exponential moving averages (better captures recent form)
+            # Exponential moving averages (PTS + MIN only — REB/AST redundant with ROLL_5)
             'EMA_5_PTS': latest.get('EMA_5_PTS', latest.get('ROLL_5_PTS', 0)),
-            'EMA_5_REB': latest.get('EMA_5_REB', latest.get('ROLL_5_REB', 0)),
-            'EMA_5_AST': latest.get('EMA_5_AST', latest.get('ROLL_5_AST', 0)),
             'EMA_5_MIN_NUMERIC': latest.get('EMA_5_MIN_NUMERIC', latest.get('ROLL_5_MIN_NUMERIC', 30)),
             # Variance measures
             'STD_10_PTS': latest.get('STD_10_PTS', 5),
@@ -1664,20 +1662,16 @@ class FeatureEngineer:
             # Rest and schedule
             'DAYS_REST': days_rest,
             'B2B': 1 if days_rest == 1 else 0,
-            'EXTENDED_REST': 1 if days_rest >= 3 else 0,
             # Schedule density & travel
             'GAMES_IN_LAST_7': games_in_last_7,
-            'GAMES_IN_LAST_4': games_in_last_4,
             'TRAVEL_MILES_NORM': travel_miles / 1000,
             'TIMEZONE_SHIFT': timezone_shift,
-            'IS_ALTITUDE': is_altitude,
             # Vegas lines (normalized around league averages)
             'VEGAS_GAME_TOTAL_NORM': (vegas_game_total - 220) / 10,  # avg ~220, std ~10
             'VEGAS_SPREAD_NORM': vegas_spread / 5,  # spread in 5-point units
             'VEGAS_IMPLIED_TEAM_TOTAL_NORM': (vegas_implied_team_total - 110) / 5,
             # Team momentum
             'WIN_STREAK': latest.get('WIN_STREAK', 2.5),
-            'LOSS_STREAK': latest.get('LOSS_STREAK', 2.5),
             # Injuries
             'INJURIES_TEAM': injuries_team,
             'INJURIES_OPP': injuries_opp,
@@ -1687,7 +1681,6 @@ class FeatureEngineer:
             'OPP_AST_ALLOWED_NORM': (opp_ast_allowed - 25) / 3,
             # Role stability
             'MIN_CONSISTENCY': latest.get('MIN_CONSISTENCY', 5),
-            'USAGE_PROXY': latest.get('USAGE_PROXY', 15),
             # Hot/Cold indicators
             'IS_HOT': latest.get('IS_HOT', 0),
             'IS_COLD': latest.get('IS_COLD', 0),
@@ -1699,18 +1692,12 @@ class FeatureEngineer:
             # =====================
             # Efficiency metrics
             'ROLL_5_TS_PCT': latest.get('ROLL_5_TS_PCT', 0.55),
-            'ROLL_10_TS_PCT': latest.get('ROLL_10_TS_PCT', 0.55),
             'ROLL_5_EFG_PCT': latest.get('ROLL_5_EFG_PCT', 0.50),
             'ROLL_5_PTS_PER_FGA': latest.get('ROLL_5_PTS_PER_FGA', 1.1),
 
             # Usage rate proxy
             'ROLL_5_USG': latest.get('ROLL_5_USG', 20),
             'ROLL_10_USG': latest.get('ROLL_10_USG', 20),
-
-            # Pace-adjusted stats
-            'ROLL_5_PTS_PACE_ADJ': latest.get('ROLL_5_PTS_PACE_ADJ', latest.get('ROLL_5_PTS', 0)),
-            'ROLL_5_REB_PACE_ADJ': latest.get('ROLL_5_REB_PACE_ADJ', latest.get('ROLL_5_REB', 0)),
-            'ROLL_5_AST_PACE_ADJ': latest.get('ROLL_5_AST_PACE_ADJ', latest.get('ROLL_5_AST', 0)),
 
             # Stocks (steals + blocks) and fantasy
             'ROLL_5_STOCKS': latest.get('ROLL_5_STOCKS', 1.5),
@@ -1722,25 +1709,11 @@ class FeatureEngineer:
 
             # Per-36-minute normalized stats
             'ROLL_5_PTS_PER36': latest.get('ROLL_5_PTS_PER36', 0),
-            'ROLL_10_PTS_PER36': latest.get('ROLL_10_PTS_PER36', 0),
             'ROLL_5_REB_PER36': latest.get('ROLL_5_REB_PER36', 0),
-            'ROLL_10_REB_PER36': latest.get('ROLL_10_REB_PER36', 0),
             'ROLL_5_AST_PER36': latest.get('ROLL_5_AST_PER36', 0),
-            'ROLL_10_AST_PER36': latest.get('ROLL_10_AST_PER36', 0),
-
-            # Blowout-adjusted rolling averages
-            'ROLL_10_PTS_BLOWOUT_ADJ': latest.get('ROLL_10_PTS_BLOWOUT_ADJ', latest.get('ROLL_10_PTS', 0)),
-            'ROLL_10_REB_BLOWOUT_ADJ': latest.get('ROLL_10_REB_BLOWOUT_ADJ', latest.get('ROLL_10_REB', 0)),
-            'ROLL_10_AST_BLOWOUT_ADJ': latest.get('ROLL_10_AST_BLOWOUT_ADJ', latest.get('ROLL_10_AST', 0)),
 
             # Rolling opponent defensive context (recent form, not just season-long)
             'OPP_DEF_RATING_ROLL10': latest.get('OPP_DEF_RATING_ROLL10', (opp_def_rating - 110) / 5),
-            'OPP_PACE_ROLL10': latest.get('OPP_PACE_ROLL10', (opp_pace - 100) / 5),
-
-            # Interaction features
-            'B2B_VS_ELITE': (1 if days_rest == 1 else 0) * (1 if (opp_def_rating - 110) / 5 < -0.4 else 0),
-            'HOT_VS_WEAK': latest.get('IS_HOT', 0) * (1 if (opp_def_rating - 110) / 5 > 1.2 else 0),
-            'RESTED_HOME': (1 if days_rest >= 3 else 0) * is_home,
 
             # =====================
             # HEAD-TO-HEAD MATCHUP STATS
@@ -1756,9 +1729,8 @@ class FeatureEngineer:
             'VS_OPP_AST_DIFF': 0,
 
             # =====================
-            # POSITION FEATURES
+            # POSITION FEATURES (interactions only — POSITION_ORD alone is dead)
             # =====================
-            'POSITION_ORD': latest.get('POSITION_ORD', 2),
             'POSITION_x_OPP_DEF': latest.get('POSITION_x_OPP_DEF', 0),
             'POSITION_x_OPP_PACE': latest.get('POSITION_x_OPP_PACE', 0),
 
@@ -1768,7 +1740,6 @@ class FeatureEngineer:
             'OPP_OFF_RATING_NORM': (opp_off_rating - 110) / 5,
             'OPP_NET_RATING_NORM': opp_net_rating / 5,
             'OPP_EFG_PCT_NORM': (opp_efg_pct - 0.50) / 0.03,
-            'OPP_TOV_PCT_NORM': (opp_tov_pct - 14.0) / 2.0,
             'OPP_OREB_PCT_NORM': (opp_oreb_pct - 0.27) / 0.05,
             'OPP_DREB_PCT_NORM': (opp_dreb_pct - 0.73) / 0.05,
 
@@ -1808,9 +1779,6 @@ class FeatureEngineer:
             # ENHANCED INTERACTION FEATURES
             # =====================
             'OREB_RATE_x_OPP_OREB': latest.get('OREB_RATE', 0.25) * ((opp_oreb_pct - 0.27) / 0.05),
-            'HIGH_PACE_GAME': 1 if opp_pace > 103 else 0,
-            'LOW_PACE_GAME': 1 if opp_pace < 97 else 0,
-            'ELITE_OPP': 1 if opp_net_rating > 5.0 else 0,
 
             # Per-36 rebound splits
             'ROLL_5_OREB_PER36': latest.get('ROLL_5_OREB_PER36', 0),
@@ -1927,63 +1895,53 @@ class MLPredictor:
         # Rolling averages
         'ROLL_5_PTS', 'ROLL_10_PTS', 'ROLL_5_REB', 'ROLL_10_REB',
         'ROLL_5_AST', 'ROLL_10_AST', 'ROLL_5_MIN_NUMERIC', 'ROLL_10_MIN_NUMERIC',
-        # Exponential moving averages
-        'EMA_5_PTS', 'EMA_5_REB', 'EMA_5_AST', 'EMA_5_MIN_NUMERIC',
+        # Exponential moving averages (keep PTS + MIN — highest signal; REB/AST redundant with ROLL_5)
+        'EMA_5_PTS', 'EMA_5_MIN_NUMERIC',
         # Variance
         'STD_10_PTS', 'STD_10_REB', 'STD_10_AST',
         # Trends
         'PTS_TREND', 'REB_TREND', 'AST_TREND', 'MIN_TREND',
-        # Schedule context
-        'DAYS_REST', 'B2B', 'EXTENDED_REST',
-        # Team momentum
-        'WIN_STREAK', 'LOSS_STREAK',
-        # Role indicators
-        'MIN_CONSISTENCY', 'USAGE_PROXY',
+        # Schedule context (DAYS_REST captures B2B and EXTENDED_REST; keep B2B for clarity)
+        'DAYS_REST', 'B2B',
+        # Team momentum (LOSS_STREAK ≡ 5 - WIN_STREAK, redundant)
+        'WIN_STREAK',
+        # Role indicators (USAGE_PROXY redundant with ROLL_USG)
+        'MIN_CONSISTENCY',
         # Hot/cold
         'IS_HOT', 'IS_COLD',
         # Season phase
         'SEASON_PHASE',
         # Opponent context
         'OPP_DEF_RATING_NORM', 'OPP_PACE_NORM', 'OPP_AST_ALLOWED_NORM',
-        # Efficiency metrics
-        'ROLL_5_TS_PCT', 'ROLL_10_TS_PCT',
+        # Efficiency metrics (keep ROLL_5 only — ROLL_10_TS_PCT redundant)
+        'ROLL_5_TS_PCT',
         'ROLL_5_EFG_PCT',
         'ROLL_5_PTS_PER_FGA',
         # Usage rate
         'ROLL_5_USG', 'ROLL_10_USG',
-        # Pace-adjusted stats
-        'ROLL_5_PTS_PACE_ADJ', 'ROLL_5_REB_PACE_ADJ', 'ROLL_5_AST_PACE_ADJ',
         # Defensive contribution
         'ROLL_5_STOCKS',
         # Fantasy (composite metric)
         'ROLL_5_FANTASY_PTS',
         # Assist efficiency
         'AST_TOV_RATIO', 'ROLL_5_AST_TOV',
-        # Per-36-minute normalized stats
-        'ROLL_5_PTS_PER36', 'ROLL_10_PTS_PER36',
-        'ROLL_5_REB_PER36', 'ROLL_10_REB_PER36',
-        'ROLL_5_AST_PER36', 'ROLL_10_AST_PER36',
-        # Blowout-adjusted rolling averages
-        'ROLL_10_PTS_BLOWOUT_ADJ', 'ROLL_10_REB_BLOWOUT_ADJ', 'ROLL_10_AST_BLOWOUT_ADJ',
-        # Rolling opponent context
-        'OPP_DEF_RATING_ROLL10', 'OPP_PACE_ROLL10',
+        # Per-36-minute normalized stats (keep ROLL_5 only — ROLL_10 per36 redundant)
+        'ROLL_5_PTS_PER36',
+        'ROLL_5_REB_PER36',
+        'ROLL_5_AST_PER36',
+        # Rolling opponent context (keep OPP_DEF_RATING_ROLL10; OPP_PACE_ROLL10 redundant with OPP_PACE_NORM)
+        'OPP_DEF_RATING_ROLL10',
         # Head-to-head matchup stats
         'VS_OPP_AVG_PTS', 'VS_OPP_AVG_REB', 'VS_OPP_AVG_AST', 'VS_OPP_GAMES',
         'VS_OPP_PTS_DIFF', 'VS_OPP_REB_DIFF', 'VS_OPP_AST_DIFF',
-        # Interaction features
-        'B2B_VS_ELITE', 'HOT_VS_WEAK', 'RESTED_HOME',
         # Injury context (0 in training data; non-zero at prediction time via apply_injury_boost)
         'INJURIES_TEAM', 'INJURIES_OPP',
-        # Position features
-        'POSITION_ORD', 'POSITION_x_OPP_DEF', 'POSITION_x_OPP_PACE',
+        # Position features (POSITION_ORD is dead — interactions capture it)
+        'POSITION_x_OPP_DEF', 'POSITION_x_OPP_PACE',
 
-        # =====================
-        # NEW FEATURES (BDL advanced stats integration)
-        # =====================
-
-        # Enhanced Opponent Context (from team advanced stats)
+        # Enhanced Opponent Context (from team advanced stats; OPP_TOV_PCT_NORM is dead)
         'OPP_OFF_RATING_NORM', 'OPP_NET_RATING_NORM', 'OPP_EFG_PCT_NORM',
-        'OPP_TOV_PCT_NORM', 'OPP_OREB_PCT_NORM', 'OPP_DREB_PCT_NORM',
+        'OPP_OREB_PCT_NORM', 'OPP_DREB_PCT_NORM',
 
         # Rebound Split Features
         'OREB_RATE',
@@ -2006,17 +1964,15 @@ class MLPredictor:
         'ROLL_5_PF',
         'PF_PER_MIN',
 
-        # Enhanced Interaction Features
+        # Enhanced Interaction Features (dead: HIGH_PACE_GAME, LOW_PACE_GAME, ELITE_OPP)
         'OREB_RATE_x_OPP_OREB',
-        'HIGH_PACE_GAME', 'LOW_PACE_GAME',
-        'ELITE_OPP',
 
         # Per-36 Rebound Splits
         'ROLL_5_OREB_PER36', 'ROLL_5_DREB_PER36',
 
-        # Schedule Density & Travel (Phase 3)
-        'GAMES_IN_LAST_7', 'GAMES_IN_LAST_4',
-        'TRAVEL_MILES_NORM', 'TIMEZONE_SHIFT', 'IS_ALTITUDE',
+        # Schedule Density & Travel (GAMES_IN_LAST_4 redundant; IS_ALTITUDE is dead)
+        'GAMES_IN_LAST_7',
+        'TRAVEL_MILES_NORM', 'TIMEZONE_SHIFT',
 
         # Vegas Lines (Phase 3b) — market-implied context
         'VEGAS_GAME_TOTAL_NORM', 'VEGAS_SPREAD_NORM', 'VEGAS_IMPLIED_TEAM_TOTAL_NORM',
@@ -2241,32 +2197,32 @@ class MLPredictor:
     # Shared features (MIN, schedule, opponent, efficiency, usage) are allowed everywhere.
     STAT_SPECIFIC_FEATURES = {
         'PTS': {
-            'ROLL_5_REB', 'ROLL_10_REB', 'EMA_5_REB', 'STD_10_REB',
-            'REB_TREND', 'ROLL_5_REB_PACE_ADJ', 'ROLL_5_REB_PER36', 'ROLL_10_REB_PER36',
-            'ROLL_10_REB_BLOWOUT_ADJ', 'VS_OPP_AVG_REB', 'VS_OPP_REB_DIFF',
-            'ROLL_5_AST', 'ROLL_10_AST', 'EMA_5_AST', 'STD_10_AST',
-            'AST_TREND', 'ROLL_5_AST_PACE_ADJ', 'ROLL_5_AST_PER36', 'ROLL_10_AST_PER36',
-            'ROLL_10_AST_BLOWOUT_ADJ', 'VS_OPP_AVG_AST', 'VS_OPP_AST_DIFF',
+            'ROLL_5_REB', 'ROLL_10_REB', 'STD_10_REB',
+            'REB_TREND', 'ROLL_5_REB_PER36',
+            'VS_OPP_AVG_REB', 'VS_OPP_REB_DIFF',
+            'ROLL_5_AST', 'ROLL_10_AST', 'STD_10_AST',
+            'AST_TREND', 'ROLL_5_AST_PER36',
+            'VS_OPP_AVG_AST', 'VS_OPP_AST_DIFF',
             'AST_TOV_RATIO', 'ROLL_5_AST_TOV',
         },
         'REB': {
             'ROLL_5_PTS', 'ROLL_10_PTS', 'EMA_5_PTS', 'STD_10_PTS',
-            'PTS_TREND', 'ROLL_5_PTS_PACE_ADJ', 'ROLL_5_PTS_PER36', 'ROLL_10_PTS_PER36',
-            'ROLL_10_PTS_BLOWOUT_ADJ', 'VS_OPP_AVG_PTS', 'VS_OPP_PTS_DIFF',
-            'ROLL_5_AST', 'ROLL_10_AST', 'EMA_5_AST', 'STD_10_AST',
-            'AST_TREND', 'ROLL_5_AST_PACE_ADJ', 'ROLL_5_AST_PER36', 'ROLL_10_AST_PER36',
-            'ROLL_10_AST_BLOWOUT_ADJ', 'VS_OPP_AVG_AST', 'VS_OPP_AST_DIFF',
+            'PTS_TREND', 'ROLL_5_PTS_PER36',
+            'VS_OPP_AVG_PTS', 'VS_OPP_PTS_DIFF',
+            'ROLL_5_AST', 'ROLL_10_AST', 'STD_10_AST',
+            'AST_TREND', 'ROLL_5_AST_PER36',
+            'VS_OPP_AVG_AST', 'VS_OPP_AST_DIFF',
             'AST_TOV_RATIO', 'ROLL_5_AST_TOV',
-            'ROLL_5_TS_PCT', 'ROLL_10_TS_PCT', 'ROLL_5_EFG_PCT', 'ROLL_5_PTS_PER_FGA',
+            'ROLL_5_TS_PCT', 'ROLL_5_EFG_PCT', 'ROLL_5_PTS_PER_FGA',
         },
         'AST': {
             'ROLL_5_PTS', 'ROLL_10_PTS', 'EMA_5_PTS', 'STD_10_PTS',
-            'PTS_TREND', 'ROLL_5_PTS_PACE_ADJ', 'ROLL_5_PTS_PER36', 'ROLL_10_PTS_PER36',
-            'ROLL_10_PTS_BLOWOUT_ADJ', 'VS_OPP_AVG_PTS', 'VS_OPP_PTS_DIFF',
-            'ROLL_5_REB', 'ROLL_10_REB', 'EMA_5_REB', 'STD_10_REB',
-            'REB_TREND', 'ROLL_5_REB_PACE_ADJ', 'ROLL_5_REB_PER36', 'ROLL_10_REB_PER36',
-            'ROLL_10_REB_BLOWOUT_ADJ', 'VS_OPP_AVG_REB', 'VS_OPP_REB_DIFF',
-            'ROLL_5_TS_PCT', 'ROLL_10_TS_PCT', 'ROLL_5_EFG_PCT', 'ROLL_5_PTS_PER_FGA',
+            'PTS_TREND', 'ROLL_5_PTS_PER36',
+            'VS_OPP_AVG_PTS', 'VS_OPP_PTS_DIFF',
+            'ROLL_5_REB', 'ROLL_10_REB', 'STD_10_REB',
+            'REB_TREND', 'ROLL_5_REB_PER36',
+            'VS_OPP_AVG_REB', 'VS_OPP_REB_DIFF',
+            'ROLL_5_TS_PCT', 'ROLL_5_EFG_PCT', 'ROLL_5_PTS_PER_FGA',
         },
         # PRA uses all features since it's a composite stat
         'PRA': set(),
@@ -2533,12 +2489,12 @@ class MLPredictor:
                     # Log new feature usage after selection
                     _new_feats = {
                         'OPP_OFF_RATING_NORM', 'OPP_NET_RATING_NORM', 'OPP_EFG_PCT_NORM',
-                        'OPP_TOV_PCT_NORM', 'OPP_OREB_PCT_NORM', 'OPP_DREB_PCT_NORM',
+                        'OPP_OREB_PCT_NORM', 'OPP_DREB_PCT_NORM',
                         'OREB_RATE', 'ROLL_5_OREB', 'ROLL_10_OREB', 'ROLL_5_DREB', 'ROLL_10_DREB',
                         'FG3_RATE', 'ROLL_5_FG3M', 'ROLL_10_FG3M', 'ROLL_5_FG3A', 'FG3_TREND',
                         'FT_RATE', 'ROLL_5_FT_RATE', 'ROLL_5_FTM',
                         'ROLL_5_PF', 'PF_PER_MIN',
-                        'OREB_RATE_x_OPP_OREB', 'HIGH_PACE_GAME', 'LOW_PACE_GAME', 'ELITE_OPP',
+                        'OREB_RATE_x_OPP_OREB',
                         'ROLL_5_OREB_PER36', 'ROLL_5_DREB_PER36', 'ROLL_5_FG3_RATE',
                     }
                     _kept = {n: v for n, v in self.feature_importance[stat].items() if n in _new_feats}
