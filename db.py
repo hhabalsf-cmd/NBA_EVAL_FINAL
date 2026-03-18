@@ -29,6 +29,7 @@ To create the parlay tables, run the following SQL in the Supabase SQL Editor:
     CREATE INDEX IF NOT EXISTS parlay_legs_parlay_id_idx ON parlay_legs(parlay_id);
     CREATE INDEX IF NOT EXISTS parlay_legs_pick_id_idx ON parlay_legs(pick_id);
 """
+import contextlib
 import json
 import logging
 import os
@@ -64,8 +65,8 @@ def _get_pool() -> "psycopg2.pool.ThreadedConnectionPool":
     global _pool
     if _pool is None:
         _pool = psycopg2.pool.ThreadedConnectionPool(
-            minconn=1,
-            maxconn=10,
+            minconn=2,
+            maxconn=20,
             dsn=DATABASE_URL,
             cursor_factory=psycopg2.extras.RealDictCursor,
         )
@@ -88,6 +89,16 @@ def put_connection(conn) -> None:
         _get_pool().putconn(conn)
     except Exception as exc:
         _logger.warning("put_connection error: %s", exc)
+
+
+@contextlib.contextmanager
+def borrow_conn():
+    """Context manager that guarantees the connection is returned to the pool."""
+    conn = get_connection()
+    try:
+        yield conn
+    finally:
+        put_connection(conn)
 
 
 def init_db():
@@ -124,16 +135,13 @@ def get_game_logs_from_supabase(player_id: str, season: str):
     Return a DataFrame of game logs for (player_id, season) from Supabase,
     or None if no rows exist. Column names match NBA API format.
     """
-    conn = get_connection()
-    try:
+    with borrow_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT * FROM player_game_logs WHERE player_id = %s AND season = %s",
                 (player_id, season),
             )
             rows = cur.fetchall()
-    finally:
-        put_connection(conn)
 
     if not rows:
         return None
@@ -183,13 +191,10 @@ def insert_game_logs_to_supabase(df: pd.DataFrame, player_id: str, season: str) 
 
     rows = [tuple(row[c] for c in cols_present) for _, row in db_df.iterrows()]
 
-    conn = get_connection()
-    try:
+    with borrow_conn() as conn:
         with conn.cursor() as cur:
             cur.executemany(insert_sql, rows)
         conn.commit()
-    finally:
-        put_connection(conn)
 
 
 # ── Team defensive stats cache (Supabase) ────────────────────
@@ -202,14 +207,13 @@ def get_team_stats_from_supabase(season: str):
     Return team defensive stats dict for the given season, or None if stale/missing.
     TTL: 24 hours. Dict keyed by team abbreviation with lowercase stat keys.
     """
-    conn = get_connection()
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT * FROM team_defensive_stats WHERE season = %s",
-            (season,),
-        )
-        rows = cur.fetchall()
-    put_connection(conn)
+    with borrow_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM team_defensive_stats WHERE season = %s",
+                (season,),
+            )
+            rows = cur.fetchall()
 
     if not rows:
         return None
@@ -286,11 +290,10 @@ def upsert_team_stats_to_supabase(team_data: dict, season: str) -> None:
             fetched_at = NOW()
     """
 
-    conn = get_connection()
-    with conn.cursor() as cur:
-        cur.executemany(sql, rows)
-    conn.commit()
-    put_connection(conn)
+    with borrow_conn() as conn:
+        with conn.cursor() as cur:
+            cur.executemany(sql, rows)
+        conn.commit()
 
 
 # ── League averages (Supabase query — no external API) ────────
@@ -300,38 +303,36 @@ def get_league_averages_from_supabase(season: str) -> dict:
     Compute league-wide per-game averages from player_game_logs for the given season.
     Returns dict with keys PTS, REB, AST, MIN (floats), or empty dict on failure.
     """
-    conn = get_connection()
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    AVG(pts)  AS pts,
-                    AVG(reb)  AS reb,
-                    AVG(ast)  AS ast,
-                    AVG(min)  AS min
-                FROM player_game_logs
-                WHERE season = %s
-                  AND pts IS NOT NULL
-                """,
-                (season,),
-            )
-            row = cur.fetchone()
+        with borrow_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        AVG(pts)  AS pts,
+                        AVG(reb)  AS reb,
+                        AVG(ast)  AS ast,
+                        AVG(min)  AS min
+                    FROM player_game_logs
+                    WHERE season = %s
+                      AND pts IS NOT NULL
+                    """,
+                    (season,),
+                )
+                row = cur.fetchone()
 
-        if row is None:
-            return {}
+            if row is None:
+                return {}
 
-        return {
-            'PTS': float(row['pts']) if row['pts'] is not None else 11.5,
-            'REB': float(row['reb']) if row['reb'] is not None else 4.2,
-            'AST': float(row['ast']) if row['ast'] is not None else 2.4,
-            'MIN': float(row['min']) if row['min'] is not None else 24.0,
-        }
+            return {
+                'PTS': float(row['pts']) if row['pts'] is not None else 11.5,
+                'REB': float(row['reb']) if row['reb'] is not None else 4.2,
+                'AST': float(row['ast']) if row['ast'] is not None else 2.4,
+                'MIN': float(row['min']) if row['min'] is not None else 24.0,
+            }
     except Exception as exc:
         logging.getLogger(__name__).warning("get_league_averages_from_supabase error: %s", exc)
         return {}
-    finally:
-        put_connection(conn)
 
 
 
@@ -343,76 +344,74 @@ def get_league_averages_from_supabase(season: str) -> dict:
 
 def save_game_prediction(prediction_data: dict) -> int:
     """Save a game prediction to the database."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    key_factors = prediction_data.get('key_factors')
-    if isinstance(key_factors, list):
-        key_factors = json.dumps(key_factors)
+        key_factors = prediction_data.get('key_factors')
+        if isinstance(key_factors, list):
+            key_factors = json.dumps(key_factors)
 
-    # Store full prediction payload for fast retrieval by GET /today
-    extended_data = prediction_data.get('extended_data')
-    if extended_data is None and prediction_data.get('matchup'):
-        extended_data = json.dumps(prediction_data)
+        # Store full prediction payload for fast retrieval by GET /today
+        extended_data = prediction_data.get('extended_data')
+        if extended_data is None and prediction_data.get('matchup'):
+            extended_data = json.dumps(prediction_data)
 
-    cursor.execute("""
-        INSERT INTO game_predictions (
-            timestamp, game_date, home_team, away_team,
-            home_team_id, away_team_id, predicted_winner,
-            home_win_prob, away_win_prob, confidence,
-            key_factors, model_version, extended_data
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        RETURNING id
-    """, (
-        datetime.now().isoformat(),
-        prediction_data.get('game_date'),
-        prediction_data.get('home_team'),
-        prediction_data.get('away_team'),
-        prediction_data.get('home_team_id'),
-        prediction_data.get('away_team_id'),
-        prediction_data.get('predicted_winner'),
-        prediction_data.get('home_win_prob'),
-        prediction_data.get('away_win_prob'),
-        prediction_data.get('confidence'),
-        key_factors,
-        prediction_data.get('model_version', 'v1.0'),
-        extended_data,
-    ))
+        cursor.execute("""
+            INSERT INTO game_predictions (
+                timestamp, game_date, home_team, away_team,
+                home_team_id, away_team_id, predicted_winner,
+                home_win_prob, away_win_prob, confidence,
+                key_factors, model_version, extended_data
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (
+            datetime.now().isoformat(),
+            prediction_data.get('game_date'),
+            prediction_data.get('home_team'),
+            prediction_data.get('away_team'),
+            prediction_data.get('home_team_id'),
+            prediction_data.get('away_team_id'),
+            prediction_data.get('predicted_winner'),
+            prediction_data.get('home_win_prob'),
+            prediction_data.get('away_win_prob'),
+            prediction_data.get('confidence'),
+            key_factors,
+            prediction_data.get('model_version', 'v1.0'),
+            extended_data,
+        ))
 
-    pred_id = cursor.fetchone()['id']
-    conn.commit()
+        pred_id = cursor.fetchone()['id']
+        conn.commit()
 
-    # Enforce 40-prediction cap — delete oldest predictions beyond the limit
-    cursor.execute("""
-        DELETE FROM game_predictions
-        WHERE id NOT IN (
-            SELECT id FROM game_predictions
-            ORDER BY timestamp DESC
-            LIMIT 40
-        )
-    """)
-    conn.commit()
+        # Enforce 40-prediction cap — delete oldest predictions beyond the limit
+        cursor.execute("""
+            DELETE FROM game_predictions
+            WHERE id NOT IN (
+                SELECT id FROM game_predictions
+                ORDER BY timestamp DESC
+                LIMIT 40
+            )
+        """)
+        conn.commit()
 
-    put_connection(conn)
     return pred_id
 
 
 def get_todays_stored_predictions() -> list:
     """Get today's stored game predictions from the DB (no NBA API call)."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    today = datetime.now().strftime('%Y-%m-%d')
-    # Fetch most recent prediction per matchup for today
-    cursor.execute("""
-        SELECT * FROM game_predictions
-        WHERE game_date = %s
-        ORDER BY timestamp DESC
-    """, (today,))
+        today = datetime.now().strftime('%Y-%m-%d')
+        # Fetch most recent prediction per matchup for today
+        cursor.execute("""
+            SELECT * FROM game_predictions
+            WHERE game_date = %s
+            ORDER BY timestamp DESC
+        """, (today,))
 
-    rows = cursor.fetchall()
-    put_connection(conn)
+        rows = cursor.fetchall()
 
     seen = set()
     results = []
@@ -479,25 +478,24 @@ def get_todays_stored_predictions() -> list:
 
 def get_game_predictions(days: int = 7, limit: int = None) -> list:
     """Get game predictions for the last N days or most recent N records."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    if limit is not None:
-        cursor.execute("""
-            SELECT * FROM game_predictions
-            ORDER BY timestamp DESC
-            LIMIT %s
-        """, (limit,))
-    else:
-        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-        cursor.execute("""
-            SELECT * FROM game_predictions
-            WHERE timestamp >= %s
-            ORDER BY timestamp DESC
-        """, (cutoff,))
+        if limit is not None:
+            cursor.execute("""
+                SELECT * FROM game_predictions
+                ORDER BY timestamp DESC
+                LIMIT %s
+            """, (limit,))
+        else:
+            cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+            cursor.execute("""
+                SELECT * FROM game_predictions
+                WHERE timestamp >= %s
+                ORDER BY timestamp DESC
+            """, (cutoff,))
 
-    rows = cursor.fetchall()
-    put_connection(conn)
+        rows = cursor.fetchall()
 
     seen = set()
     results = []
@@ -521,17 +519,16 @@ def get_game_predictions(days: int = 7, limit: int = None) -> list:
 
 def get_pending_game_predictions() -> list:
     """Get game predictions that haven't been graded yet."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    cursor.execute("""
-        SELECT * FROM game_predictions
-        WHERE correct IS NULL
-        ORDER BY game_date DESC
-    """)
+        cursor.execute("""
+            SELECT * FROM game_predictions
+            WHERE correct IS NULL
+            ORDER BY game_date DESC
+        """)
 
-    rows = cursor.fetchall()
-    put_connection(conn)
+        rows = cursor.fetchall()
 
     results = []
     for row in rows:
@@ -550,25 +547,23 @@ def get_pending_game_predictions() -> list:
 
 def grade_game_prediction(prediction_id: int, actual_winner: str):
     """Grade a game prediction with the actual winner."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    cursor.execute("SELECT predicted_winner FROM game_predictions WHERE id = %s", (prediction_id,))
-    row = cursor.fetchone()
-    if not row:
-        put_connection(conn)
-        return
+        cursor.execute("SELECT predicted_winner FROM game_predictions WHERE id = %s", (prediction_id,))
+        row = cursor.fetchone()
+        if not row:
+            return
 
-    correct = 1 if row['predicted_winner'] == actual_winner else 0
+        correct = 1 if row['predicted_winner'] == actual_winner else 0
 
-    cursor.execute("""
-        UPDATE game_predictions
-        SET actual_winner = %s, correct = %s, graded_at = %s
-        WHERE id = %s
-    """, (actual_winner, correct, datetime.now().isoformat(), prediction_id))
+        cursor.execute("""
+            UPDATE game_predictions
+            SET actual_winner = %s, correct = %s, graded_at = %s
+            WHERE id = %s
+        """, (actual_winner, correct, datetime.now().isoformat(), prediction_id))
 
-    conn.commit()
-    put_connection(conn)
+        conn.commit()
 
 
 def auto_grade_game_predictions() -> dict:
@@ -656,16 +651,14 @@ def auto_grade_game_predictions() -> dict:
 
 def get_game_accuracy_stats() -> dict:
     """Get accuracy statistics for game predictions."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    cursor.execute("SELECT * FROM game_predictions WHERE correct IS NOT NULL")
-    graded = [dict(row) for row in cursor.fetchall()]
+        cursor.execute("SELECT * FROM game_predictions WHERE correct IS NOT NULL")
+        graded = [dict(row) for row in cursor.fetchall()]
 
-    cursor.execute("SELECT COUNT(*) FROM game_predictions")
-    total = cursor.fetchone()['count']
-
-    put_connection(conn)
+        cursor.execute("SELECT COUNT(*) FROM game_predictions")
+        total = cursor.fetchone()['count']
 
     if not graded:
         return {
@@ -726,77 +719,74 @@ def save_pick(pick_data: dict) -> int:
     Returns:
         The ID of the inserted pick
     """
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    # Prevent duplicate picks: same user + player + stat + game_date
-    user_id = pick_data.get('user_id')
-    game_date = pick_data.get('game_date')
-    if user_id and game_date:
-        cursor.execute("""
-            SELECT id FROM picks
-            WHERE user_id = %s AND player = %s AND stat = %s
-              AND game_date = %s AND (voided IS NULL OR voided = 0)
-            LIMIT 1
-        """, (user_id, pick_data.get('player'), pick_data.get('stat'), game_date))
-        existing = cursor.fetchone()
-        if existing:
-            put_connection(conn)
-            return existing['id']
-
-    # opening_line defaults to line if not explicitly provided
-    opening_line = pick_data.get('opening_line') or pick_data.get('line')
-    closing_line = pick_data.get('closing_line')
-
-    cursor.execute("""
-        INSERT INTO picks (timestamp, player, stat, line, prediction, direction,
-                          edge, confidence, opponent, is_home, model_type,
-                          game_date, player_id, team_abbrev, prob_over, user_id,
-                          headshot_url, opening_line, closing_line)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        RETURNING id
-    """, (
-        datetime.now().isoformat(),
-        pick_data.get('player'),
-        pick_data.get('stat'),
-        pick_data.get('line'),
-        pick_data.get('prediction'),
-        pick_data.get('direction'),
-        pick_data.get('edge'),
-        pick_data.get('confidence'),
-        pick_data.get('opponent'),
-        pick_data.get('is_home', 0),
-        pick_data.get('model_type', 'unknown'),
-        game_date,
-        pick_data.get('player_id'),
-        pick_data.get('team_abbrev'),
-        pick_data.get('prob_over'),
-        user_id,
-        pick_data.get('headshot_url'),
-        opening_line,
-        closing_line,
-    ))
-
-    pick_id = cursor.fetchone()['id']
-    conn.commit()
-
-    # Enforce 100-pick cap per user — delete oldest picks beyond the limit
-    user_id = pick_data.get('user_id')
-    if user_id:
-        cursor.execute("""
-            DELETE FROM picks
-            WHERE user_id = %s AND id NOT IN (
+        # Prevent duplicate picks: same user + player + stat + game_date
+        user_id = pick_data.get('user_id')
+        game_date = pick_data.get('game_date')
+        if user_id and game_date:
+            cursor.execute("""
                 SELECT id FROM picks
-                WHERE user_id = %s
-                ORDER BY timestamp DESC
-                LIMIT 100
-            )
-        """, (user_id, user_id))
+                WHERE user_id = %s AND player = %s AND stat = %s
+                  AND game_date = %s AND (voided IS NULL OR voided = 0)
+                LIMIT 1
+            """, (user_id, pick_data.get('player'), pick_data.get('stat'), game_date))
+            existing = cursor.fetchone()
+            if existing:
+                return existing['id']
+
+        # opening_line defaults to line if not explicitly provided
+        opening_line = pick_data.get('opening_line') or pick_data.get('line')
+        closing_line = pick_data.get('closing_line')
+
+        cursor.execute("""
+            INSERT INTO picks (timestamp, player, stat, line, prediction, direction,
+                              edge, confidence, opponent, is_home, model_type,
+                              game_date, player_id, team_abbrev, prob_over, user_id,
+                              headshot_url, opening_line, closing_line)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (
+            datetime.now().isoformat(),
+            pick_data.get('player'),
+            pick_data.get('stat'),
+            pick_data.get('line'),
+            pick_data.get('prediction'),
+            pick_data.get('direction'),
+            pick_data.get('edge'),
+            pick_data.get('confidence'),
+            pick_data.get('opponent'),
+            pick_data.get('is_home', 0),
+            pick_data.get('model_type', 'unknown'),
+            game_date,
+            pick_data.get('player_id'),
+            pick_data.get('team_abbrev'),
+            pick_data.get('prob_over'),
+            user_id,
+            pick_data.get('headshot_url'),
+            opening_line,
+            closing_line,
+        ))
+
+        pick_id = cursor.fetchone()['id']
         conn.commit()
 
-    put_connection(conn)
+        # Enforce 100-pick cap per user — delete oldest picks beyond the limit
+        user_id = pick_data.get('user_id')
+        if user_id:
+            cursor.execute("""
+                DELETE FROM picks
+                WHERE user_id = %s AND id NOT IN (
+                    SELECT id FROM picks
+                    WHERE user_id = %s
+                    ORDER BY timestamp DESC
+                    LIMIT 100
+                )
+            """, (user_id, user_id))
+            conn.commit()
 
-    return pick_id
+        return pick_id
 
 
 def get_picks_history(days: int = 30, user_id: str = None, limit: int = None) -> list:
@@ -811,65 +801,62 @@ def get_picks_history(days: int = 30, user_id: str = None, limit: int = None) ->
     Returns:
         List of pick dicts
     """
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    if limit is not None:
-        if user_id:
-            cursor.execute("""
-                SELECT * FROM picks
-                WHERE (voided IS NULL OR voided = 0) AND user_id = %s
-                ORDER BY timestamp DESC
-                LIMIT %s
-            """, (user_id, limit))
+        if limit is not None:
+            if user_id:
+                cursor.execute("""
+                    SELECT * FROM picks
+                    WHERE (voided IS NULL OR voided = 0) AND user_id = %s
+                    ORDER BY timestamp DESC
+                    LIMIT %s
+                """, (user_id, limit))
+            else:
+                cursor.execute("""
+                    SELECT * FROM picks
+                    WHERE (voided IS NULL OR voided = 0)
+                    ORDER BY timestamp DESC
+                    LIMIT %s
+                """, (limit,))
         else:
-            cursor.execute("""
-                SELECT * FROM picks
-                WHERE (voided IS NULL OR voided = 0)
-                ORDER BY timestamp DESC
-                LIMIT %s
-            """, (limit,))
-    else:
-        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-        if user_id:
-            cursor.execute("""
-                SELECT * FROM picks
-                WHERE timestamp >= %s AND (voided IS NULL OR voided = 0) AND user_id = %s
-                ORDER BY timestamp DESC
-            """, (cutoff, user_id))
-        else:
-            cursor.execute("""
-                SELECT * FROM picks
-                WHERE timestamp >= %s AND (voided IS NULL OR voided = 0)
-                ORDER BY timestamp DESC
-            """, (cutoff,))
+            cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+            if user_id:
+                cursor.execute("""
+                    SELECT * FROM picks
+                    WHERE timestamp >= %s AND (voided IS NULL OR voided = 0) AND user_id = %s
+                    ORDER BY timestamp DESC
+                """, (cutoff, user_id))
+            else:
+                cursor.execute("""
+                    SELECT * FROM picks
+                    WHERE timestamp >= %s AND (voided IS NULL OR voided = 0)
+                    ORDER BY timestamp DESC
+                """, (cutoff,))
 
-    rows = cursor.fetchall()
-    put_connection(conn)
+        rows = cursor.fetchall()
 
     return [dict(row) for row in rows]
 
 
 def get_all_picks() -> list:
     """Get all picks in the database."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    cursor.execute("SELECT * FROM picks ORDER BY timestamp DESC")
+        cursor.execute("SELECT * FROM picks ORDER BY timestamp DESC")
 
-    rows = cursor.fetchall()
-    put_connection(conn)
+        rows = cursor.fetchall()
 
     return [dict(row) for row in rows]
 
 
 def get_pick_by_id(pick_id: int) -> Optional[dict]:
     """Get a single pick by ID. Returns dict or None."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM picks WHERE id = %s", (pick_id,))
-    row = cursor.fetchone()
-    put_connection(conn)
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM picks WHERE id = %s", (pick_id,))
+        row = cursor.fetchone()
     return dict(row) if row else None
 
 
@@ -883,9 +870,6 @@ def update_pick_result(pick_id: int, actual_result: float, line: float, directio
         line: The betting line
         direction: "OVER" or "UNDER"
     """
-    conn = get_connection()
-    cursor = conn.cursor()
-
     # Determine if the pick won
     if direction == "OVER":
         won = 1 if actual_result > line else 0
@@ -896,25 +880,26 @@ def update_pick_result(pick_id: int, actual_result: float, line: float, directio
     if actual_result == line:
         won = None  # Push
 
-    cursor.execute("""
-        UPDATE picks
-        SET actual_result = %s, won = %s
-        WHERE id = %s
-    """, (actual_result, won, pick_id))
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    conn.commit()
-    put_connection(conn)
+        cursor.execute("""
+            UPDATE picks
+            SET actual_result = %s, won = %s
+            WHERE id = %s
+        """, (actual_result, won, pick_id))
+
+        conn.commit()
 
 
 def delete_pick(pick_id: int):
     """Delete a pick from the database."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    cursor.execute("DELETE FROM picks WHERE id = %s", (pick_id,))
+        cursor.execute("DELETE FROM picks WHERE id = %s", (pick_id,))
 
-    conn.commit()
-    put_connection(conn)
+        conn.commit()
 
 
 def void_pick(pick_id: int, reason: str = "DNP"):
@@ -925,64 +910,60 @@ def void_pick(pick_id: int, reason: str = "DNP"):
         pick_id: The pick ID to void
         reason: Reason for voiding (DNP, postponed, injury, etc.)
     """
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    cursor.execute("""
-        UPDATE picks
-        SET voided = 1, void_reason = %s, won = NULL, actual_result = NULL
-        WHERE id = %s
-    """, (reason, pick_id))
+        cursor.execute("""
+            UPDATE picks
+            SET voided = 1, void_reason = %s, won = NULL, actual_result = NULL
+            WHERE id = %s
+        """, (reason, pick_id))
 
-    conn.commit()
-    put_connection(conn)
+        conn.commit()
 
 
 def get_voided_picks() -> List[Dict]:
     """Get all voided picks."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    cursor.execute("""
-        SELECT * FROM picks
-        WHERE voided = 1
-        ORDER BY timestamp DESC
-    """)
+        cursor.execute("""
+            SELECT * FROM picks
+            WHERE voided = 1
+            ORDER BY timestamp DESC
+        """)
 
-    rows = cursor.fetchall()
-    put_connection(conn)
+        rows = cursor.fetchall()
 
     return [dict(row) for row in rows]
 
 
 def unvoid_pick(pick_id: int):
     """Restore a voided pick back to pending status."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    cursor.execute("""
-        UPDATE picks
-        SET voided = 0, void_reason = NULL
-        WHERE id = %s
-    """, (pick_id,))
+        cursor.execute("""
+            UPDATE picks
+            SET voided = 0, void_reason = NULL
+            WHERE id = %s
+        """, (pick_id,))
 
-    conn.commit()
-    put_connection(conn)
+        conn.commit()
 
 
 def reset_pick_to_pending(pick_id: int):
     """Reset a graded pick back to pending status (clears result)."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    cursor.execute("""
-        UPDATE picks
-        SET won = NULL, actual_result = NULL, graded_at = NULL
-        WHERE id = %s
-    """, (pick_id,))
+        cursor.execute("""
+            UPDATE picks
+            SET won = NULL, actual_result = NULL, graded_at = NULL
+            WHERE id = %s
+        """, (pick_id,))
 
-    conn.commit()
-    put_connection(conn)
+        conn.commit()
 
 
 def reset_all_graded_for_date(game_date: str) -> int:
@@ -994,25 +975,24 @@ def reset_all_graded_for_date(game_date: str) -> int:
     Returns:
         Number of picks reset
     """
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    # Count how many will be affected
-    cursor.execute("""
-        SELECT COUNT(*) FROM picks
-        WHERE game_date LIKE %s AND won IS NOT NULL AND (voided IS NULL OR voided = 0)
-    """, (f"{game_date}%",))
-    count = cursor.fetchone()['count']
+        # Count how many will be affected
+        cursor.execute("""
+            SELECT COUNT(*) FROM picks
+            WHERE game_date LIKE %s AND won IS NOT NULL AND (voided IS NULL OR voided = 0)
+        """, (f"{game_date}%",))
+        count = cursor.fetchone()['count']
 
-    # Reset them
-    cursor.execute("""
-        UPDATE picks
-        SET won = NULL, actual_result = NULL, graded_at = NULL
-        WHERE game_date LIKE %s AND won IS NOT NULL AND (voided IS NULL OR voided = 0)
-    """, (f"{game_date}%",))
+        # Reset them
+        cursor.execute("""
+            UPDATE picks
+            SET won = NULL, actual_result = NULL, graded_at = NULL
+            WHERE game_date LIKE %s AND won IS NOT NULL AND (voided IS NULL OR voided = 0)
+        """, (f"{game_date}%",))
 
-    conn.commit()
-    put_connection(conn)
+        conn.commit()
 
     return count
 
@@ -1028,8 +1008,7 @@ def get_performance_stats(user_id: str = None) -> dict:
     uid_filter = "AND user_id = %s" if user_id else ""
     params = (user_id,) if user_id else ()
 
-    conn = get_connection()
-    try:
+    with borrow_conn() as conn:
         cursor = conn.cursor()
 
         # Total non-voided picks
@@ -1064,8 +1043,6 @@ def get_performance_stats(user_id: str = None) -> dict:
             WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0) {uid_filter}
         """, params)
         row = cursor.fetchone()
-    finally:
-        put_connection(conn)
 
     graded_picks = row['graded_picks'] or 0
     if graded_picks == 0:
@@ -1150,8 +1127,7 @@ def get_calibration_stats(user_id: str = None) -> dict:
     uid_filter = "AND user_id = %s" if user_id else ""
     params = (user_id,) if user_id else ()
 
-    conn = get_connection()
-    try:
+    with borrow_conn() as conn:
         cursor = conn.cursor()
         cursor.execute(f"""
             SELECT prob_over, won, direction, stat, confidence,
@@ -1164,8 +1140,6 @@ def get_calibration_stats(user_id: str = None) -> dict:
             ORDER BY timestamp ASC
         """, params)
         rows = cursor.fetchall()
-    finally:
-        put_connection(conn)
 
     if not rows:
         return {
@@ -1340,8 +1314,7 @@ def update_closing_lines() -> dict:
     Returns:
         Dict with 'updated' count and 'errors' list.
     """
-    conn = get_connection()
-    try:
+    with borrow_conn() as conn:
         cursor = conn.cursor()
         # Get pending picks that need closing lines (today's and yesterday's games)
         cursor.execute("""
@@ -1354,8 +1327,6 @@ def update_closing_lines() -> dict:
               AND game_date >= (CURRENT_DATE - INTERVAL '1 day')::text
         """)
         pending = cursor.fetchall()
-    finally:
-        put_connection(conn)
 
     if not pending:
         return {'updated': 0, 'errors': []}
@@ -1400,8 +1371,7 @@ def update_closing_lines() -> dict:
 
                             closing = prop.get('line')
                             if closing is not None:
-                                conn2 = get_connection()
-                                try:
+                                with borrow_conn() as conn2:
                                     cur2 = conn2.cursor()
                                     cur2.execute(
                                         "UPDATE picks SET closing_line = %s WHERE id = %s",
@@ -1409,8 +1379,6 @@ def update_closing_lines() -> dict:
                                     )
                                     conn2.commit()
                                     updated += 1
-                                finally:
-                                    put_connection(conn2)
                                 break
                         else:
                             continue
@@ -1430,24 +1398,23 @@ def get_cumulative_profit(user_id: str = None) -> list:
     Returns:
         List of dicts with: date, profit, cumulative_profit
     """
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    if user_id:
-        cursor.execute("""
-            SELECT timestamp, won FROM picks
-            WHERE won IS NOT NULL AND user_id = %s
-            ORDER BY timestamp ASC
-        """, (user_id,))
-    else:
-        cursor.execute("""
-            SELECT timestamp, won FROM picks
-            WHERE won IS NOT NULL
-            ORDER BY timestamp ASC
-        """)
+        if user_id:
+            cursor.execute("""
+                SELECT timestamp, won FROM picks
+                WHERE won IS NOT NULL AND user_id = %s
+                ORDER BY timestamp ASC
+            """, (user_id,))
+        else:
+            cursor.execute("""
+                SELECT timestamp, won FROM picks
+                WHERE won IS NOT NULL
+                ORDER BY timestamp ASC
+            """)
 
-    rows = cursor.fetchall()
-    put_connection(conn)
+        rows = cursor.fetchall()
 
     results = []
     cumulative = 0.0
@@ -1472,41 +1439,39 @@ def get_cumulative_profit(user_id: str = None) -> list:
 
 def get_pending_picks(user_id: str = None) -> List[Dict]:
     """Get all picks that haven't been graded yet (excludes voided picks)."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    if user_id:
-        cursor.execute("""
-            SELECT * FROM picks
-            WHERE won IS NULL AND (voided IS NULL OR voided = 0) AND user_id = %s
-            ORDER BY timestamp DESC
-        """, (user_id,))
-    else:
-        cursor.execute("""
-            SELECT * FROM picks
-            WHERE won IS NULL AND (voided IS NULL OR voided = 0)
-            ORDER BY timestamp DESC
-        """)
+        if user_id:
+            cursor.execute("""
+                SELECT * FROM picks
+                WHERE won IS NULL AND (voided IS NULL OR voided = 0) AND user_id = %s
+                ORDER BY timestamp DESC
+            """, (user_id,))
+        else:
+            cursor.execute("""
+                SELECT * FROM picks
+                WHERE won IS NULL AND (voided IS NULL OR voided = 0)
+                ORDER BY timestamp DESC
+            """)
 
-    rows = cursor.fetchall()
-    put_connection(conn)
+        rows = cursor.fetchall()
 
     return [dict(row) for row in rows]
 
 
 def get_picks_for_date(game_date: str) -> List[Dict]:
     """Get all picks for a specific game date."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    cursor.execute("""
-        SELECT * FROM picks
-        WHERE game_date = %s
-        ORDER BY timestamp DESC
-    """, (game_date,))
+        cursor.execute("""
+            SELECT * FROM picks
+            WHERE game_date = %s
+            ORDER BY timestamp DESC
+        """, (game_date,))
 
-    rows = cursor.fetchall()
-    put_connection(conn)
+        rows = cursor.fetchall()
 
     return [dict(row) for row in rows]
 
@@ -1574,19 +1539,18 @@ def auto_void_stale_picks(days_threshold: int = 3) -> int:
     Returns:
         Number of picks voided
     """
-    conn = get_connection()
-    cursor = conn.cursor()
-
     cutoff_date = (datetime.now() - timedelta(days=days_threshold)).strftime('%Y-%m-%d')
 
-    cursor.execute("""
-        SELECT id, player, stat, game_date FROM picks
-        WHERE won IS NULL AND (voided IS NULL OR voided = 0)
-        AND game_date IS NOT NULL AND game_date < %s
-    """, (cutoff_date,))
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    stale_picks = cursor.fetchall()
-    put_connection(conn)
+        cursor.execute("""
+            SELECT id, player, stat, game_date FROM picks
+            WHERE won IS NULL AND (voided IS NULL OR voided = 0)
+            AND game_date IS NOT NULL AND game_date < %s
+        """, (cutoff_date,))
+
+        stale_picks = cursor.fetchall()
 
     voided = 0
     for pick in stale_picks:
@@ -1606,20 +1570,20 @@ def get_stale_pending_picks(days_threshold: int = 2) -> List[Dict]:
     Returns:
         List of stale pending picks
     """
-    conn = get_connection()
-    cursor = conn.cursor()
-
     cutoff_date = (datetime.now() - timedelta(days=days_threshold)).strftime('%Y-%m-%d')
 
-    cursor.execute("""
-        SELECT * FROM picks
-        WHERE won IS NULL AND (voided IS NULL OR voided = 0)
-        AND game_date IS NOT NULL AND game_date < %s
-        ORDER BY game_date ASC
-    """, (cutoff_date,))
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    rows = cursor.fetchall()
-    put_connection(conn)
+        cursor.execute("""
+            SELECT * FROM picks
+            WHERE won IS NULL AND (voided IS NULL OR voided = 0)
+            AND game_date IS NOT NULL AND game_date < %s
+            ORDER BY game_date ASC
+        """, (cutoff_date,))
+
+        rows = cursor.fetchall()
+
     return [dict(row) for row in rows]
 
 
@@ -1815,12 +1779,11 @@ def auto_grade_picks(scraper=None) -> Dict:
             update_pick_result(pick['id'], float(actual), pick['line'], pick['direction'])
 
             # Mark as graded
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute("UPDATE picks SET graded_at = %s WHERE id = %s",
-                          (datetime.now().isoformat(), pick['id']))
-            conn.commit()
-            put_connection(conn)
+            with borrow_conn() as conn:
+                cursor = conn.cursor()
+                cursor.execute("UPDATE picks SET graded_at = %s WHERE id = %s",
+                              (datetime.now().isoformat(), pick['id']))
+                conn.commit()
 
             # Determine result
             line = pick['line']
@@ -1865,16 +1828,15 @@ def get_performance_by_model(user_id: str) -> Dict:
     Returns:
         Dict with model types as keys, each containing win_rate, total, wins, roi
     """
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    cursor.execute("""
-        SELECT model_type, won, edge FROM picks
-        WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0) AND user_id = %s
-    """, (user_id,))
+        cursor.execute("""
+            SELECT model_type, won, edge FROM picks
+            WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0) AND user_id = %s
+        """, (user_id,))
 
-    rows = cursor.fetchall()
-    put_connection(conn)
+        rows = cursor.fetchall()
 
     # Group by model type
     model_stats = {}
@@ -1922,16 +1884,15 @@ def get_performance_by_model_and_stat(user_id: str) -> Dict:
     Returns:
         Nested dict: {model_type: {stat: {win_rate, total, wins}}}
     """
-    conn = get_connection()
-    cursor = conn.cursor()
+    with borrow_conn() as conn:
+        cursor = conn.cursor()
 
-    cursor.execute("""
-        SELECT model_type, stat, won, edge FROM picks
-        WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0) AND user_id = %s
-    """, (user_id,))
+        cursor.execute("""
+            SELECT model_type, stat, won, edge FROM picks
+            WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0) AND user_id = %s
+        """, (user_id,))
 
-    rows = cursor.fetchall()
-    put_connection(conn)
+        rows = cursor.fetchall()
 
     # Group by model and stat
     data = {}
@@ -1984,8 +1945,7 @@ def save_daily_picks(picks: list, date_str: str) -> int:
     if not picks:
         return 0
 
-    conn = get_connection()
-    try:
+    with borrow_conn() as conn:
         with conn.cursor() as cur:
             # Clear existing picks for this date
             cur.execute("DELETE FROM daily_picks WHERE generated_date = %s", (date_str,))
@@ -2037,8 +1997,6 @@ def save_daily_picks(picks: list, date_str: str) -> int:
             cur.executemany(insert_sql, rows)
             conn.commit()
             return len(rows)
-    finally:
-        put_connection(conn)
 
 
 def get_daily_picks(date_str: str = None) -> list:
@@ -2054,8 +2012,7 @@ def get_daily_picks(date_str: str = None) -> list:
     if date_str is None:
         date_str = datetime.now().strftime('%Y-%m-%d')
 
-    conn = get_connection()
-    try:
+    with borrow_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -2067,8 +2024,6 @@ def get_daily_picks(date_str: str = None) -> list:
             )
             rows = cur.fetchall()
             return [dict(row) for row in rows]
-    finally:
-        put_connection(conn)
 
 
 def clear_old_daily_picks(days_to_keep: int = 7) -> int:
@@ -2083,8 +2038,7 @@ def clear_old_daily_picks(days_to_keep: int = 7) -> int:
     """
     cutoff = (datetime.now() - timedelta(days=days_to_keep)).strftime('%Y-%m-%d')
 
-    conn = get_connection()
-    try:
+    with borrow_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "DELETE FROM daily_picks WHERE generated_date < %s",
@@ -2093,16 +2047,13 @@ def clear_old_daily_picks(days_to_keep: int = 7) -> int:
             deleted = cur.rowcount
             conn.commit()
             return deleted
-    finally:
-        put_connection(conn)
 
 
 # ── Parlay helpers ─────────────────────────────────────────────
 
 def create_parlay(user_id: str, pick_ids: list) -> dict:
     """Create a parlay record and its leg records. Returns the created parlay dict."""
-    conn = get_connection()
-    try:
+    with borrow_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -2123,14 +2074,11 @@ def create_parlay(user_id: str, pick_ids: list) -> dict:
 
             conn.commit()
             return parlay
-    finally:
-        put_connection(conn)
 
 
 def get_parlays(user_id: str) -> list:
     """Return all non-voided parlays for a user, newest first, with leg details."""
-    conn = get_connection()
-    try:
+    with borrow_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -2163,14 +2111,11 @@ def get_parlays(user_id: str) -> list:
                 parlay['legs'] = [dict(row) for row in cur.fetchall()]
 
             return parlays
-    finally:
-        put_connection(conn)
 
 
 def delete_parlay(parlay_id: int, user_id: str) -> None:
     """Hard-delete a parlay and its legs. Enforces ownership via user_id. Picks are NOT deleted."""
-    conn = get_connection()
-    try:
+    with borrow_conn() as conn:
         with conn.cursor() as cur:
             # Verify ownership first
             cur.execute(
@@ -2184,8 +2129,6 @@ def delete_parlay(parlay_id: int, user_id: str) -> None:
             cur.execute("DELETE FROM parlay_legs WHERE parlay_id = %s", (parlay_id,))
             cur.execute("DELETE FROM parlays WHERE id = %s AND user_id = %s", (parlay_id, user_id))
             conn.commit()
-    finally:
-        put_connection(conn)
 
 
 def grade_pending_parlays(user_id: str = None) -> dict:
@@ -2198,8 +2141,7 @@ def grade_pending_parlays(user_id: str = None) -> dict:
     - Any leg won IS NULL (and no losses) → stay 'pending'
     - Voided legs (voided=1) are excluded from result calculation but kept in legs list.
     """
-    conn = get_connection()
-    try:
+    with borrow_conn() as conn:
         with conn.cursor() as cur:
             query = "SELECT id FROM parlays WHERE status = 'pending'"
             params = []
@@ -2243,8 +2185,6 @@ def grade_pending_parlays(user_id: str = None) -> dict:
 
             conn.commit()
             return {'parlays_graded': graded_count}
-    finally:
-        put_connection(conn)
 
 
 def export_to_excel() -> str:
