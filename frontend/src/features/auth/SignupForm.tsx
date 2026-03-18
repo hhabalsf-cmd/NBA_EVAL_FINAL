@@ -1,0 +1,130 @@
+import { useState } from 'react'
+import { Loader2, Mail } from 'lucide-react'
+import { useAuthStore } from '../../features/auth/authStore'
+import TermsModal from '../../shared/components/TermsModal'
+
+interface SignupFormProps {
+  onSuccess?: () => void
+}
+
+export default function SignupForm({ onSuccess }: SignupFormProps) {
+  const [email, setEmail] = useState('')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [tosAccepted, setTosAccepted] = useState(false)
+  const [showTerms, setShowTerms] = useState(false)
+  const { signup, acceptTos, isLoading, error, needsEmailConfirmation } = useAuthStore()
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!tosAccepted) return
+
+    // Validate username format
+    if (!/^[a-zA-Z0-9_-]{3,30}$/.test(username)) {
+      useAuthStore.setState({ error: 'Username must be 3-30 characters: letters, numbers, _ or -' })
+      return
+    }
+
+    await signup(email, username, password)
+    if (useAuthStore.getState().needsEmailConfirmation) return
+    await acceptTos()
+    onSuccess?.()
+  }
+
+  if (needsEmailConfirmation) {
+    return (
+      <div className="text-center space-y-4 py-4">
+        <Mail className="w-12 h-12 mx-auto text-accent" />
+        <h3 className="text-lg font-semibold text-text-primary">Check your email</h3>
+        <p className="text-sm text-text-secondary">
+          We sent a confirmation link to <span className="font-medium text-text-primary">{email}</span>.
+          Click the link to activate your account.
+        </p>
+        <p className="text-xs text-text-muted">
+          Didn't get it? Check your spam folder.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <form onSubmit={handleSubmit} className="space-y-5">
+        <div>
+          <label className="block text-xs font-medium text-text-muted mb-2 uppercase tracking-wider">Email</label>
+          <input
+            type="email"
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            placeholder="you@example.com"
+            required
+            className="w-full"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-text-muted mb-2 uppercase tracking-wider">Username</label>
+          <input
+            type="text"
+            value={username}
+            onChange={e => setUsername(e.target.value)}
+            placeholder="Pick a username"
+            required
+            className="w-full"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-text-muted mb-2 uppercase tracking-wider">Password</label>
+          <input
+            type="password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            placeholder="Create a password"
+            required
+            autoComplete="new-password"
+            className="w-full"
+          />
+        </div>
+
+        {/* TOS Checkbox */}
+        <label className="flex items-start gap-2 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={tosAccepted}
+            onChange={e => setTosAccepted(e.target.checked)}
+            className="mt-0.5 w-4 h-4 rounded border-border accent-accent"
+          />
+          <span className="text-xs text-text-secondary">
+            I agree to the{' '}
+            <button
+              type="button"
+              onClick={() => setShowTerms(true)}
+              className="text-accent hover:underline"
+            >
+              Terms of Service
+            </button>
+          </span>
+        </label>
+
+        {error && <p className="text-xs text-accent-danger">{error}</p>}
+        <button type="submit" disabled={isLoading || !tosAccepted} className="btn btn-primary w-full">
+          {isLoading ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Creating account...
+            </>
+          ) : 'Create Account'}
+        </button>
+      </form>
+
+      <TermsModal
+        isOpen={showTerms}
+        onAccept={() => {
+          setTosAccepted(true)
+          setShowTerms(false)
+        }}
+        onClose={() => setShowTerms(false)}
+        canDismiss
+      />
+    </>
+  )
+}
