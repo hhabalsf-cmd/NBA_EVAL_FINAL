@@ -1327,9 +1327,11 @@ class FeatureEngineer:
         if 'PLUS_MINUS' in df.columns:
             df['BLOWOUT'] = (df['PLUS_MINUS'].abs() > 20).astype(int)
             # Blowout-adjusted rolling averages (downweight blowout games)
+            # AST gets lighter downweight — playmakers rack up assists before sitting in blowouts
+            blowout_weights_by_stat = {'PTS': 0.5, 'REB': 0.5, 'AST': 0.75}
             for stat in ['PTS', 'REB', 'AST']:
-                # Weight: 1.0 for normal games, 0.5 for blowouts
-                blowout_weight = df['BLOWOUT'].apply(lambda x: 0.5 if x == 1 else 1.0)
+                bw = blowout_weights_by_stat[stat]
+                blowout_weight = df['BLOWOUT'].apply(lambda x, w=bw: w if x == 1 else 1.0)
                 weighted_vals = df[stat] * blowout_weight
                 weighted_sum = weighted_vals.rolling(10, min_periods=1).sum().shift(1)
                 weight_sum = blowout_weight.rolling(10, min_periods=1).sum().shift(1)
@@ -1647,8 +1649,9 @@ class FeatureEngineer:
             'ROLL_10_AST': latest.get('ROLL_10_AST', 0),
             'ROLL_5_MIN_NUMERIC': latest.get('ROLL_5_MIN_NUMERIC', 30),
             'ROLL_10_MIN_NUMERIC': latest.get('ROLL_10_MIN_NUMERIC', 30),
-            # Exponential moving averages (PTS + MIN only — REB/AST redundant with ROLL_5)
+            # Exponential moving averages (PTS + AST + MIN — AST EMA catches role changes faster)
             'EMA_5_PTS': latest.get('EMA_5_PTS', latest.get('ROLL_5_PTS', 0)),
+            'EMA_5_AST': latest.get('EMA_5_AST', latest.get('ROLL_5_AST', 0)),
             'EMA_5_MIN_NUMERIC': latest.get('EMA_5_MIN_NUMERIC', latest.get('ROLL_5_MIN_NUMERIC', 30)),
             # Variance measures
             'STD_10_PTS': latest.get('STD_10_PTS', 5),
@@ -1895,8 +1898,8 @@ class MLPredictor:
         # Rolling averages
         'ROLL_5_PTS', 'ROLL_10_PTS', 'ROLL_5_REB', 'ROLL_10_REB',
         'ROLL_5_AST', 'ROLL_10_AST', 'ROLL_5_MIN_NUMERIC', 'ROLL_10_MIN_NUMERIC',
-        # Exponential moving averages (keep PTS + MIN — highest signal; REB/AST redundant with ROLL_5)
-        'EMA_5_PTS', 'EMA_5_MIN_NUMERIC',
+        # Exponential moving averages (PTS + MIN + AST — AST EMA catches role changes faster than ROLL_5)
+        'EMA_5_PTS', 'EMA_5_AST', 'EMA_5_MIN_NUMERIC',
         # Variance
         'STD_10_PTS', 'STD_10_REB', 'STD_10_AST',
         # Trends
@@ -2015,6 +2018,7 @@ class MLPredictor:
             'validation_fraction': 0.15,
             'n_iter_no_change': 20,
             'tol': 1e-4,
+            'loss': 'squared_error',  # AST is right-skewed; Huber suppresses upside
         },
         'PRA': {
             'n_estimators': 350,
@@ -2045,7 +2049,8 @@ class MLPredictor:
         elif self.model_type == 'gradient_boost':
             # Use stat-specific optimized parameters
             params = self.GB_STAT_PARAMS.get(stat, self.GB_STAT_PARAMS['PTS'])
-            return GradientBoostingRegressor(
+            loss = params.get('loss', 'huber')
+            gb_kwargs = dict(
                 n_estimators=params['n_estimators'],
                 max_depth=params['max_depth'],
                 learning_rate=params['learning_rate'],
@@ -2056,10 +2061,13 @@ class MLPredictor:
                 validation_fraction=params['validation_fraction'],
                 n_iter_no_change=params['n_iter_no_change'],
                 tol=params['tol'],
-                loss='huber',  # Robust to outliers
-                alpha=0.9,     # Huber quantile parameter
-                random_state=42
+                loss=loss,
+                random_state=42,
             )
+            # Only add alpha for Huber loss (not valid for squared_error)
+            if loss == 'huber':
+                gb_kwargs['alpha'] = 0.9
+            return GradientBoostingRegressor(**gb_kwargs)
         elif self.model_type == 'neural' and TF_AVAILABLE:
             return self._create_neural_network()
         else:
@@ -2101,8 +2109,8 @@ class MLPredictor:
                 min_samples_leaf=params['min_samples_leaf'],
                 subsample=params['subsample'],
                 max_features=params['max_features'],
-                loss='huber',
-                alpha=0.9,
+                loss=params.get('loss', 'huber'),
+                **({'alpha': 0.9} if params.get('loss', 'huber') == 'huber' else {}),
                 random_state=42
             ),
         }
@@ -2153,8 +2161,10 @@ class MLPredictor:
                 'min_samples_split': trial.suggest_int('min_samples_split', 4, 15),
                 'max_features': trial.suggest_float('max_features', 0.4, 0.9),
             }
+            stat_loss = self.GB_STAT_PARAMS.get(stat, {}).get('loss', 'huber')
+            gb_extra = {'alpha': 0.9} if stat_loss == 'huber' else {}
             model = GradientBoostingRegressor(
-                **params, loss='huber', alpha=0.9, random_state=42,
+                **params, loss=stat_loss, **gb_extra, random_state=42,
                 validation_fraction=0.15, n_iter_no_change=15, tol=1e-4,
             )
             tscv = TimeSeriesSplit(n_splits=5)
@@ -2200,7 +2210,7 @@ class MLPredictor:
             'ROLL_5_REB', 'ROLL_10_REB', 'STD_10_REB',
             'REB_TREND', 'ROLL_5_REB_PER36',
             'VS_OPP_AVG_REB', 'VS_OPP_REB_DIFF',
-            'ROLL_5_AST', 'ROLL_10_AST', 'STD_10_AST',
+            'ROLL_5_AST', 'ROLL_10_AST', 'EMA_5_AST', 'STD_10_AST',
             'AST_TREND', 'ROLL_5_AST_PER36',
             'VS_OPP_AVG_AST', 'VS_OPP_AST_DIFF',
             'AST_TOV_RATIO', 'ROLL_5_AST_TOV',
@@ -2209,20 +2219,18 @@ class MLPredictor:
             'ROLL_5_PTS', 'ROLL_10_PTS', 'EMA_5_PTS', 'STD_10_PTS',
             'PTS_TREND', 'ROLL_5_PTS_PER36',
             'VS_OPP_AVG_PTS', 'VS_OPP_PTS_DIFF',
-            'ROLL_5_AST', 'ROLL_10_AST', 'STD_10_AST',
+            'ROLL_5_AST', 'ROLL_10_AST', 'EMA_5_AST', 'STD_10_AST',
             'AST_TREND', 'ROLL_5_AST_PER36',
             'VS_OPP_AVG_AST', 'VS_OPP_AST_DIFF',
             'AST_TOV_RATIO', 'ROLL_5_AST_TOV',
             'ROLL_5_TS_PCT', 'ROLL_5_EFG_PCT', 'ROLL_5_PTS_PER_FGA',
         },
         'AST': {
-            'ROLL_5_PTS', 'ROLL_10_PTS', 'EMA_5_PTS', 'STD_10_PTS',
-            'PTS_TREND', 'ROLL_5_PTS_PER36',
-            'VS_OPP_AVG_PTS', 'VS_OPP_PTS_DIFF',
+            # PTS features KEPT — scoring/assisting tradeoff is real signal
+            # REB features excluded — rebounds don't correlate with assist patterns
             'ROLL_5_REB', 'ROLL_10_REB', 'STD_10_REB',
             'REB_TREND', 'ROLL_5_REB_PER36',
             'VS_OPP_AVG_REB', 'VS_OPP_REB_DIFF',
-            'ROLL_5_TS_PCT', 'ROLL_5_EFG_PCT', 'ROLL_5_PTS_PER_FGA',
         },
         # PRA uses all features since it's a composite stat
         'PRA': set(),
@@ -2440,8 +2448,10 @@ class MLPredictor:
             if self.model_type == 'gradient_boost' and OPTUNA_AVAILABLE and n_games >= 40:
                 print(f"  {stat}: Running hyperparameter optimization...")
                 best_params = self._optimize_hyperparameters(X_scaled, y, recency_weights, stat)
+                stat_loss = self.GB_STAT_PARAMS.get(stat, {}).get('loss', 'huber')
+                gb_extra = {'alpha': 0.9} if stat_loss == 'huber' else {}
                 model = GradientBoostingRegressor(
-                    **best_params, loss='huber', alpha=0.9, random_state=42,
+                    **best_params, loss=stat_loss, **gb_extra, random_state=42,
                 )
             else:
                 model = self._create_model(stat)
