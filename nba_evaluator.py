@@ -81,8 +81,8 @@ for d in [DATA_DIR, MODEL_DIR, HISTORY_DIR, CACHE_DIR]:
 # ── In-memory model cache (avoids repeated pickle.load from disk) ──
 _MODEL_CACHE: dict = {}          # player_name -> (data_dict, loaded_at)
 _MODEL_CACHE_LOCK = threading.Lock()
-_MODEL_CACHE_MAX = 8             # keep at most 8 players in memory (each model ~10-30MB in RAM)
-_MODEL_CACHE_TTL = 1800          # 30 min before re-reading from disk
+_MODEL_CACHE_MAX = 4             # keep at most 4 players in memory (each model ~10-30MB; was 8)
+_MODEL_CACHE_TTL = 900           # 15 min before re-reading from disk (was 30min)
 
 
 def _model_cache_get(player_name: str) -> 'dict | None':
