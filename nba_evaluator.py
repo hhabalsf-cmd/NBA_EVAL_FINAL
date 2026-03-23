@@ -2273,7 +2273,7 @@ class MLPredictor:
     def _train_quantile_models(self, X, y, weights, stat, params):
         """Train quantile regression models for uncertainty bounds (Improvement #4)."""
         q_params = {k: v for k, v in params.items()
-                    if k not in ('validation_fraction', 'n_iter_no_change', 'tol')}
+                    if k not in ('validation_fraction', 'n_iter_no_change', 'tol', 'loss')}
         q_params['n_estimators'] = max(100, q_params.get('n_estimators', 200) // 2)
         q_params['learning_rate'] = q_params.get('learning_rate', 0.05) * 1.5
         q_params['random_state'] = 42
