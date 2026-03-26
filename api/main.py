@@ -13,6 +13,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from slowapi.errors import RateLimitExceeded
+import psycopg2
 
 _is_prod = bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_ID"))
 
@@ -131,9 +132,29 @@ def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONRespons
         headers={"Retry-After": "60"},
     )
 
+
+def _db_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    _logger.error("Database error on %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Database temporarily unavailable. Please retry in a moment."},
+    )
+
+
+def _general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    _logger.error("Unhandled error on %s %s: %s", request.method, request.url.path, exc, exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
+
+
 # Rate limiting
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
+app.add_exception_handler(psycopg2.OperationalError, _db_exception_handler)
+app.add_exception_handler(psycopg2.InterfaceError, _db_exception_handler)
+app.add_exception_handler(Exception, _general_exception_handler)
 
 # Request body size limit (2 MB)
 app.add_middleware(RequestBodyLimitMiddleware)
@@ -170,8 +191,17 @@ app.include_router(social_router)
 
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy", "service": "nba-prop-evaluator"}
+    """Health check endpoint — includes DB connectivity status."""
+    db_ok = False
+    try:
+        import db as _db
+        with _db.borrow_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+            db_ok = True
+    except Exception:
+        pass
+    return {"status": "healthy" if db_ok else "degraded", "service": "nba-prop-evaluator", "db": db_ok}
 
 
 @app.post("/api/flush-cache")
@@ -190,6 +220,19 @@ async def flush_cache(request: Request):
         pass
     gc.collect()
     return {"status": "flushed"}
+
+
+@app.post("/api/flush-pool")
+async def flush_pool(request: Request):
+    """Reset the database connection pool.
+
+    Protected by X-Service-Key. Call when DB connections are stale/stuck.
+    """
+    from .routers.auth import verify_service_key
+    verify_service_key(request)
+    import db as _db
+    _db._reset_pool()
+    return {"status": "pool_reset"}
 
 
 @app.get("/")

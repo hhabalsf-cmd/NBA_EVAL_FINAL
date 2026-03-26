@@ -20,8 +20,15 @@ class GamePredictionService:
     """Wraps GamePredictor for API use with SSE progress support."""
 
     def __init__(self):
-        self.predictor = GamePredictor()
+        self._predictor: "GamePredictor | None" = None
         self._model_loaded = False
+
+    @property
+    def predictor(self) -> "GamePredictor":
+        """Lazy-init GamePredictor so DB-only endpoints don't depend on BDL API."""
+        if self._predictor is None:
+            self._predictor = GamePredictor()
+        return self._predictor
 
     def _ensure_model(self):
         """Ensure model is loaded or trained."""

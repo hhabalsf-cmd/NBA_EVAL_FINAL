@@ -33,6 +33,7 @@ import contextlib
 import json
 import logging
 import os
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict
@@ -58,19 +59,60 @@ EXCEL_PATH = Path(__file__).parent / "nba_picks_tracker.xlsx"
 
 # ── Connection pool (shared across all threads/requests) ──────────────────────
 _pool: "psycopg2.pool.ThreadedConnectionPool | None" = None
+_pool_lock = threading.Lock()
+
+_logger = logging.getLogger(__name__)
+
+# TCP keepalive params: detect dead connections within ~45 seconds
+_KEEPALIVE_KWARGS = dict(
+    keepalives=1,
+    keepalives_idle=30,       # seconds before first keepalive probe
+    keepalives_interval=10,   # seconds between probes
+    keepalives_count=3,       # missed probes before connection is dead
+    connect_timeout=10,       # seconds to wait for initial connection
+)
 
 
 def _get_pool() -> "psycopg2.pool.ThreadedConnectionPool":
     """Return the module-level connection pool, initializing it on first call."""
     global _pool
     if _pool is None:
-        _pool = psycopg2.pool.ThreadedConnectionPool(
-            minconn=2,
-            maxconn=20,
-            dsn=DATABASE_URL,
-            cursor_factory=psycopg2.extras.RealDictCursor,
-        )
+        with _pool_lock:
+            if _pool is None:
+                _pool = psycopg2.pool.ThreadedConnectionPool(
+                    minconn=2,
+                    maxconn=10,
+                    dsn=DATABASE_URL,
+                    cursor_factory=psycopg2.extras.RealDictCursor,
+                    **_KEEPALIVE_KWARGS,
+                )
     return _pool
+
+
+def _reset_pool() -> None:
+    """Close all connections and force pool recreation on next use."""
+    global _pool
+    with _pool_lock:
+        if _pool is not None:
+            try:
+                _pool.closeall()
+            except Exception:
+                pass
+            _pool = None
+    _logger.info("DB connection pool reset — will recreate on next request")
+
+
+def _is_conn_alive(conn) -> bool:
+    """Quick health check: run a trivial query to verify the connection is usable."""
+    try:
+        if conn.closed:
+            return False
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+        conn.rollback()  # keep the connection clean
+        return True
+    except Exception:
+        return False
 
 
 def get_connection():
@@ -78,23 +120,38 @@ def get_connection():
     return _get_pool().getconn()
 
 
-_logger = logging.getLogger(__name__)
-
-
 def put_connection(conn) -> None:
     """Return a connection to the pool, rolling back any open transaction first."""
     try:
-        if not conn.closed:
+        if conn.closed:
+            _get_pool().putconn(conn, close=True)
+        else:
             conn.rollback()
-        _get_pool().putconn(conn)
+            _get_pool().putconn(conn)
     except Exception as exc:
         _logger.warning("put_connection error: %s", exc)
 
 
 @contextlib.contextmanager
 def borrow_conn():
-    """Context manager that guarantees the connection is returned to the pool."""
-    conn = get_connection()
+    """Context manager that guarantees the connection is returned to the pool.
+
+    If the borrowed connection is dead, the pool is reset and a fresh
+    connection is obtained (one retry).
+    """
+    pool = _get_pool()
+    conn = pool.getconn()
+
+    if not _is_conn_alive(conn):
+        _logger.warning("Stale DB connection detected — resetting pool")
+        try:
+            pool.putconn(conn, close=True)
+        except Exception:
+            pass
+        _reset_pool()
+        pool = _get_pool()
+        conn = pool.getconn()
+
     try:
         yield conn
     finally:
