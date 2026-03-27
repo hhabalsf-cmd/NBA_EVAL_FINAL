@@ -84,7 +84,7 @@ def _get_best_headshot_url(player_name: str) -> Optional[str]:
 MIN_EDGE_PCT = 10.0          # Minimum absolute edge to include
 MAX_EDGE_PCT = 30.0          # Maximum absolute edge — edges >30% hit poorly historically
 MIN_CONFIDENCE = 60.0        # Minimum model confidence
-MAX_PICKS = 10               # Cap on total picks returned
+MAX_PICKS = 20               # Cap on total picks returned
 MIN_MINUTES_AVG = 20.0       # Minimum average minutes to evaluate
 MIN_GAMES_TO_TRAIN = 15      # Minimum historical games to train a model
 STATS_TO_EVALUATE = ['PTS', 'REB', 'AST', 'PRA']
