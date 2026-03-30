@@ -81,7 +81,7 @@ def _get_pool() -> "psycopg2.pool.ThreadedConnectionPool":
             if _pool is None:
                 _pool = psycopg2.pool.ThreadedConnectionPool(
                     minconn=2,
-                    maxconn=10,
+                    maxconn=20,
                     dsn=DATABASE_URL,
                     cursor_factory=psycopg2.extras.RealDictCursor,
                     **_KEEPALIVE_KWARGS,
@@ -137,15 +137,34 @@ def borrow_conn():
     """Context manager that guarantees the connection is returned to the pool.
 
     If the borrowed connection is dead, the pool is reset and a fresh
-    connection is obtained (one retry).
+    connection is obtained (one retry).  If the pool is temporarily
+    exhausted, retries up to 3 times with a short backoff instead of
+    crashing immediately.
     """
-    pool = _get_pool()
-    conn = pool.getconn()
+    import time as _time
+
+    conn = None
+    last_exc = None
+    for attempt in range(3):
+        try:
+            pool = _get_pool()
+            conn = pool.getconn()
+            break
+        except psycopg2.pool.PoolError as exc:
+            last_exc = exc
+            if attempt < 2:
+                _logger.warning(
+                    "Connection pool exhausted (attempt %d/3) — retrying in %ss",
+                    attempt + 1, attempt + 1,
+                )
+                _time.sleep(attempt + 1)
+            else:
+                raise
 
     if not _is_conn_alive(conn):
         _logger.warning("Stale DB connection detected — resetting pool")
         try:
-            pool.putconn(conn, close=True)
+            _get_pool().putconn(conn, close=True)
         except Exception:
             pass
         _reset_pool()

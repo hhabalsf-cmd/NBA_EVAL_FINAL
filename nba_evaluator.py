@@ -4384,7 +4384,7 @@ def handle_reset_grades():
         LIMIT 30
     """)
     graded = [dict(row) for row in cursor.fetchall()]
-    conn.close()
+    db.put_connection(conn)
 
     if not graded:
         print("\n✅ No graded picks to reset!")

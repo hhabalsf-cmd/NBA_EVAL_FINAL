@@ -118,7 +118,7 @@ def _fetch_bdl_todays_props() -> list:
                 for row in cur.fetchall():
                     pid_to_name[str(row["player_id"])] = row["player_name"]
         finally:
-            conn.close()
+            _db.put_connection(conn)
     except Exception:
         pid_to_name = {}
 
