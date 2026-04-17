@@ -308,17 +308,17 @@ class NBADataScraper:
         # Check cache first (24h TTL)
         cached = CacheManager.get('player_info', player_name.lower().strip(), expiry_type='player_info')
         if cached is not None:
-            print(f"📋 Player info cached: {player_name}")
+            print(f"Player info cached: {player_name}")
             return cached
 
-        print(f"🔍 Looking up player: {player_name}")
+        print(f"Looking up player: {player_name}")
         try:
             bdl = get_bdl_client()
             # BDL search only matches last name — search by last name directly
             last_name = self._bdl_last_name(player_name)
             results = bdl.get_players(search=last_name)
             if not results:
-                print(f"⚠️ No BDL results for: {player_name}")
+                print(f"No BDL results for: {player_name}")
                 return None
 
             # Find best match: prefer exact full-name match, fall back to first result
@@ -374,12 +374,12 @@ class NBADataScraper:
             CacheManager.set('player_info', result, player_name.lower().strip())
             return result
         except Exception as e:
-            print(f"⚠️ Error getting player info: {e}")
+            print(f"Error getting player info: {e}")
             return None
 
     def get_todays_games(self):
         """Get today's NBA games via BallDontLie API (FREE tier)."""
-        print("📅 Fetching today's schedule...")
+        print("Fetching today's schedule...")
         try:
             today_str = datetime.now().date().strftime('%Y-%m-%d')
             bdl = get_bdl_client()
@@ -419,7 +419,7 @@ class NBADataScraper:
 
             return pd.DataFrame(rows)
         except Exception as e:
-            print(f"⚠️ Error fetching games: {e}")
+            print(f"Error fetching games: {e}")
             return pd.DataFrame()
     
     def get_player_next_game(self, player_info):
@@ -436,16 +436,16 @@ class NBADataScraper:
         today_str = datetime.now(ZoneInfo("America/New_York")).date().strftime('%Y-%m-%d')
         cached = CacheManager.get('next_game', team_abbrev, today_str, expiry_type='schedule')
         if cached is not None:
-            print(f"📋 Next game cached: {player_info['player_name']}")
+            print(f"Next game cached: {player_info['player_name']}")
             return cached
 
-        print(f"📆 Finding next game for {player_info['player_name']}...")
+        print(f"Finding next game for {player_info['player_name']}...")
         try:
 
             team_mapper = get_team_mapper()
             bdl_team_id = team_mapper.abbrev_to_bdl_id(team_abbrev)
             if bdl_team_id is None:
-                print(f"⚠️ No BDL team ID for abbreviation: {team_abbrev}")
+                print(f"No BDL team ID for abbreviation: {team_abbrev}")
                 return None
 
             today = datetime.now(ZoneInfo("America/New_York")).date()
@@ -506,7 +506,7 @@ class NBADataScraper:
 
             return None
         except Exception as e:
-            print(f"⚠️ Error finding next game: {e}")
+            print(f"Error finding next game: {e}")
             return None
 
     def get_player_game_log(self, player_id, seasons=None):
@@ -542,37 +542,37 @@ class NBADataScraper:
                 # Historical: check Supabase first
                 cached_df = _db.get_game_logs_from_supabase(str(player_id), season)
                 if cached_df is not None and not cached_df.empty:
-                    print(f"📦 Loaded {season} from Supabase ({len(cached_df)} games)")
+                    print(f"Loaded {season} from Supabase ({len(cached_df)} games)")
                     all_games.append(cached_df)
                     continue
 
                 # Miss: fetch from BDL API and store permanently
-                print(f"📊 Fetching {season} game log from BDL (first time)...")
+                print(f"Fetching {season} game log from BDL (first time)...")
                 try:
                     df = self._fetch_bdl_game_log(player_id, bdl_id, season_int, season)
                     if df is not None and not df.empty:
                         _db.insert_game_logs_to_supabase(df, str(player_id), season)
-                        print(f"  ✅ Stored {len(df)} rows to Supabase")
+                        print(f"Stored {len(df)} rows to Supabase")
                         all_games.append(df)
                 except Exception as e:
-                    print(f"⚠️ Could not fetch {season}: {e}")
+                    print(f"Could not fetch {season}: {e}")
 
             else:
                 # Current season: local file cache first
                 cached = CacheManager.get('game_log', player_id, season, expiry_type='game_log')
                 if cached is not None:
-                    print(f"📦 Loaded {season} from local cache")
+                    print(f"Loaded {season} from local cache")
                     all_games.append(cached)
                     continue
 
-                print(f"📊 Fetching {season} game log from BDL...")
+                print(f"Fetching {season} game log from BDL...")
                 try:
                     df = self._fetch_bdl_game_log(player_id, bdl_id, season_int, season)
                     if df is not None and not df.empty:
                         CacheManager.set('game_log', df, player_id, season)
                         all_games.append(df)
                 except Exception as e:
-                    print(f"⚠️ Could not fetch {season}: {e}")
+                    print(f"Could not fetch {season}: {e}")
 
         if all_games:
             combined = pd.concat(all_games, ignore_index=True)
@@ -587,7 +587,7 @@ class NBADataScraper:
         with UPPERCASE column names identical to the former PlayerGameLog output.
         """
         if bdl_id is None:
-            print(f"  ⚠️ No BDL ID mapping for nba_id={nba_player_id} — cannot fetch game log")
+            print(f"No BDL ID mapping for nba_id={nba_player_id} — cannot fetch game log")
             return pd.DataFrame()
 
         bdl = get_bdl_client()
@@ -683,7 +683,7 @@ class NBADataScraper:
         if cached is not None:
             return cached
 
-        print("🏥 Fetching injury report...")
+        print("Fetching injury report...")
         injuries = {abbrev: {'out': 0, 'questionable': 0, 'doubtful': 0, 'players': []}
                     for abbrev in TEAM_ABBREV_TO_NAME}
 
@@ -731,12 +731,12 @@ class NBADataScraper:
                     {'name': player_name, 'status': mapped_status, 'note': note}
                 )
 
-            print(f"  ✅ Loaded injury report ({sum(t['out'] for t in injuries.values())} players out across all teams)")
+            print(f"Loaded injury report ({sum(t['out'] for t in injuries.values())} players out across all teams)")
             CacheManager.set('injuries', injuries, 'report')
             return injuries
 
         except Exception as e:
-            print(f"  ⚠️ BDL injury source failed: {e}")
+            print(f"BDL injury source failed: {e}")
 
         return injuries
 
@@ -757,7 +757,7 @@ class NBADataScraper:
     
     def get_vs_team_stats(self, player_id, opponent_abbrev):
         """Get player's historical stats against specific opponent"""
-        print(f"📈 Analyzing performance vs {opponent_abbrev}...")
+        print(f"Analyzing performance vs {opponent_abbrev}...")
         try:
             # Get multi-season game log
             all_games = self.get_player_game_log(player_id)
@@ -782,7 +782,7 @@ class NBADataScraper:
                 'ast_std': vs_games['AST'].std(),
             }
         except Exception as e:
-            print(f"⚠️ Error getting vs stats: {e}")
+            print(f"Error getting vs stats: {e}")
             return None
 
     def get_team_defensive_stats(self, season='2025-26'):
@@ -801,117 +801,21 @@ class NBADataScraper:
         # 2. Supabase cache (shared across restarts, 24h TTL)
         supabase_data = _db.get_team_stats_from_supabase(season)
         if supabase_data:
-            print(f"📦 Loaded team stats from Supabase ({len(supabase_data)} teams)")
+            print(f"Loaded team stats from Supabase ({len(supabase_data)} teams)")
             CacheManager.set('team_stats', supabase_data, season)
             return supabase_data
 
-        # 3. Fetch from BDL API — two calls in parallel
-        print("🛡️ Fetching team defensive statistics from BDL...")
-        season_int = int(season.split('-')[0])
-
+        # 3. Compute from game logs (replaces GOAT-only BDL endpoint)
+        print("Computing team defensive statistics from game logs...")
         try:
-            bdl = get_bdl_client()
-            team_mapper = get_team_mapper()
-
-            def fetch_advanced():
-                return bdl.get_team_season_averages("general", "advanced", season_int)
-
-            def fetch_base():
-                return bdl.get_team_season_averages("general", "base", season_int)
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-                f_advanced = pool.submit(fetch_advanced)
-                f_base = pool.submit(fetch_base)
-                advanced_list = f_advanced.result()
-                base_list = f_base.result()
-
-            if not advanced_list or not base_list:
-                raise ValueError("BDL API returned empty stats for team defensive averages")
-
-            team_data = {}
-
-            # BDL response structure: {team: {..., abbreviation}, season, season_type, stats: {...}}
-            # Advanced stats contain: def_rating, pace, def_rating_rank, pace_rank
-            for entry in (advanced_list or []):
-                team_obj = entry.get('team') or {}
-                team_abbrev = str(team_obj.get('abbreviation') or '').upper()
-                if not team_abbrev:
-                    bdl_team_id = team_obj.get('id')
-                    if bdl_team_id is not None:
-                        team_abbrev = team_mapper.bdl_id_to_abbrev(int(bdl_team_id)) or ''
-                if not team_abbrev:
-                    continue
-
-                stats = entry.get('stats') or {}
-                def_rating = _safe_float(stats.get('def_rating'), 110)
-                pace = _safe_float(stats.get('pace'), 100)
-                # opp_pts not available in BDL; approximate from def_rating (pts allowed per 100 poss)
-                # Use def_rating as proxy: points allowed ≈ def_rating * pace / 100
-                opp_pts = round(def_rating * pace / 100, 1)
-
-                team_data[team_abbrev] = {
-                    'def_rating': def_rating,
-                    'opp_pts': opp_pts,
-                    'pace': pace,
-                    'pts_rank': _safe_int(stats.get('def_rating_rank'), 15),
-                    'opp_ast': 25,    # Overridden by base stats if available
-                    # Enhanced opponent context (from BDL advanced stats)
-                    'off_rating': _safe_float(stats.get('off_rating'), 110),
-                    'net_rating': _safe_float(stats.get('net_rating'), 0),
-                    'efg_pct': _safe_float(stats.get('efg_pct'), 0.50),
-                    'ts_pct': _safe_float(stats.get('ts_pct'), 0.56),
-                    'ast_pct': _safe_float(stats.get('ast_pct'), 0.60),
-                    'tov_pct': _safe_float(stats.get('tov_pct'), 14.0),
-                    'oreb_pct': _safe_float(stats.get('oreb_pct'), 0.27),
-                    'dreb_pct': _safe_float(stats.get('dreb_pct'), 0.73),
-                }
-
-            # Process base stats — enrich with pts_rank (opponent points allowed rank)
-            # Base stats contain pts_rank (own scoring rank), ast (own assists)
-            # Use own pts_rank as a fallback signal for defensive quality ranking
-            for entry in (base_list or []):
-                team_obj = entry.get('team') or {}
-                team_abbrev = str(team_obj.get('abbreviation') or '').upper()
-                if not team_abbrev:
-                    bdl_team_id = team_obj.get('id')
-                    if bdl_team_id is not None:
-                        team_abbrev = team_mapper.bdl_id_to_abbrev(int(bdl_team_id)) or ''
-                if not team_abbrev:
-                    continue
-
-                stats = entry.get('stats') or {}
-
-                if team_abbrev not in team_data:
-                    # Bootstrap entry from base stats if advanced was empty
-                    team_data[team_abbrev] = {
-                        'def_rating': 110, 'opp_pts': 110, 'pace': 100,
-                        'pts_rank': 15, 'opp_ast': 25,
-                        'off_rating': 110, 'net_rating': 0,
-                        'efg_pct': 0.50, 'ts_pct': 0.56, 'ast_pct': 0.60,
-                        'tov_pct': 14.0, 'oreb_pct': 0.27, 'dreb_pct': 0.73,
-                    }
-
-                # Derive opp_ast from team's actual assists per game (better than hardcoded 25)
-                team_ast = _safe_float(stats.get('ast'), None)
-                if team_ast is not None:
-                    team_data[team_abbrev]['opp_ast'] = team_ast
-
-                # If def_rating_rank was not in advanced, fall back to pts_rank from base
-                if team_data[team_abbrev].get('pts_rank', 15) == 15:
-                    pts_rank = stats.get('pts_rank')
-                    if pts_rank is not None:
-                        team_data[team_abbrev]['pts_rank'] = _safe_int(pts_rank, 15)
-
+            from stats_aggregator import compute_team_season_stats
+            team_data = compute_team_season_stats(season)
             if team_data:
-                _db.upsert_team_stats_to_supabase(team_data, season)
                 CacheManager.set('team_stats', team_data, season)
                 return team_data
-
-            # Empty result — fall through to defaults
-            raise ValueError("BDL returned no team season averages")
-
+            raise ValueError("compute_team_season_stats returned empty")
         except Exception as e:
-            print(f"⚠️ Error fetching team defensive stats: {e}")
+            print(f"Error computing team defensive stats: {e}")
             return {abbrev: {
                 'def_rating': 110, 'pace': 100, 'opp_pts': 110, 'pts_rank': 15, 'opp_ast': 25,
                 'off_rating': 110, 'net_rating': 0, 'efg_pct': 0.50, 'ts_pct': 0.56,
@@ -929,7 +833,7 @@ class NBADataScraper:
         if cached is not None:
             return cached
 
-        print("📊 Fetching league averages from Supabase...")
+        print("Fetching league averages from Supabase...")
         try:
             averages = _db.get_league_averages_from_supabase(season)
             if averages:
@@ -937,7 +841,7 @@ class NBADataScraper:
                 CacheManager.set('league_avg', result, season)
                 return result
         except Exception as e:
-            print(f"⚠️ Error fetching league averages from Supabase: {e}")
+            print(f"Error fetching league averages from Supabase: {e}")
 
         return {'PTS': 11.5, 'REB': 4.2, 'AST': 2.4, 'MIN': 24, 'PACE': 100}
 
@@ -961,7 +865,7 @@ class OddsAPI:
         self.api_key = api_key or os.environ.get('ODDS_API_KEY')
 
         if not self.api_key:
-            print("⚠️  No Odds API key found. Set ODDS_API_KEY env var or add to config.json")
+            print("No Odds API key found. Set ODDS_API_KEY env var or add to config.json")
             print("    Get a free key at: https://the-odds-api.com/")
 
     def get_todays_events(self):
@@ -997,7 +901,7 @@ class OddsAPI:
             return todays_events
 
         except Exception as e:
-            print(f"⚠️ Error fetching events: {e}")
+            print(f"Error fetching events: {e}")
             return []
 
     def get_player_props(self, event_id, markets=None):
@@ -1022,7 +926,7 @@ class OddsAPI:
             return response.json()
 
         except Exception as e:
-            print(f"⚠️ Error fetching props for event {event_id}: {e}")
+            print(f"Error fetching props for event {event_id}: {e}")
             return {}
 
     def get_all_todays_props(self):
@@ -1030,7 +934,7 @@ class OddsAPI:
         if not self.api_key:
             return []
 
-        print("🎰 Fetching today's player props from The Odds API...")
+        print("Fetching today's player props from The Odds API...")
         events = self.get_todays_events()
 
         if not events:
@@ -2406,7 +2310,7 @@ class MLPredictor:
             df_clean = df_clean[df_clean['MIN_NUMERIC'] >= min_threshold]
 
         if len(df_clean) < 20:
-            print("⚠️ Insufficient data for training (need at least 20 games)")
+            print("Insufficient data for training (need at least 20 games)")
             return False
 
         # Apply exponential recency weighting.
@@ -2426,7 +2330,7 @@ class MLPredictor:
         self.scalers['features'] = StandardScaler()
         X_scaled = self.scalers['features'].fit_transform(X)
 
-        print(f"\n🤖 Training {self.model_type} models on {len(df_clean)} games with {len(available_features)} features...")
+        print(f"\n Training {self.model_type} models on {len(df_clean)} games with {len(available_features)} features...")
 
         # Store recent averages for bias correction fallback
         self.recent_averages = {}
@@ -2513,7 +2417,7 @@ class MLPredictor:
                     _kept = {n: v for n, v in self.feature_importance[stat].items() if n in _new_feats}
                     if _kept:
                         _top = sorted(_kept.items(), key=lambda x: x[1], reverse=True)[:5]
-                        print(f"    📊 New features in {stat}: {len(_kept)} kept, top: {', '.join(f'{n}={v:.3f}' for n, v in _top)}")
+                        print(f"New features in {stat}: {len(_kept)} kept, top: {', '.join(f'{n}={v:.3f}' for n, v in _top)}")
 
             self.models[stat] = model
 
@@ -2664,7 +2568,7 @@ class MLPredictor:
             if hasattr(model, 'n_estimators'):
                 original = self.GB_STAT_PARAMS.get(stat, self.GB_STAT_PARAMS['PTS'])['n_estimators']
                 if model.n_estimators >= original + self.MAX_ESTIMATOR_GROWTH:
-                    print(f"  ⚠️ {stat} model has {model.n_estimators} estimators (started at {original}) — triggering full retrain")
+                    print(f"{stat} model has {model.n_estimators} estimators (started at {original}) — triggering full retrain")
                     return True
 
         # Check model age (use trained_at wall-clock date, not last game date)
@@ -2673,7 +2577,7 @@ class MLPredictor:
             saved_date = datetime.strptime(trained_at, '%Y-%m-%d')
             age_days = (datetime.now() - saved_date).days
             if age_days >= self.MAX_MODEL_AGE_DAYS:
-                print(f"  ⚠️ Model was saved {age_days} days ago ({trained_at}) — triggering full retrain")
+                print(f"Model was saved {age_days} days ago ({trained_at}) — triggering full retrain")
                 return True
 
         # Check feature set mismatch — only retrain if features the model was
@@ -2685,7 +2589,7 @@ class MLPredictor:
             declared_set = set(self.FEATURE_COLS)
             removed_features = saved_set - declared_set
             if removed_features:
-                print(f"  ⚠️ Features removed from FEATURE_COLS: {removed_features} — triggering full retrain")
+                print(f"Features removed from FEATURE_COLS: {removed_features} — triggering full retrain")
                 return True
 
         return False
@@ -2700,19 +2604,19 @@ class MLPredictor:
         if stats is None:
             stats = ['PTS', 'REB', 'AST']
         if not self.models or not self.last_game_date:
-            print("  ⚠️ No existing model to update, training from scratch...")
+            print("No existing model to update, training from scratch...")
             return self.train(df, stats)
 
         # Check if model needs a full retrain instead of warm-start
         if self._needs_full_retrain():
-            print("\n♻️ Auto-retraining from scratch for better accuracy...")
+            print("\n Auto-retraining from scratch for better accuracy...")
             return self.train(df, stats)
 
         # Check for genuinely new features in data that model wasn't trained on
         available_now = [f for f in self.FEATURE_COLS if f in df.columns]
         new_data_features = set(available_now) - set(self.feature_names)
         if new_data_features:
-            print(f"  ⚠️ New features available in data: {new_data_features} — triggering full retrain")
+            print(f"New features available in data: {new_data_features} — triggering full retrain")
             return self.train(df, stats)
 
         # Filter to only new games since last training
@@ -2721,12 +2625,12 @@ class MLPredictor:
         new_games = df[df['GAME_DATE'] > last_date]
 
         if len(new_games) == 0:
-            print(f"  ℹ️ No new games since {self.last_game_date} - model is up to date")
+            print(f"No new games since {self.last_game_date} - model is up to date")
             # Still update recent averages for better predictions
             self._update_recent_averages(df, stats)
             return True
 
-        print(f"\n🔄 Updating model with {len(new_games)} new game(s) since {self.last_game_date}...")
+        print(f"\n Updating model with {len(new_games)} new game(s) since {self.last_game_date}...")
 
         # For tree-based models, we can do warm_start updates
         feature_cols = self.feature_names
@@ -2739,7 +2643,7 @@ class MLPredictor:
             df_clean = df_clean[df_clean['MIN_NUMERIC'] >= min_threshold]
 
         if len(df_clean) < 20:
-            print("  ⚠️ Insufficient data for update")
+            print("Insufficient data for update")
             return False
 
         # Apply stronger recency weighting for updates (same adaptive formula as full train)
@@ -3498,7 +3402,7 @@ class MLPredictor:
         # L3: upload to Supabase Storage
         model_storage.upload_player_model(player_name, filename)
 
-        print(f"💾 Model saved to {filename}")
+        print(f"Model saved to {filename}")
 
     def _restore_from_dict(self, data: dict, player_name: str) -> bool:
         """Restore model state from a data dict (shared by load and cache hit)."""
@@ -3521,7 +3425,7 @@ class MLPredictor:
             n_features = len(self.feature_names)
             for stat, indices in list(self.selected_features.items()):
                 if any(i >= n_features for i in indices):
-                    print(f"  ⚠️ Stale feature indices for {stat} (max index {max(indices)} >= {n_features} features) — clearing")
+                    print(f"Stale feature indices for {stat} (max index {max(indices)} >= {n_features} features) — clearing")
                     del self.selected_features[stat]
             if not self.selected_features:
                 self.selected_features = None
@@ -3547,7 +3451,7 @@ class MLPredictor:
         # Check version compatibility
         version = data.get('version', '1.0')
         if version not in ['2.0', '2.1', '3.0']:
-            print(f"  ⚠️ Model version {version} - consider retraining with --retrain for improved accuracy")
+            print(f"Model version {version} - consider retraining with --retrain for improved accuracy")
 
         return True
 
@@ -3557,7 +3461,7 @@ class MLPredictor:
         cached = _model_cache_get(player_name)
         if cached is not None:
             self._restore_from_dict(cached, player_name)
-            print(f"⚡ Loaded model from memory cache")
+            print(f"Loaded model from memory cache")
             return True
 
         # L2: disk
@@ -3571,10 +3475,10 @@ class MLPredictor:
 
                 # Promote to L1 cache
                 _model_cache_put(player_name, data)
-                print(f"📂 Loaded model from {filename}")
+                print(f"Loaded model from {filename}")
                 return True
             except Exception as e:
-                print(f"⚠️ Error loading model from disk: {e}")
+                print(f"Error loading model from disk: {e}")
 
         # L3: Supabase Storage -> download to L2, then load
         if model_storage.download_player_model(player_name, filename):
@@ -3584,10 +3488,10 @@ class MLPredictor:
 
                 self._restore_from_dict(data, player_name)
                 _model_cache_put(player_name, data)
-                print(f"☁️ Loaded model from Supabase Storage")
+                print(f"Loaded model from Supabase Storage")
                 return True
             except Exception as e:
-                print(f"⚠️ Error loading model after Supabase download: {e}")
+                print(f"Error loading model after Supabase download: {e}")
 
         return False
 
@@ -3723,32 +3627,32 @@ class LineEvaluator:
             with open(history_file, 'w') as f:
                 json.dump(all_history, f, indent=2)
         except Exception as e:
-            print(f"⚠️ Could not save prediction history: {e}")
+            print(f"Could not save prediction history: {e}")
 
 
 def print_banner():
     """Print application banner"""
     print("""
 ╔═══════════════════════════════════════════════════════════════════╗
-║                    🏀 NBA LINE EVALUATOR 🏀                       ║
-║              ML-Powered Player Prop Analysis                      ║
+║ NBA LINE EVALUATOR ║
+║ ML-Powered Player Prop Analysis ║
 ╚═══════════════════════════════════════════════════════════════════╝
-    """)
+""")
 
 
 def print_results(player_name, game_info, predictions, evaluations, vs_stats=None,
                   feature_importance=None, uncertainty=None, team_stats=None, recent_averages=None):
     """Print formatted results"""
     print("\n" + "=" * 65)
-    print(f"  📊 ANALYSIS: {player_name.upper()}")
+    print(f"ANALYSIS: {player_name.upper()}")
     print("=" * 65)
 
     if game_info:
-        print(f"  🎮 Matchup: {game_info.get('matchup', 'N/A')}")
-        print(f"  📍 Location: {'HOME' if game_info.get('is_home') else 'AWAY'}")
+        print(f"Matchup: {game_info.get('matchup', 'N/A')}")
+        print(f"Location: {'HOME' if game_info.get('is_home') else 'AWAY'}")
         opp = game_info.get('opponent', '')
         opp_name = game_info.get('opponent_name', 'N/A')
-        print(f"  🆚 Opponent: {opp_name}")
+        print(f"Opponent: {opp_name}")
 
         # Show opponent defensive context if available
         if team_stats and opp in team_stats:
@@ -3757,22 +3661,22 @@ def print_results(player_name, game_info, predictions, evaluations, vs_stats=Non
             pace = opp_stats.get('pace', 100)
             def_rank = "Elite" if def_rating < 108 else "Good" if def_rating < 112 else "Average" if def_rating < 116 else "Poor"
             pace_desc = "Fast" if pace > 102 else "Slow" if pace < 98 else "Average"
-            print(f"  🛡️ Opponent Defense: {def_rank} ({def_rating:.1f} DEF RTG)")
-            print(f"  ⚡ Opponent Pace: {pace_desc} ({pace:.1f})")
+            print(f"Opponent Defense: {def_rank} ({def_rating:.1f} DEF RTG)")
+            print(f"Opponent Pace: {pace_desc} ({pace:.1f})")
 
     # Show recent averages (last 10 games)
     if recent_averages:
         pts_avg = recent_averages.get('PTS', 0)
         reb_avg = recent_averages.get('REB', 0)
         ast_avg = recent_averages.get('AST', 0)
-        print(f"\n  📊 Last 10 Games Avg: {pts_avg:.1f} PTS | {reb_avg:.1f} REB | {ast_avg:.1f} AST")
+        print(f"\n Last 10 Games Avg: {pts_avg:.1f} PTS | {reb_avg:.1f} REB | {ast_avg:.1f} AST")
 
     if vs_stats:
-        print(f"\n  📈 vs {game_info.get('opponent', 'OPP')} History ({vs_stats['games']} games):")
+        print(f"\n vs {game_info.get('opponent', 'OPP')} History ({vs_stats['games']} games):")
         print(f"      Avg: {vs_stats['avg_pts']:.1f} PTS | {vs_stats['avg_reb']:.1f} REB | {vs_stats['avg_ast']:.1f} AST")
 
     print("\n" + "-" * 65)
-    print("  🤖 ML PREDICTIONS:")
+    print("ML PREDICTIONS:")
     print("-" * 65)
 
     for stat, pred in predictions.items():
@@ -3789,16 +3693,16 @@ def print_results(player_name, game_info, predictions, evaluations, vs_stats=Non
 
     if evaluations:
         print("\n" + "-" * 65)
-        print("  📋 LINE EVALUATIONS:")
+        print("LINE EVALUATIONS:")
         print("-" * 65)
 
         for eval_result in evaluations:
             stat = eval_result['stat']
-            icon = "🟢" if "OVER" in eval_result['recommendation'] else "🔴"
+            icon = "" if "OVER" in eval_result['recommendation'] else ""
 
             print(f"\n  {icon} {stat} Line: {eval_result['line']}")
             print(f"      Prediction: {eval_result['prediction']:.1f} ({eval_result['diff_pct']:+.1f}%)")
-            print(f"      ➤ {eval_result['recommendation']} ({eval_result['strength']} confidence)")
+            print(f"{eval_result['recommendation']} ({eval_result['strength']} confidence)")
 
             if 'prob_over' in eval_result:
                 prob = eval_result['prob_over']
@@ -3812,7 +3716,7 @@ def print_results(player_name, game_info, predictions, evaluations, vs_stats=Non
     # Show feature importance if available
     if feature_importance:
         print("\n" + "-" * 65)
-        print("  🔬 KEY FACTORS (Feature Importance):")
+        print("KEY FACTORS (Feature Importance):")
         print("-" * 65)
         for stat, importance in feature_importance.items():
             if importance:
@@ -3840,7 +3744,7 @@ def find_best_bets(min_edge=5.0, max_edge=55.0, max_results=20, select_games=Fal
         List of best bets sorted by edge
     """
     print("=" * 65)
-    print("🎯 NBA BEST BETS FINDER")
+    print("NBA BEST BETS FINDER")
     print("=" * 65)
 
     # Initialize components
@@ -3851,17 +3755,17 @@ def find_best_bets(min_edge=5.0, max_edge=55.0, max_results=20, select_games=Fal
     # Check API status
     api_status = odds_api.check_remaining_requests()
     if api_status and api_status.get('remaining'):
-        print(f"📊 API Requests: {api_status['remaining']} remaining this month")
+        print(f"API Requests: {api_status['remaining']} remaining this month")
 
     # Game selection mode
     if select_games:
         events = odds_api.get_todays_events()
         if not events:
-            print("\n❌ No games found for today.")
+            print("\n No games found for today.")
             return []
 
         # Display games for selection
-        print(f"\n📅 Today's Games ({len(events)} total):")
+        print(f"\n Today's Games ({len(events)} total):")
         print("-" * 50)
         for i, event in enumerate(events, 1):
             home_team = event['home_team']
@@ -3872,14 +3776,14 @@ def find_best_bets(min_edge=5.0, max_edge=55.0, max_results=20, select_games=Fal
             print(f"  {i}. {away_team} @ {home_team} ({time_str})")
 
         print("-" * 50)
-        print("\n🎮 Select games to analyze:")
+        print("\n Select games to analyze:")
         print("   Enter numbers separated by commas (e.g., 1,3,5)")
         print("   Or 'all' for all games, 'q' to quit")
 
         selection = input(">>> ").strip().lower()
 
         if selection in ['q', 'quit', 'exit']:
-            print("👋 Goodbye!")
+            print("Goodbye!")
             return []
 
         if selection == 'all' or selection == '':
@@ -3889,10 +3793,10 @@ def find_best_bets(min_edge=5.0, max_edge=55.0, max_results=20, select_games=Fal
                 indices = [int(x.strip()) - 1 for x in selection.split(',')]
                 selected_events = [events[i] for i in indices if 0 <= i < len(events)]
                 if not selected_events:
-                    print("❌ No valid games selected.")
+                    print("No valid games selected.")
                     return []
             except (ValueError, IndexError):
-                print("❌ Invalid selection. Please enter numbers like: 1,2,3")
+                print("Invalid selection. Please enter numbers like: 1,2,3")
                 return []
 
         # Get props only for selected games
@@ -3901,7 +3805,7 @@ def find_best_bets(min_edge=5.0, max_edge=55.0, max_results=20, select_games=Fal
             selected_teams.add(event['home_team'])
             selected_teams.add(event['away_team'])
 
-        print(f"\n🔍 Analyzing {len(selected_events)} selected game(s)...")
+        print(f"\n Analyzing {len(selected_events)} selected game(s)...")
         all_props = odds_api.get_all_todays_props()
         # Filter to only selected games
         all_props = [p for p in all_props if p['home_team'] in selected_teams or p['away_team'] in selected_teams]
@@ -3910,7 +3814,7 @@ def find_best_bets(min_edge=5.0, max_edge=55.0, max_results=20, select_games=Fal
         all_props = odds_api.get_all_todays_props()
 
     if not all_props:
-        print("\n❌ No player props available for today.")
+        print("\n No player props available for today.")
         print("   This could mean:")
         print("   - No games scheduled today")
         print("   - Props not yet posted (check closer to game time)")
@@ -3918,12 +3822,12 @@ def find_best_bets(min_edge=5.0, max_edge=55.0, max_results=20, select_games=Fal
         return []
 
     # Pre-fetch team stats
-    print("\n🔄 Loading team statistics...")
+    print("\n Loading team statistics...")
     team_stats = scraper.get_team_defensive_stats()
     injuries = scraper.get_injury_report()
 
     # Analyze each prop
-    print(f"\n🔍 Analyzing {len(all_props)} player props...")
+    print(f"\n Analyzing {len(all_props)} player props...")
     results = []
     processed = 0
     errors = 0
@@ -4052,32 +3956,32 @@ def find_best_bets(min_edge=5.0, max_edge=55.0, max_results=20, select_games=Fal
 
     # Display results
     print("\n" + "=" * 65)
-    print(f"🏆 TOP {len(results)} BEST BETS (Edge: {min_edge}%-{max_edge}%)")
+    print(f"TOP {len(results)} BEST BETS (Edge: {min_edge}%-{max_edge}%)")
     print("=" * 65)
 
     if not results:
-        print("\n❌ No bets found meeting the edge threshold.")
+        print("\n No bets found meeting the edge threshold.")
         print(f"   Try lowering --min-edge below {min_edge}% or raising --max-edge above {max_edge}%")
         return []
 
     for i, bet in enumerate(results, 1):
-        home_away = "🏠" if bet['is_home'] else "✈️"
-        direction_color = "🟢" if bet['direction'] == "OVER" else "🔴"
+        home_away = "" if bet['is_home'] else ""
+        direction_color = "" if bet['direction'] == "OVER" else ""
 
         print(f"\n{i}. {bet['player']} - {bet['stat']}")
         print(f"   {direction_color} {bet['direction']} {bet['line']} {home_away} vs {bet['opponent']}")
-        print(f"   📈 Prediction: {bet['prediction']} | Edge: {bet['edge']:+.1f}%")
-        print(f"   📊 Recent Avg: {bet['recent_avg']} | Confidence: {bet['confidence']:.0f}%")
+        print(f"Prediction: {bet['prediction']} | Edge: {bet['edge']:+.1f}%")
+        print(f"Recent Avg: {bet['recent_avg']} | Confidence: {bet['confidence']:.0f}%")
 
     print("\n" + "=" * 65)
-    print(f"✅ Found {len(results)} opportunities with {min_edge}%-{max_edge}% edge")
+    print(f"Found {len(results)} opportunities with {min_edge}%-{max_edge}% edge")
     if errors > 0:
-        print(f"⚠️  Skipped {errors} props due to data issues")
+        print(f"Skipped {errors} props due to data issues")
 
     # Show API usage
     api_status = odds_api.check_remaining_requests()
     if api_status and api_status.get('remaining'):
-        print(f"📊 API Requests remaining: {api_status['remaining']}")
+        print(f"API Requests remaining: {api_status['remaining']}")
 
     print("=" * 65)
 
@@ -4095,11 +3999,11 @@ def track_picks_interactive(results, model_type='random_forest'):
     import db
 
     if not results:
-        print("❌ No results to track.")
+        print("No results to track.")
         return
 
     print("\n" + "=" * 65)
-    print("📝 TRACK PICKS")
+    print("TRACK PICKS")
     print("=" * 65)
     print("Enter pick numbers to track (e.g., 1,3,5), 'all', or 'q' to quit:")
 
@@ -4115,11 +4019,11 @@ def track_picks_interactive(results, model_type='random_forest'):
             indices = [int(x.strip()) - 1 for x in selection.split(',')]
             indices = [i for i in indices if 0 <= i < len(results)]
         except ValueError:
-            print("❌ Invalid selection.")
+            print("Invalid selection.")
             return
 
     if not indices:
-        print("❌ No valid picks selected.")
+        print("No valid picks selected.")
         return
 
     tracked = 0
@@ -4142,9 +4046,9 @@ def track_picks_interactive(results, model_type='random_forest'):
         }
         db.save_pick(pick_data)
         tracked += 1
-        print(f"  ✅ Tracked: {bet['player']} {bet['stat']} {bet['direction']} {bet['line']}")
+        print(f"Tracked: {bet['player']} {bet['stat']} {bet['direction']} {bet['line']}")
 
-    print(f"\n🎯 Tracked {tracked} pick(s)!")
+    print(f"\n Tracked {tracked} pick(s)!")
 
 
 def show_history(days=30):
@@ -4152,13 +4056,13 @@ def show_history(days=30):
     import db
 
     print("\n" + "=" * 65)
-    print(f"📜 PICK HISTORY (Last {days} days)")
+    print(f"PICK HISTORY (Last {days} days)")
     print("=" * 65)
 
     picks = db.get_picks_history(days)
 
     if not picks:
-        print("\n❌ No picks found. Track some picks first!")
+        print("\n No picks found. Track some picks first!")
         return
 
     # Group by result (exclude voided picks from pending)
@@ -4167,30 +4071,30 @@ def show_history(days=30):
     losses = [p for p in picks if p['won'] == 0]
     voided = [p for p in picks if p.get('voided')]
 
-    print(f"\n📊 Summary: {len(wins)}W - {len(losses)}L ({len(pending)} pending, {len(voided)} voided)")
+    print(f"\n Summary: {len(wins)}W - {len(losses)}L ({len(pending)} pending, {len(voided)} voided)")
 
     # Auto-void stale picks before display
     stale_voided = db.auto_void_stale_picks(days_threshold=3)
     if stale_voided > 0:
-        print(f"\n🧹 Auto-voided {stale_voided} stale pick(s) (3+ days old, likely DNP)")
+        print(f"\n Auto-voided {stale_voided} stale pick(s) (3+ days old, likely DNP)")
         # Re-fetch after voiding
         picks = db.get_picks_history(days)
         pending = [p for p in picks if p['won'] is None and not p.get('voided')]
         wins = [p for p in picks if p['won'] == 1]
         losses = [p for p in picks if p['won'] == 0]
         voided = [p for p in picks if p.get('voided')]
-        print(f"📊 Updated: {len(wins)}W - {len(losses)}L ({len(pending)} pending, {len(voided)} voided)")
+        print(f"Updated: {len(wins)}W - {len(losses)}L ({len(pending)} pending, {len(voided)} voided)")
 
     # Show pending picks (ALL of them with edge info)
     if pending:
-        print(f"\n⏳ PENDING PICKS ({len(pending)}):")
+        print(f"\n PENDING PICKS ({len(pending)}):")
         print("-" * 65)
         # Sort by absolute edge descending
         pending_sorted = sorted(pending, key=lambda x: abs(x.get('edge', 0)), reverse=True)
         stale_count = 0
         for p in pending_sorted:
             model = (p.get('model_type') or 'unknown').replace('_', ' ').title()[:12]
-            direction_icon = "🟢" if "OVER" in p['direction'].upper() else "🔴"
+            direction_icon = "" if "OVER" in p['direction'].upper() else ""
             edge = p.get('edge', 0)
             edge_str = f"{edge:+.1f}%" if edge else "N/A"
             game_date = p.get('game_date', '')[:10] if p.get('game_date') else ''
@@ -4205,15 +4109,15 @@ def show_history(days=30):
                     pass
         print("-" * 65)
         if stale_count > 0:
-            print(f"   ⚠️ {stale_count} pick(s) are 2+ days old and likely DNP - run --grade to resolve")
+            print(f"{stale_count} pick(s) are 2+ days old and likely DNP - run --grade to resolve")
 
     # Show recent results
     graded = [p for p in picks if p['won'] is not None]
     if graded:
-        print(f"\n📋 GRADED RESULTS ({len(graded)}):")
+        print(f"\n GRADED RESULTS ({len(graded)}):")
         print("-" * 65)
         for p in graded[:20]:  # Show max 20
-            emoji = "✅" if p['won'] == 1 else "❌"
+            emoji = "" if p['won'] == 1 else ""
             actual = p.get('actual_result', '?')
             if actual != '?':
                 actual = f"{actual:.0f}"
@@ -4226,10 +4130,10 @@ def show_history(days=30):
         print("-" * 65)
 
     # Export to Excel
-    print("\n📊 Updating Excel tracker...")
+    print("\n Updating Excel tracker...")
     excel_path = db.export_to_excel()
     if excel_path:
-        print(f"   ✅ Saved to: {excel_path}")
+        print(f"Saved to: {excel_path}")
 
     print("=" * 65)
 
@@ -4271,21 +4175,21 @@ def auto_grade_cli():
     import db
 
     print("\n" + "=" * 65)
-    print("🔄 AUTO-GRADING PICKS")
+    print("AUTO-GRADING PICKS")
     print("=" * 65)
 
     pending = db.get_pending_picks()
     if not pending:
-        print("\n✅ No pending picks to grade!")
+        print("\n No pending picks to grade!")
         return
 
     # Check if games are still in progress
-    print("\n🏀 Checking game status...")
+    print("\n Checking game status...")
     game_status = check_games_in_progress()
 
     if game_status.get('in_progress'):
-        print(f"\n⚠️  WARNING: {game_status['in_progress_count']} game(s) still IN PROGRESS!")
-        print(f"   📊 Today's games: {game_status.get('final_count', 0)} final, {game_status['in_progress_count']} in progress, {game_status.get('scheduled_count', 0)} scheduled")
+        print(f"\n WARNING: {game_status['in_progress_count']} game(s) still IN PROGRESS!")
+        print(f"Today's games: {game_status.get('final_count', 0)} final, {game_status['in_progress_count']} in progress, {game_status.get('scheduled_count', 0)} scheduled")
         print("\n   Grading now may result in incorrect stats from incomplete games.")
         print("   It's recommended to wait until all games are final.\n")
 
@@ -4304,40 +4208,40 @@ def auto_grade_cli():
         final_count = game_status.get('final_count', 0)
         scheduled_count = game_status.get('scheduled_count', 0)
         if final_count > 0 or scheduled_count > 0:
-            print(f"   ✅ No games in progress. ({final_count} final, {scheduled_count} scheduled)")
+            print(f"No games in progress. ({final_count} final, {scheduled_count} scheduled)")
         else:
-            print("   ✅ No games found for today.")
+            print("No games found for today.")
 
-    print(f"\n📋 Found {len(pending)} pending pick(s). Fetching results...")
+    print(f"\n Found {len(pending)} pending pick(s). Fetching results...")
 
     result = db.auto_grade_picks()
 
     # Show stale auto-voided picks
     stale_voided = result.get('stale_voided', 0)
     if stale_voided > 0:
-        print(f"\n🧹 Auto-voided {stale_voided} stale pick(s) (3+ days old, likely DNP)")
+        print(f"\n Auto-voided {stale_voided} stale pick(s) (3+ days old, likely DNP)")
 
     # Show voided DNP picks
     voided_count = result.get('voided_count', 0)
     if voided_count > 0:
-        print(f"\n🚫 Voided {voided_count} DNP pick(s):\n")
+        print(f"\n Voided {voided_count} DNP pick(s):\n")
         for r in result['results']:
             if r.get('voided'):
                 model = (r.get('model_type') or 'unknown').replace('_', ' ').title()
-                print(f"   ⛔ {r['player']} {r['stat']} {r['direction']} {r['line']} - DNP [{model}]")
+                print(f"{r['player']} {r['stat']} {r['direction']} {r['line']} - DNP [{model}]")
 
     if result['graded_count'] > 0:
-        print(f"\n✅ Graded {result['graded_count']} pick(s):\n")
+        print(f"\n Graded {result['graded_count']} pick(s):\n")
         for r in result['results']:
             if not r.get('voided'):
-                emoji = "✅" if r['won'] else "❌"
+                emoji = "" if r['won'] else ""
                 model = (r.get('model_type') or 'unknown').replace('_', ' ').title()
                 print(f"   {emoji} {r['player']} {r['stat']}: {r['actual']} (Line: {r['line']}) [{model}]")
     elif voided_count == 0 and stale_voided == 0:
-        print("\n⚠️ No picks could be graded. Games may not have finished yet.")
+        print("\n No picks could be graded. Games may not have finished yet.")
 
     if result['errors']:
-        print(f"\n⚠️ Errors ({len(result['errors'])}):")
+        print(f"\n Errors ({len(result['errors'])}):")
         for err in result['errors'][:5]:
             print(f"   - {err}")
 
@@ -4356,7 +4260,7 @@ def auto_grade_cli():
                 pass
 
     if old_pending:
-        print(f"\n⏳ {len(old_pending)} pick(s) still pending (game was 1+ days ago, will retry next grade):")
+        print(f"\n {len(old_pending)} pick(s) still pending (game was 1+ days ago, will retry next grade):")
         for p, days in old_pending[:5]:
             gd_str = p.get('game_date', '')[:10]
             print(f"   {p['player']} {p['stat']} {p['direction']} {p['line']} ({gd_str}, {days}d ago)")
@@ -4371,7 +4275,7 @@ def handle_reset_grades():
     import db
 
     print("\n" + "=" * 65)
-    print("🔄 RESET GRADED PICKS")
+    print("RESET GRADED PICKS")
     print("=" * 65)
 
     # Get recently graded picks
@@ -4387,14 +4291,14 @@ def handle_reset_grades():
     db.put_connection(conn)
 
     if not graded:
-        print("\n✅ No graded picks to reset!")
+        print("\n No graded picks to reset!")
         return
 
-    print(f"\n📋 Recently Graded Picks ({len(graded)}):")
+    print(f"\n Recently Graded Picks ({len(graded)}):")
     print("-" * 65)
 
     for i, p in enumerate(graded, 1):
-        result_icon = "✅" if p['won'] == 1 else "❌"
+        result_icon = "" if p['won'] == 1 else ""
         actual = f"{p['actual_result']:.0f}" if p.get('actual_result') is not None else "?"
         game_date = p.get('game_date', '')[:10] if p.get('game_date') else ''
         print(f"  {i:2}. [ID:{p['id']:3}] {result_icon} {p['player']:<18} {p['stat']:<4} {p['direction']:<5} {p['line']:<6} | Actual: {actual:<4} | {game_date}")
@@ -4419,17 +4323,17 @@ def handle_reset_grades():
     if choice.startswith('date '):
         date_str = choice[5:].strip()
         count = db.reset_all_graded_for_date(date_str)
-        print(f"\n✅ Reset {count} pick(s) for {date_str} back to pending")
+        print(f"\n Reset {count} pick(s) for {date_str} back to pending")
     elif choice == 'all':
         for p in graded:
             db.reset_pick_to_pending(p['id'])
-        print(f"\n✅ Reset {len(graded)} pick(s) back to pending")
+        print(f"\n Reset {len(graded)} pick(s) back to pending")
     else:
         try:
             indices = [int(x.strip()) - 1 for x in choice.split(',')]
             indices = [i for i in indices if 0 <= i < len(graded)]
         except ValueError:
-            print("❌ Invalid input.")
+            print("Invalid input.")
             return
 
         if not indices:
@@ -4439,9 +4343,9 @@ def handle_reset_grades():
         for i in indices:
             pick = graded[i]
             db.reset_pick_to_pending(pick['id'])
-            print(f"  ✅ Reset: {pick['player']} {pick['stat']} {pick['direction']} {pick['line']}")
+            print(f"Reset: {pick['player']} {pick['stat']} {pick['direction']} {pick['line']}")
 
-        print(f"\n✅ Reset {len(indices)} pick(s) back to pending")
+        print(f"\n Reset {len(indices)} pick(s) back to pending")
 
     print("\nRun --grade again after games are final to re-grade.")
     print("=" * 65)
@@ -4452,20 +4356,20 @@ def handle_dnp_picks():
     import db
 
     print("\n" + "=" * 65)
-    print("🚫 VOID DNP PICKS")
+    print("VOID DNP PICKS")
     print("=" * 65)
 
     pending = db.get_pending_picks()
 
     if not pending:
-        print("\n✅ No pending picks to void!")
+        print("\n No pending picks to void!")
         return
 
-    print(f"\n📋 Pending Picks ({len(pending)}):")
+    print(f"\n Pending Picks ({len(pending)}):")
     print("-" * 65)
 
     for i, p in enumerate(pending, 1):
-        direction_icon = "🟢" if "OVER" in p['direction'].upper() else "🔴"
+        direction_icon = "" if "OVER" in p['direction'].upper() else ""
         edge = p.get('edge', 0)
         edge_str = f"{edge:+.1f}%" if edge else "N/A"
         game_date = p.get('game_date', '')[:10] if p.get('game_date') else ''
@@ -4491,7 +4395,7 @@ def handle_dnp_picks():
             indices = [int(x.strip()) - 1 for x in choice.split(',')]
             indices = [i for i in indices if 0 <= i < len(pending)]
         except ValueError:
-            print("❌ Invalid input.")
+            print("Invalid input.")
             return
 
     if not indices:
@@ -4513,16 +4417,16 @@ def handle_dnp_picks():
     for i in indices:
         pick = pending[i]
         db.void_pick(pick['id'], reason=reason)
-        print(f"  ✅ Voided: {pick['player']} {pick['stat']} {pick['direction']} {pick['line']} ({reason})")
+        print(f"Voided: {pick['player']} {pick['stat']} {pick['direction']} {pick['line']} ({reason})")
         voided_count += 1
 
-    print(f"\n🚫 Voided {voided_count} pick(s) - removed from performance calculations")
+    print(f"\n Voided {voided_count} pick(s) - removed from performance calculations")
 
     # Update Excel
-    print("\n📊 Updating Excel tracker...")
+    print("\n Updating Excel tracker...")
     excel_path = db.export_to_excel()
     if excel_path:
-        print(f"   ✅ Saved to: {excel_path}")
+        print(f"Saved to: {excel_path}")
 
     print("=" * 65)
 
@@ -4532,13 +4436,13 @@ def show_performance():
     import db
 
     print("\n" + "=" * 65)
-    print("📈 PERFORMANCE ANALYTICS")
+    print("PERFORMANCE ANALYTICS")
     print("=" * 65)
 
     # Overall stats
     stats = db.get_performance_stats()
 
-    print(f"\n📊 OVERALL:")
+    print(f"\n OVERALL:")
     print(f"   Total Picks: {stats['total_picks']}")
     print(f"   Graded: {stats['graded_picks']}")
     print(f"   Record: {stats['wins']}-{stats['losses']}" + (f"-{stats['pushes']}" if stats['pushes'] > 0 else ""))
@@ -4550,15 +4454,15 @@ def show_performance():
 
         # Breakeven indicator
         if stats['win_rate'] >= 52.4:
-            print(f"   📈 Above breakeven (52.4%)")
+            print(f"Above breakeven (52.4%)")
         else:
-            print(f"   📉 Below breakeven (52.4%)")
+            print(f"Below breakeven (52.4%)")
 
     # Model-specific performance
     model_stats = db.get_performance_by_model()
 
     if model_stats:
-        print(f"\n🤖 BY MODEL:")
+        print(f"\n BY MODEL:")
         print("-" * 50)
         print(f"   {'Model':<20} {'Record':<10} {'Win%':<8} {'ROI':<10}")
         print("-" * 50)
@@ -4574,7 +4478,7 @@ def show_performance():
 
     # By stat type
     if stats['by_stat']:
-        print(f"\n📊 BY STAT TYPE:")
+        print(f"\n BY STAT TYPE:")
         print("-" * 40)
         for stat, data in stats['by_stat'].items():
             print(f"   {stat}: {data['wins']}/{data['total']} ({data['win_rate']:.1f}%)")
@@ -4583,7 +4487,7 @@ def show_performance():
     model_stat_data = db.get_performance_by_model_and_stat()
 
     if model_stat_data and len(model_stat_data) > 0:
-        print(f"\n🔬 DETAILED (Model + Stat):")
+        print(f"\n DETAILED (Model + Stat):")
         for model, stat_data in model_stat_data.items():
             model_name = model.replace('_', ' ').title()
             print(f"\n   {model_name}:")
@@ -4591,12 +4495,12 @@ def show_performance():
                 print(f"      {stat}: {data['wins']}/{data['total']} ({data['win_rate']:.1f}%)")
 
     # Export to Excel
-    print("\n📊 Exporting to Excel...")
+    print("\n Exporting to Excel...")
     excel_path = db.export_to_excel()
     if excel_path:
-        print(f"   ✅ Saved to: {excel_path}")
+        print(f"Saved to: {excel_path}")
     else:
-        print("   ⚠️ Could not export to Excel (install openpyxl)")
+        print("Could not export to Excel (install openpyxl)")
 
     print("\n" + "=" * 65)
 
@@ -4609,16 +4513,16 @@ def interactive_mode():
     evaluator = LineEvaluator()
 
     # Pre-fetch team stats for the session
-    print("🔄 Loading team statistics...")
+    print("Loading team statistics...")
     team_stats = scraper.get_team_defensive_stats()
     injuries = scraper.get_injury_report()
 
     while True:
-        print("\n📝 Enter player name (or 'quit' to exit):")
+        print("\n Enter player name (or 'quit' to exit):")
         player_input = input(">>> ").strip()
 
         if player_input.lower() in ['quit', 'exit', 'q']:
-            print("👋 Goodbye!")
+            print("Goodbye!")
             break
 
         if not player_input:
@@ -4627,16 +4531,16 @@ def interactive_mode():
         # Get player info
         player_info = scraper.get_player_info(player_input)
         if not player_info:
-            print(f"❌ Player '{player_input}' not found. Try again.")
+            print(f"Player '{player_input}' not found. Try again.")
             continue
 
         player_name = player_info['player_name']
-        print(f"✅ Found: {player_name}")
+        print(f"Found: {player_name}")
 
         # Check player injury status
         injury_status = scraper.get_player_injury_status(player_name, injuries)
         if injury_status['is_injured']:
-            print(f"  ⚠️ INJURY ALERT: {player_name} is {injury_status['status'].upper()}")
+            print(f"INJURY ALERT: {player_name} is {injury_status['status'].upper()}")
 
         # Get game info
         game_info = scraper.get_player_next_game(player_info)
@@ -4644,7 +4548,7 @@ def interactive_mode():
         # Get game log and create features with team stats
         game_log = scraper.get_player_game_log(player_info['player_id'])
         if game_log.empty:
-            print("❌ No game data available for this player.")
+            print("No game data available for this player.")
             continue
 
         # Feature engineering with opponent context
@@ -4659,7 +4563,7 @@ def interactive_mode():
             )
 
         # Model selection
-        print("\n🤖 Select model type:")
+        print("\n Select model type:")
         print("  1. Random Forest (default)")
         print("  2. Gradient Boosting")
         print("  3. Ensemble (RF + GB combined)")
@@ -4682,13 +4586,13 @@ def interactive_mode():
         if predictor.load(player_name):
             if predictor.last_game_date:
                 trained_at_str = f", saved {predictor.trained_at}" if getattr(predictor, 'trained_at', None) else ""
-                print(f"📂 Model last game: {predictor.last_game_date}{trained_at_str} ({predictor.games_trained_on} games)")
+                print(f"Model last game: {predictor.last_game_date}{trained_at_str} ({predictor.games_trained_on} games)")
             if predictor.update(df):
                 predictor.save(player_name)
         else:
-            print("🆕 No existing model found, training new model...")
+            print("No existing model found, training new model...")
             if not predictor.train(df):
-                print("❌ Could not train model.")
+                print("Could not train model.")
                 continue
             predictor.save(player_name)
 
@@ -4743,7 +4647,7 @@ def interactive_mode():
         # Get lines to evaluate
         evaluations = []
         trackable_picks = []  # Store picks that can be tracked
-        print("\n📊 Enter lines to evaluate (or press Enter to skip):")
+        print("\n Enter lines to evaluate (or press Enter to skip):")
         for stat in ['PTS', 'REB', 'AST', 'PRA']:
             if stat in predictions:
                 pred_str = f"{predictions[stat]:.1f}"
@@ -4752,7 +4656,7 @@ def interactive_mode():
                     try:
                         line = float(line_input)
                     except ValueError:
-                        print(f"  ⚠️ Invalid number, skipping {stat}")
+                        print(f"Invalid number, skipping {stat}")
                         continue
                     try:
                         confidence_info = predictor.get_confidence(df, stat, predictions[stat], features_df=features_df)
@@ -4778,7 +4682,7 @@ def interactive_mode():
                                 'team_abbrev': team_abbrev
                             })
                     except Exception as e:
-                        print(f"  ⚠️ Error evaluating {stat}: {e}")
+                        print(f"Error evaluating {stat}: {e}")
 
         # Print results — compute L10 live from current game log (not frozen pkl value)
         live_l10 = {}
@@ -4795,17 +4699,17 @@ def interactive_mode():
             recent_averages=live_l10
         )
 
-        print("\n💾 Model auto-saved with latest data.")
+        print("\n Model auto-saved with latest data.")
 
         # Offer to track picks
         if trackable_picks:
             print("\n" + "-" * 50)
-            print("📝 TRACK PICKS")
+            print("TRACK PICKS")
             print("-" * 50)
             MAX_EDGE_THRESHOLD = 50.0
             for i, pick in enumerate(trackable_picks, 1):
-                direction_emoji = "🟢" if pick['direction'] == "OVER" else "🔴"
-                warning = " ⚠️  HIGH EDGE" if abs(pick['edge']) > MAX_EDGE_THRESHOLD else ""
+                direction_emoji = "" if pick['direction'] == "OVER" else ""
+                warning = "HIGH EDGE" if abs(pick['edge']) > MAX_EDGE_THRESHOLD else ""
                 print(f"  {i}. {pick['stat']} {direction_emoji} {pick['direction']} {pick['line']} (Edge: {pick['edge']:+.1f}%){warning}")
 
             print("\nTrack these picks? Enter numbers (e.g., 1,2), 'all', or press Enter to skip:")
@@ -4827,8 +4731,8 @@ def interactive_mode():
                     for i in indices:
                         db.save_pick(trackable_picks[i])
                         pick = trackable_picks[i]
-                        print(f"  ✅ Tracked: {pick['stat']} {pick['direction']} {pick['line']}")
-                    print(f"\n🎯 Tracked {len(indices)} pick(s)!")
+                        print(f"Tracked: {pick['stat']} {pick['direction']} {pick['line']}")
+                    print(f"\n Tracked {len(indices)} pick(s)!")
 
 
 def main():
@@ -4917,7 +4821,7 @@ Examples:
         if CACHE_DIR.exists():
             shutil.rmtree(CACHE_DIR)
             CACHE_DIR.mkdir(exist_ok=True)
-            print("🗑️ Cache cleared")
+            print("Cache cleared")
 
     # History mode
     if args.history:
@@ -4938,7 +4842,7 @@ Examples:
     if args.void:
         import db
         db.void_pick(args.void, reason="DNP")
-        print(f"✅ Pick #{args.void} voided (DNP) - removed from performance calculations")
+        print(f"Pick #{args.void} voided (DNP) - removed from performance calculations")
         return
 
     # DNP mode - interactive selection to void picks
@@ -4950,7 +4854,7 @@ Examples:
     if args.reset_date:
         import db
         count = db.reset_all_graded_for_date(args.reset_date)
-        print(f"✅ Reset {count} pick(s) for {args.reset_date} back to pending")
+        print(f"Reset {count} pick(s) for {args.reset_date} back to pending")
         print("   Run --grade again after games are final to re-grade.")
         return
 
@@ -4978,14 +4882,14 @@ Examples:
     evaluator = LineEvaluator()
 
     # Get team stats and injuries
-    print("🔄 Loading contextual data...")
+    print("Loading contextual data...")
     team_stats = scraper.get_team_defensive_stats()
     injuries = scraper.get_injury_report()
 
     # Get player info
     player_info = scraper.get_player_info(args.player)
     if not player_info:
-        print(f"❌ Player '{args.player}' not found.")
+        print(f"Player '{args.player}' not found.")
         sys.exit(1)
 
     player_name = player_info['player_name']
@@ -4993,7 +4897,7 @@ Examples:
     # Check player injury status
     injury_status = scraper.get_player_injury_status(player_name, injuries)
     if injury_status['is_injured']:
-        print(f"⚠️ INJURY ALERT: {player_name} is {injury_status['status'].upper()}")
+        print(f"INJURY ALERT: {player_name} is {injury_status['status'].upper()}")
 
     # Get game info
     game_info = scraper.get_player_next_game(player_info)
@@ -5001,7 +4905,7 @@ Examples:
     # Get game log
     game_log = scraper.get_player_game_log(player_info['player_id'])
     if game_log.empty:
-        print("❌ No game data available.")
+        print("No game data available.")
         sys.exit(1)
 
     # Feature engineering with team stats
@@ -5018,7 +4922,7 @@ Examples:
     # Initialize model
     model_type = args.model
     if model_type == 'neural' and not TF_AVAILABLE:
-        print("⚠️ TensorFlow not available, using Random Forest")
+        print("TensorFlow not available, using Random Forest")
         model_type = 'random_forest'
 
     predictor = MLPredictor(model_type=model_type, use_ensemble=args.ensemble)
@@ -5026,22 +4930,22 @@ Examples:
     # Load, update, or train model
     if args.retrain:
         # Force full retrain from scratch
-        print("🔄 Retraining model from scratch...")
+        print("Retraining model from scratch...")
         if not predictor.train(df):
-            print("❌ Could not train model.")
+            print("Could not train model.")
             sys.exit(1)
         predictor.save(player_name)
     elif predictor.load(player_name):
         # Model loaded - update with any new games
         if predictor.last_game_date:
-            print(f"📂 Model last updated: {predictor.last_game_date} ({predictor.games_trained_on} games)")
+            print(f"Model last updated: {predictor.last_game_date} ({predictor.games_trained_on} games)")
         if predictor.update(df):
             predictor.save(player_name)  # Save the updated model
     else:
         # No existing model - train new one
-        print("🆕 No existing model found, training new model...")
+        print("No existing model found, training new model...")
         if not predictor.train(df):
-            print("❌ Could not train model.")
+            print("Could not train model.")
             sys.exit(1)
         predictor.save(player_name)
 

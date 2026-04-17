@@ -1,8 +1,8 @@
 """
-BallDontLie REST API low-level HTTP client (GOAT tier, 600 req/min).
+BallDontLie REST API low-level HTTP client (ALL-STAR tier, 60 req/min).
 
-Rate limits are enforced server-side via 429 responses; this client handles
-retries with exponential backoff — callers never need time.sleep().
+Client-side token-bucket rate limiter enforces 55 req/min (with 5-req buffer).
+Server-side 429 responses are handled via exponential backoff as a safety net.
 
 Usage::
 
@@ -10,6 +10,10 @@ Usage::
     client = get_bdl_client()
     games  = client.get_games(dates=["2026-03-08"])
     teams  = client.get_teams()
+
+Note: GOAT-only endpoints (team_season_averages, season_averages, standings,
+box_scores, player_props, odds) raise NotImplementedError after the April 9
+2026 tier downgrade.  Use stats_aggregator.py for computed replacements.
 """
 
 from __future__ import annotations
@@ -36,6 +40,39 @@ _MAX_PAGES = 500   # safety cap for unbounded pagination
 _client_instance: "BDLClient | None" = None   # module-level singleton
 _client_lock = threading.Lock()
 
+_DEFAULT_REQUESTS_PER_MINUTE = 55   # ALL-STAR = 60 rpm; leave 5 buffer
+_DEFAULT_BURST_CAPACITY = 10        # allow brief bursts (e.g. parallel team fetches)
+
+
+class _TokenBucket:
+    """Thread-safe token-bucket rate limiter."""
+
+    def __init__(self, rate: float, capacity: int) -> None:
+        self._rate = rate            # tokens per second
+        self._capacity = capacity
+        self._tokens = float(capacity)
+        self._last = time.monotonic()
+        self._lock = threading.Lock()
+
+    def acquire(self, timeout: float = 30.0) -> bool:
+        """Block until a token is available or *timeout* seconds elapse."""
+        deadline = time.monotonic() + timeout
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                self._tokens = min(
+                    self._capacity,
+                    self._tokens + (now - self._last) * self._rate,
+                )
+                self._last = now
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(0.1, remaining))
+
 
 class BDLClient:
     """Low-level HTTP client for the BallDontLie REST API.
@@ -47,9 +84,13 @@ class BDLClient:
         api_key: BallDontLie API key — sent as the ``Authorization`` header.
     """
 
-    def __init__(self, api_key: str) -> None:
+    def __init__(self, api_key: str, requests_per_minute: int = _DEFAULT_REQUESTS_PER_MINUTE) -> None:
         self._session = requests.Session()
         self._session.headers.update({"Authorization": api_key, "Accept": "application/json"})
+        self._bucket = _TokenBucket(
+            rate=requests_per_minute / 60.0,
+            capacity=_DEFAULT_BURST_CAPACITY,
+        )
 
         # Transport-level retry for connection errors and broken pipes.
         # Application-level retry in _request_with_retry handles 429 / 5xx.
@@ -90,6 +131,9 @@ class BDLClient:
         immediately, then ``continue``s into the *next* iteration which has
         ``skip_delay=True`` to suppress the redundant top-of-loop sleep.
         """
+        if not self._bucket.acquire(timeout=30.0):
+            raise RuntimeError("BDL rate limiter timeout — 55 req/min budget exhausted")
+
         last_exc: Exception | None = None
         skip_delay = False   # set to True after a 429 sleep to avoid double-wait
 
@@ -255,83 +299,52 @@ class BDLClient:
         """``GET /v1/player_injuries`` (ALL-STAR tier). Current injury report."""
         return self.get_all("/v1/player_injuries", {"team_ids": team_ids, "player_ids": player_ids})
 
-    def get_team_season_averages(
-        self,
-        category: str,
-        type_: str,
-        season: int,
-        season_type: str = "regular",
-    ) -> list[dict[str, Any]]:
-        """``GET /v1/team_season_averages/{category}`` (GOAT tier).
+    # ------------------------------------------------------------------
+    # GOAT-tier methods — disabled after April 9 2026 tier downgrade.
+    # Use stats_aggregator.py for computed replacements.
+    # ------------------------------------------------------------------
 
-        Args:
-            category: Stat category slug, e.g. ``"general"``.
-            type_: Breakdown type, e.g. ``"base"``.
-            season: Starting year, e.g. ``2024``.
-            season_type: ``"regular"`` or ``"playoffs"``.
-        """
-        return self.get_all(
-            f"/v1/team_season_averages/{category}",
-            {"type": type_, "season": season, "season_type": season_type},
+    def get_team_season_averages(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        """GOAT-only. Use ``stats_aggregator.compute_team_season_stats()`` instead."""
+        raise NotImplementedError(
+            "get_team_season_averages requires GOAT tier (disabled April 9 2026). "
+            "Use stats_aggregator.compute_team_season_stats() instead."
         )
 
-    def get_season_averages(
-        self,
-        category: str,
-        type_: str,
-        season: int,
-        season_type: str = "regular",
-    ) -> list[dict[str, Any]]:
-        """``GET /v1/season_averages/{category}`` (GOAT tier).
-
-        Args:
-            category: Stat category slug, e.g. ``"general"``.
-            type_: Breakdown type, e.g. ``"base"``.
-            season: Starting year, e.g. ``2024``.
-            season_type: ``"regular"`` or ``"playoffs"``.
-        """
-        return self.get_all(
-            f"/v1/season_averages/{category}",
-            {"type": type_, "season": season, "season_type": season_type},
+    def get_season_averages(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        """GOAT-only. Use ``stats_aggregator.compute_top_scorers()`` instead."""
+        raise NotImplementedError(
+            "get_season_averages requires GOAT tier (disabled April 9 2026). "
+            "Use stats_aggregator.compute_top_scorers() instead."
         )
 
-    def get_player_props(
-        self,
-        game_id: int,
-        player_id: int | None = None,
-        prop_type: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """``GET /v2/odds/player_props`` (GOAT tier). Requires ``game_id``."""
-        return self.get_all("/v2/odds/player_props", {
-            "game_id": game_id, "player_id": player_id, "prop_type": prop_type,
-        })
+    def get_player_props(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        """GOAT-only. Player props unavailable on ALL-STAR tier."""
+        raise NotImplementedError(
+            "get_player_props requires GOAT tier (disabled April 9 2026). "
+            "No ALL-STAR replacement — use L10 proxy lines."
+        )
 
-    def get_odds(
-        self,
-        game_ids: list[int] | None = None,
-        dates: list[str] | None = None,
-    ) -> list[dict[str, Any]]:
-        """``GET /v2/odds`` (GOAT tier). Requires ``game_ids`` or ``dates``.
+    def get_odds(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        """GOAT-only. Betting odds unavailable on ALL-STAR tier."""
+        raise NotImplementedError(
+            "get_odds requires GOAT tier (disabled April 9 2026). "
+            "No ALL-STAR replacement — Vegas features disabled."
+        )
 
-        Raises:
-            ValueError: If neither ``game_ids`` nor ``dates`` is provided.
-        """
-        if not game_ids and not dates:
-            raise ValueError("get_odds requires either game_ids or dates")
-        return self.get_all("/v2/odds", {"game_ids": game_ids, "dates": dates})
+    def get_standings(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        """GOAT-only. Use ``stats_aggregator.compute_standings()`` instead."""
+        raise NotImplementedError(
+            "get_standings requires GOAT tier (disabled April 9 2026). "
+            "Use stats_aggregator.compute_standings() instead."
+        )
 
-    def get_standings(self, season: int) -> list[dict[str, Any]]:
-        """``GET /v1/standings`` (GOAT tier). One entry per team for the given season."""
-        return self.get_all("/v1/standings", {"season": season})
-
-    def get_box_scores(self, date: str) -> list[dict[str, Any]]:
-        """``GET /v1/box_scores`` (GOAT tier). One object per game; not cursor-paginated.
-
-        Args:
-            date: Game date in ``"YYYY-MM-DD"`` format.
-        """
-        body = self.get("/v1/box_scores", {"date": date})
-        return body.get("data", [])
+    def get_box_scores(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        """GOAT-only. Use ``get_player_stats(dates=[date])`` instead."""
+        raise NotImplementedError(
+            "get_box_scores requires GOAT tier (disabled April 9 2026). "
+            "Use get_player_stats(dates=[date]) instead."
+        )
 
 
 # ---------------------------------------------------------------------------
