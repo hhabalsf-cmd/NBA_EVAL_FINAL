@@ -56,5 +56,8 @@ video/public/audio/
 # Prediction history (runtime data)
 history/predictions.json
 
-# pip install artifacts
-=*
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+.pytest_cache/
