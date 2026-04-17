@@ -1,8 +1,9 @@
 """Game prediction endpoints."""
+import asyncio
 import json
 import logging
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 
@@ -86,14 +87,29 @@ async def predict_todays_games(request: Request):
 
 @router.post("/predict-cron")
 @limiter.limit("5/minute")
-def predict_todays_games_cron(request: Request):
-    """Predict today's games synchronously (for cron/scheduled use).
+async def predict_todays_games_cron(request: Request):
+    """Predict today's games (fire-and-forget for cron/scheduled use).
 
     Protected by service key (X-Service-Key header).
+    Returns 202 immediately and runs predictions in the background.
     """
     verify_service_key(request)
-    service = get_game_service()
-    return service.predict_all_sync()
+
+    async def _run_in_background():
+        loop = asyncio.get_event_loop()
+        try:
+            service = get_game_service()
+            result = await loop.run_in_executor(None, service.predict_all_sync)
+            logger.info(f"Background game predictions completed: {result}")
+        except Exception as e:
+            logger.error(f"Background game predictions failed: {e}", exc_info=True)
+
+    asyncio.create_task(_run_in_background())
+
+    return JSONResponse(
+        status_code=202,
+        content={"status": "accepted", "message": "Game predictions started in background"},
+    )
 
 
 @router.get("/history")

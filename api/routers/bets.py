@@ -1,8 +1,10 @@
 """Daily best picks endpoints — reads pre-computed picks from Supabase."""
+import asyncio
 import logging
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 
 import db
 from ..limiter import limiter
@@ -38,19 +40,31 @@ async def get_todays_daily_picks(
 @limiter.limit("2/minute")
 async def trigger_generate_daily_picks(request: Request):
     """
-    Trigger daily picks generation.
+    Trigger daily picks generation (fire-and-forget).
     Protected by X-Service-Key header (called by pg_cron or manual testing).
+    Returns 202 immediately and runs the pipeline in the background so
+    pg_cron/pg_net don't time out waiting for the full generation.
     """
     verify_service_key(request)
 
-    from scripts.daily_best_picks import run as run_generation
+    async def _run_in_background():
+        from scripts.daily_best_picks import run as run_generation
+        loop = asyncio.get_event_loop()
+        try:
+            result = await loop.run_in_executor(None, run_generation)
+            if result.get('success'):
+                logger.info(f"Background generation completed: {result.get('picks_count', 0)} picks")
+            else:
+                logger.error(f"Background generation failed: {result.get('error')}")
+        except Exception as e:
+            logger.error(f"Background generation exception: {e}", exc_info=True)
 
-    result = run_generation()
+    asyncio.create_task(_run_in_background())
 
-    if not result.get('success'):
-        raise HTTPException(status_code=500, detail=result.get('error', 'Generation failed'))
-
-    return result
+    return JSONResponse(
+        status_code=202,
+        content={"status": "accepted", "message": "Daily picks generation started in background"},
+    )
 
 
 def _row_to_daily_pick(row: dict) -> dict:
