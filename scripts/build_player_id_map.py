@@ -26,7 +26,7 @@ def main():
     count = mapper.build_full_mapping()
     print(f"\nDone. {count} player mappings upserted into player_id_map.")
     if count == 0:
-        print("⚠️  Zero mappings — check that player_game_logs has rows with player_name populated.")
+        print("Zero mappings — check that player_game_logs has rows with player_name populated.")
 
 if __name__ == "__main__":
     main()

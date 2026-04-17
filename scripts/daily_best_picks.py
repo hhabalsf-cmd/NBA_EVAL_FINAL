@@ -105,7 +105,7 @@ def _get_teams_playing_today() -> list[dict]:
     [{'home_abbrev': str, 'away_abbrev': str, 'game_date': str, 'bdl_game_id': int}, ...]
     If no games are found for today, falls back to checking tomorrow.
     """
-    logger.info("📅 Fetching today's NBA schedule...")
+    logger.info("Fetching today's NBA schedule...")
     from datetime import timedelta
     from zoneinfo import ZoneInfo
 
@@ -239,7 +239,7 @@ def _get_players_for_teams(team_abbrevs: set[str]) -> list[dict]:
     Return active players on the given teams by scanning Supabase game logs.
     Filters to players who average >= MIN_MINUTES_AVG in the current season.
     """
-    logger.info(f"🏀 Finding active players on {len(team_abbrevs)} teams...")
+    logger.info(f"Finding active players on {len(team_abbrevs)} teams...")
     conn = db.get_connection()
     try:
         with conn.cursor() as cur:
@@ -353,7 +353,7 @@ def _sync_game_logs_for_prop_players(props_lookup: dict) -> int:
         return 0
 
     bdl_player_ids = list(by_id.keys())
-    logger.info(f"🔄 Syncing game logs for {len(bdl_player_ids)} players with prop lines...")
+    logger.info(f"Syncing game logs for {len(bdl_player_ids)} players with prop lines...")
 
     scraper = NBADataScraper()
     season_int = int(CURRENT_SEASON.split('-')[0])
@@ -368,12 +368,12 @@ def _sync_game_logs_for_prop_players(props_lookup: dict) -> int:
             if df is not None and not df.empty:
                 db.insert_game_logs_to_supabase(df, str(bdl_pid), CURRENT_SEASON)
                 synced += 1
-                logger.debug(f"  ✅ Synced {len(df)} games for player {bdl_pid}")
+                logger.debug(f"Synced {len(df)} games for player {bdl_pid}")
         except Exception as exc:
-            logger.debug(f"  ⚠️ Could not sync player {bdl_pid}: {exc}")
+            logger.debug(f"Could not sync player {bdl_pid}: {exc}")
 
     logger.info(
-        f"🔄 Game log sync: {synced} synced, "
+        f"Game log sync: {synced} synced,"
         f"{len(bdl_player_ids) - synced} failed/empty."
     )
     return synced
@@ -397,7 +397,7 @@ def generate_daily_picks() -> list[dict]:
 
     # Fetch real prop lines (may return {} if API unavailable)
     props_lookup = _fetch_player_props_lookup(games)
-    logger.info(f"📊 Fetched props for {len(props_lookup.get('by_id', {}))} players.")
+    logger.info(f"Fetched props for {len(props_lookup.get('by_id', {}))} players.")
 
     # Initialize player mapper for nba.com ID → BDL ID lookup
     try:
@@ -421,11 +421,11 @@ def generate_daily_picks() -> list[dict]:
     # 3. Get team defensive stats and injury report
     scraper = NBADataScraper()
     team_stats = scraper.get_team_defensive_stats()
-    logger.info(f"📊 Loaded defensive stats for {len(team_stats)} teams.")
+    logger.info(f"Loaded defensive stats for {len(team_stats)} teams.")
 
     injuries = scraper.get_injury_report()
     total_out = sum(t.get('out', 0) for t in injuries.values())
-    logger.info(f"🏥 Loaded injury report: {total_out} players out across {len(injuries)} teams.")
+    logger.info(f"Loaded injury report: {total_out} players out across {len(injuries)} teams.")
 
     # 4. Get eligible players
     eligible_players = _get_players_for_teams(team_abbrevs_today)
@@ -456,7 +456,7 @@ def generate_daily_picks() -> list[dict]:
         # Load game log from Supabase (no NBA API call)
         game_log = db.get_game_logs_from_supabase(str(player_id), CURRENT_SEASON)
         if game_log is None or len(game_log) < MIN_GAMES_TO_TRAIN:
-            logger.debug(f"  ⏭️ Skipping {player_name}: only {len(game_log) if game_log is not None else 0} games (need {MIN_GAMES_TO_TRAIN})")
+            logger.debug(f"Skipping {player_name}: only {len(game_log) if game_log is not None else 0} games (need {MIN_GAMES_TO_TRAIN})")
             players_skipped += 1
             continue
 
@@ -493,7 +493,7 @@ def generate_daily_picks() -> list[dict]:
                 team_stats=team_stats,
             )
         except Exception as e:
-            logger.warning(f"  ⚠️ Feature engineering failed for {player_name}: {e}")
+            logger.warning(f"Feature engineering failed for {player_name}: {e}")
             continue
 
         if df is None or df.empty or len(df) < MIN_GAMES_TO_TRAIN:
@@ -506,17 +506,17 @@ def generate_daily_picks() -> list[dict]:
 
         if not model_loaded:
             # Train a new model on the spot
-            logger.info(f"  🔧 Training new model for {player_name} ({len(df)} games)...")
+            logger.info(f"Training new model for {player_name} ({len(df)} games)...")
             try:
                 train_success = predictor.train(df, stats=STATS_TO_EVALUATE[:3])  # PTS, REB, AST
                 if not train_success:
-                    logger.warning(f"  ⚠️ Training failed for {player_name}")
+                    logger.warning(f"Training failed for {player_name}")
                     players_skipped += 1
                     continue
                 predictor.save(player_name)
                 models_trained += 1
             except Exception as e:
-                logger.warning(f"  ⚠️ Training error for {player_name}: {e}")
+                logger.warning(f"Training error for {player_name}: {e}")
                 players_skipped += 1
                 continue
         else:
@@ -525,7 +525,7 @@ def generate_daily_picks() -> list[dict]:
                 predictor.update(df)
                 predictor.save(player_name)
             except Exception as e:
-                logger.warning(f"  ⚠️ Update error for {player_name}: {e}")
+                logger.warning(f"Update error for {player_name}: {e}")
 
         # Calculate actual days rest from game log
         days_rest = 2
@@ -560,7 +560,7 @@ def generate_daily_picks() -> list[dict]:
                 **opp_ctx,
             )
         except Exception as e:
-            logger.warning(f"  ⚠️ Prediction features failed for {player_name}: {e}")
+            logger.warning(f"Prediction features failed for {player_name}: {e}")
             continue
 
         # Estimate minutes
@@ -600,7 +600,7 @@ def generate_daily_picks() -> list[dict]:
                 if all(s in predictions for s in ('PTS', 'REB', 'AST')):
                     predictions['PRA'] = predictions['PTS'] + predictions['REB'] + predictions['AST']
         except Exception as e:
-            logger.warning(f"  ⚠️ Prediction failed for {player_name}: {e}")
+            logger.warning(f"Prediction failed for {player_name}: {e}")
             continue
 
         players_evaluated += 1
@@ -727,7 +727,7 @@ def generate_daily_picks() -> list[dict]:
             })
 
     logger.info(
-        f"📈 Evaluated {players_evaluated} players, "
+        f"Evaluated {players_evaluated} players,"
         f"trained {models_trained} new models, "
         f"skipped {players_skipped}, "
         f"found {len(all_candidates)} candidates meeting filters."
@@ -750,14 +750,14 @@ def run() -> dict:
     Returns a summary dict for logging / API response.
     """
     today_str = datetime.now().strftime('%Y-%m-%d')
-    logger.info(f"🚀 Starting Daily Best Picks generation for {today_str}")
+    logger.info(f"Starting Daily Best Picks generation for {today_str}")
 
     start_time = time.time()
 
     try:
         picks = generate_daily_picks()
     except Exception as e:
-        logger.error(f"❌ Generation failed: {e}", exc_info=True)
+        logger.error(f"Generation failed: {e}", exc_info=True)
         return {'success': False, 'error': str(e), 'picks_count': 0}
 
     # Use the date from the first pick if available, otherwise today
@@ -765,15 +765,15 @@ def run() -> dict:
 
     # Save to Supabase
     saved_count = db.save_daily_picks(picks, target_date_str)
-    logger.info(f"💾 Saved {saved_count} picks to daily_picks table for {target_date_str}.")
+    logger.info(f"Saved {saved_count} picks to daily_picks table for {target_date_str}.")
 
     # Housekeeping: remove picks older than 7 days
     deleted = db.clear_old_daily_picks(days_to_keep=7)
     if deleted > 0:
-        logger.info(f"🧹 Cleaned up {deleted} old daily pick rows.")
+        logger.info(f"Cleaned up {deleted} old daily pick rows.")
 
     elapsed = round(time.time() - start_time, 1)
-    logger.info(f"✅ Done in {elapsed}s — {saved_count} picks generated.")
+    logger.info(f"Done in {elapsed}s — {saved_count} picks generated.")
 
     return {
         'success': True,

@@ -35,7 +35,7 @@ CURRENT_SEASON = '2025-26'
 
 def get_active_player_ids():
     """Get all active NBA players using nba_api."""
-    print("📋 Fetching active players from NBA API...")
+    print("Fetching active players from NBA API...")
     try:
         from nba_api.stats.static import players as nba_players
         active_list = nba_players.get_active_players()
@@ -47,22 +47,22 @@ def get_active_player_ids():
                 'name': p['full_name']
             })
             
-        print(f"  ✅ Found {len(player_list)} active players")
+        print(f"Found {len(player_list)} active players")
         return player_list
     except Exception as e:
-        print(f"  ❌ Failed to get active players: {e}")
+        print(f"Failed to get active players: {e}")
         return []
 
 
 def get_todays_players():
     """Get team abbreviations that played today via BallDontLie API."""
-    print("📅 Checking today's games...")
+    print("Checking today's games...")
     try:
         today_str = datetime.now().date().strftime('%Y-%m-%d')
         bdl = get_bdl_client()
         raw_games = bdl.get_games(dates=[today_str])
         if not raw_games:
-            print("  ℹ️  No games today")
+            print("No games today")
             return set()
 
         team_abbrevs = set()
@@ -76,10 +76,10 @@ def get_todays_players():
                 if h_abbrev: team_abbrevs.add(h_abbrev)
                 if v_abbrev: team_abbrevs.add(v_abbrev)
 
-        print(f"  ✅ {len(team_abbrevs)} teams played today")
+        print(f"{len(team_abbrevs)} teams played today")
         return team_abbrevs
     except Exception as e:
-        print(f"  ⚠️ Could not fetch today's games: {e}")
+        print(f"Could not fetch today's games: {e}")
         return set()
 
 
@@ -95,7 +95,7 @@ def sync_player_game_logs(player_list, max_players=None):
         player_list = player_list[:max_players]
 
     total = len(player_list)
-    print(f"\n🔄 Syncing game logs for {total} players...")
+    print(f"\n Syncing game logs for {total} players...")
 
     scraper = NBADataScraper()
 
@@ -124,35 +124,35 @@ def sync_player_game_logs(player_list, max_players=None):
             synced += 1
 
             if (i + 1) % 25 == 0:
-                print(f"  📊 Progress: {i + 1}/{total} ({synced} synced, {skipped} skipped, {errors} errors)")
+                print(f"Progress: {i + 1}/{total} ({synced} synced, {skipped} skipped, {errors} errors)")
 
         except Exception as e:
             errors += 1
-            print(f"  ⚠️ Error syncing {player_name}: {e}")
+            print(f"Error syncing {player_name}: {e}")
 
-    print(f"\n✅ Game log sync complete: {synced} synced, {skipped} up-to-date, {errors} errors")
+    print(f"\n Game log sync complete: {synced} synced, {skipped} up-to-date, {errors} errors")
     return synced
 
 
 def sync_team_stats():
     """Fetch and store team defensive stats."""
-    print("\n🛡️  Syncing team defensive stats...")
+    print("\n Syncing team defensive stats...")
     try:
         from nba_evaluator import NBADataScraper
         scraper = NBADataScraper()
         team_data = scraper.get_team_defensive_stats(CURRENT_SEASON)
         if team_data:
-            print(f"  ✅ Updated stats for {len(team_data)} teams")
+            print(f"Updated stats for {len(team_data)} teams")
             return True
     except Exception as e:
-        print(f"  ❌ Failed to sync team stats: {e}")
+        print(f"Failed to sync team stats: {e}")
     return False
 
 
 def main():
     start = time.time()
     print(f"\n{'='*60}")
-    print(f"🏀 NBA Nightly Data Sync — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    print(f"NBA Nightly Data Sync — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"{'='*60}")
 
     # 1. Get all active players
@@ -165,7 +165,7 @@ def main():
     sync_team_stats()
 
     elapsed = time.time() - start
-    print(f"\n⏱️  Total time: {elapsed / 60:.1f} minutes")
+    print(f"\n Total time: {elapsed / 60:.1f} minutes")
     print(f"{'='*60}\n")
 
 

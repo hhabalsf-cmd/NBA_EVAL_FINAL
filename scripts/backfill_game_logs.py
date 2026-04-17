@@ -69,13 +69,13 @@ def backfill(dry_run: bool = False, seasons=None):
     for name in sorted(player_names):
         player_id = name_to_player_id(scraper, name)
         if not player_id:
-            print(f"  ⚠️  {name}: player not found")
+            print(f"{name}: player not found")
             failed += 1
             continue
 
         for season in seasons:
             if already_stored(player_id, season):
-                print(f"  ✓  {name} {season}: already in Supabase (skip)")
+                print(f"{name} {season}: already in Supabase (skip)")
                 skipped += 1
                 continue
 

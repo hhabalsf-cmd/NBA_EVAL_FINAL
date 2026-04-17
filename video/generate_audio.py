@@ -54,7 +54,7 @@ def main():
             for chunk in audio:
                 f.write(chunk)
 
-        print(f"  ✓ {out_path} ({out_path.stat().st_size // 1024} KB)")
+        print(f"{out_path} ({out_path.stat().st_size // 1024} KB)")
 
     print("\nAll audio files generated.")
 

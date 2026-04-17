@@ -367,7 +367,7 @@ class GamePredictor:
     def get_team_stats(self, season='2025-26'):
         """Get advanced team stats via BallDontLie API."""
         if not season or '-' not in season:
-            print(f"  ⚠️ Invalid season format '{season}', expected 'YYYY-YY'")
+            print(f"Invalid season format '{season}', expected 'YYYY-YY'")
             return {}
 
         now = time.time()
@@ -396,12 +396,12 @@ class GamePredictor:
                 f_base = pool.submit(fetch_base)
                 exc_adv = f_adv.exception()
                 if exc_adv is not None:
-                    print(f"  ⚠️ Advanced team stats fetch failed: {exc_adv}")
+                    print(f"Advanced team stats fetch failed: {exc_adv}")
                 adv_list = f_adv.result() if exc_adv is None else []
 
                 exc_base = f_base.exception()
                 if exc_base is not None:
-                    print(f"  ⚠️ Base team stats fetch failed: {exc_base}")
+                    print(f"Base team stats fetch failed: {exc_base}")
                 base_list = f_base.result() if exc_base is None else []
 
             team_data = {}
@@ -501,7 +501,7 @@ class GamePredictor:
                         'win_streak': streak_val,
                     })
             except Exception as e:
-                print(f"  ⚠️ Standings fetch failed (non-fatal): {e}")
+                print(f"Standings fetch failed (non-fatal): {e}")
 
             CacheManager.set('game_pred_team', team_data, season)
             self._team_stats_cache = team_data
@@ -522,7 +522,7 @@ class GamePredictor:
             return pd.DataFrame()
 
         if not season or '-' not in season:
-            print(f"  ⚠️ Invalid season format '{season}', expected 'YYYY-YY'")
+            print(f"Invalid season format '{season}', expected 'YYYY-YY'")
             return pd.DataFrame()
 
         cache_key = f"{team_id}_{season}"
@@ -632,7 +632,7 @@ class GamePredictor:
     def get_top_scorers(self, season='2025-26'):
         """Get top 2 scorers per team via BallDontLie season averages."""
         if not season or '-' not in season:
-            print(f"  ⚠️ Invalid season format '{season}', expected 'YYYY-YY'")
+            print(f"Invalid season format '{season}', expected 'YYYY-YY'")
             return {}
 
         now = time.time()
@@ -1510,7 +1510,7 @@ class GamePredictor:
 
         for season in seasons:
             if not season or '-' not in season:
-                print(f"  ⚠️ Invalid season format '{season}', skipping")
+                print(f"Invalid season format '{season}', skipping")
                 continue
             print(f"  Fetching {season} games...")
             try:

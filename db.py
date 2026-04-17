@@ -2276,7 +2276,7 @@ def export_to_excel() -> str:
         from openpyxl.utils.dataframe import dataframe_to_rows
         import pandas as pd
     except ImportError:
-        print("⚠️ openpyxl not installed. Run: pip install openpyxl")
+        print("openpyxl not installed. Run: pip install openpyxl")
         return None
 
     wb = Workbook()
