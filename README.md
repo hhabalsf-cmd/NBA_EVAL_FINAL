@@ -1,263 +1,106 @@
-# 🏀 NBA Line Evaluator
+# NBA Prop Evaluator
 
-**ML-Powered Player Prop Analysis for Sports Betting**
+Full-stack ML platform for evaluating NBA player prop bets and game outcomes. Predicts PTS/REB/AST/PRA player lines with a stacking ensemble and surfaces the highest-edge picks each day.
 
-A command-line tool that uses machine learning (Random Forest, Gradient Boosting, or Neural Networks) to predict NBA player statistics and evaluate betting lines.
+- **Live app:** https://nba-eval-final.vercel.app
+- **API:** https://nbaevalfinal-production.up.railway.app
+- **API docs:** https://nbaevalfinal-production.up.railway.app/api/docs
 
----
+## Stack
 
-## Features
+| Layer | Tech |
+|-------|------|
+| Frontend | React 18, TypeScript, Vite 5, Tailwind CSS 3, React Query, Zustand, Recharts |
+| Backend | FastAPI, Python 3.11, psycopg2 |
+| ML | scikit-learn, XGBoost, LightGBM, Optuna (stacking ensemble with isotonic calibration) |
+| Data | Supabase (Postgres + Auth + Storage + Realtime + Edge Functions), BallDontLie API |
+| Infra | Railway (API), Vercel (frontend), pg_cron + Supabase Edge Functions (nightly jobs) |
+| Media | Remotion (programmatic video), ElevenLabs (voiceover) |
 
-- **Multiple ML Models**: Choose between Random Forest, Gradient Boosting, or Neural Networks
-- **Live Data Scraping**: Automatically fetches current schedules, injury reports, and player stats
-- **Historical Analysis**: Analyzes player performance vs specific teams, home/away splits
-- **Model Persistence**: Save and improve models over time with new data
-- **Line Evaluation**: Compare predictions against betting lines with confidence intervals
-- **Prediction Tracking**: Logs all predictions to track accuracy over time
+## What it does
 
----
+- **Per-player props** — predicts PTS/REB/AST/PRA for every active NBA player, compares to sportsbook lines, and returns OVER/UNDER recommendations with calibrated probabilities and a prediction range.
+- **Game predictions** — team-level win probabilities from an ELO + Four Factors stacking ensemble.
+- **Best bets feed** — nightly pipeline ranks the day's top 20 picks by model edge, filtered on minutes, confidence, and historical edge-performance caps.
+- **Research** — game logs, rolling averages, home/away and matchup splits, defensive context, teammate/opponent absence scenarios.
+- **Picks tracker** — authenticated users can save picks, auto-grade against live scores, and track ROI over time.
 
-## Installation
+## ML pipeline
 
-### 1. Clone/Download the files
+- **100 engineered features** per player-game: multi-window rolling averages (5/10/20 + EMA), opponent defensive context (def_rating, pace, eFG%, TS%, OREB/DREB%), home/away splits, matchup history, rest/travel, 3PT and FT rate rolling features, usage/minutes stability, recent-form trends.
+- **Stacking ensemble** — Random Forest + Gradient Boosting + XGBoost + LightGBM + HistGradientBoosting with meta-learner, per-player per-stat.
+- **Validation** — TimeSeriesSplit CV (no lookahead), Optuna Bayesian hyperparameter search, isotonic probability calibration, quantile regression for prediction ranges.
+- **Confidence caps** enforced per stat based on historical hit-rate: PTS 88%, REB 82%, AST 78%, PRA 80%.
+- **Model storage** — pickles stored in Supabase Storage, cached in-process with LRU.
 
-```bash
-mkdir nba_line_evaluator
-cd nba_line_evaluator
+## Architecture
+
+```
+┌──────────────────┐      ┌────────────────┐      ┌──────────────────────┐
+│ React (Vercel)   │────▶│ FastAPI         │────▶│ BallDontLie API       │
+│                  │      │ (Railway)       │      │ (game logs, schedule)│
+│ - supabase-js    │◀──┐ │                 │      └──────────────────────┘
+│   direct reads   │   │ │ - ML inference  │
+│   (PostgREST,    │   │ │ - SSE streams   │
+│    RLS enforced) │   │ │ - cron jobs     │
+│ - Auth + realtime│   │ └────────┬────────┘
+└──────────────────┘   │          │
+                       │          ▼
+                       │ ┌──────────────────────────────────────┐
+                       └─│ Supabase                              │
+                         │ Postgres + Auth + Storage + Realtime  │
+                         │ Edge Functions (pick grading)         │
+                         │ pg_cron (nightly picks + regrading)   │
+                         └──────────────────────────────────────┘
 ```
 
-### 2. Install dependencies
+- The frontend reads directly from Supabase (PostgREST) for all user-owned data (picks, parlays, profile), with Row-Level Security enforcing per-user access.
+- Write paths and ML inference go through FastAPI, which verifies Supabase JWTs via `SUPABASE_JWT_SECRET`.
+- Nightly jobs (daily picks generation, pick grading) run as pg_cron triggers against protected FastAPI endpoints or Supabase Edge Functions.
 
+## Local development
+
+Backend:
 ```bash
 pip install -r requirements.txt
+pip install -r api/requirements.txt
+cp .env.example .env   # fill in Supabase + DB credentials
+./start_api.sh         # FastAPI at http://localhost:8000 (docs at /api/docs)
 ```
 
-**Note**: TensorFlow is optional. If you don't want neural network support, you can skip it:
+Frontend:
 ```bash
-pip install pandas numpy requests beautifulsoup4 nba_api scikit-learn joblib
+cd frontend
+cp .env.example .env.local   # fill in VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY
+npm install
+npm run dev                  # http://localhost:5173
 ```
 
----
+Vite proxies `/api/*` to `localhost:8000`.
 
-## Usage
+## Project layout
 
-### Interactive Mode (Recommended for beginners)
+```
+EVAL/
+├── api/                  FastAPI routers, schemas, services
+├── frontend/             React app (feature-folder layout)
+├── scripts/              Nightly sync, picks generation, migrations
+├── supabase/             Edge functions, SQL migrations
+├── tests/                pytest suite
+├── video/                Remotion compositions for promo/recap videos
+├── nba_evaluator.py      ML core (feature engineering, predictor, scraper)
+├── game_predictor.py     Team-level game outcome model
+├── bdl_client.py         BallDontLie HTTP client (token-bucket rate limiter)
+├── stats_aggregator.py   Computes team stats from game logs
+└── db.py                 Supabase/Postgres data layer
+```
+
+## Tests
 
 ```bash
-python nba_evaluator.py --interactive
-# or simply
-python nba_evaluator.py
+pytest tests/
 ```
 
-This will guide you through:
-1. Entering a player name
-2. Selecting a model type
-3. Entering betting lines to evaluate
-4. Viewing predictions and recommendations
+## Disclaimer
 
-### Command Line Mode
-
-**Basic prediction:**
-```bash
-python nba_evaluator.py --player "Nikola Jokic" --stat PTS --line 26.5
-```
-
-**Multiple lines:**
-```bash
-python nba_evaluator.py --player "LeBron James" --pts-line 25.5 --reb-line 7.5 --ast-line 8.5 --pra-line 42.5
-```
-
-**Use Neural Network:**
-```bash
-python nba_evaluator.py --player "Stephen Curry" --stat PTS --line 28.5 --model neural
-```
-
-**Force retrain model:**
-```bash
-python nba_evaluator.py --player "Nikola Jokic" --stat PTS --line 26.5 --retrain
-```
-
----
-
-## Command Line Options
-
-| Option | Short | Description |
-|--------|-------|-------------|
-| `--player` | `-p` | Player name to analyze |
-| `--stat` | `-s` | Stat to predict (PTS, REB, AST, PRA) |
-| `--line` | `-l` | Betting line to evaluate |
-| `--model` | `-m` | Model type: random_forest, gradient_boost, neural |
-| `--interactive` | `-i` | Run in interactive mode |
-| `--all-stats` | | Predict all stats |
-| `--pts-line` | | Points line |
-| `--reb-line` | | Rebounds line |
-| `--ast-line` | | Assists line |
-| `--pra-line` | | PRA (Points + Rebounds + Assists) line |
-| `--retrain` | | Force model retraining |
-
----
-
-## How It Works
-
-### Data Collection
-
-1. **Player Info**: Fetches player ID, team, and basic info from NBA API
-2. **Game Log**: Pulls last 2-3 seasons of game-by-game statistics
-3. **Schedule**: Identifies upcoming/recent games and opponents
-4. **Injuries**: Scrapes injury reports from sports news sites
-5. **Matchup History**: Analyzes historical performance vs specific opponents
-
-### Feature Engineering
-
-The model uses these features for prediction:
-
-| Feature | Description |
-|---------|-------------|
-| `IS_HOME` | Home (1) or Away (0) game |
-| `ROLL_5_*` | 5-game rolling average for each stat |
-| `ROLL_10_*` | 10-game rolling average |
-| `ROLL_20_*` | 20-game rolling average |
-| `STD_10_*` | 10-game standard deviation (variance) |
-| `*_TREND` | Recent trend (5-game avg minus 20-game avg) |
-| `DAYS_REST` | Days since last game |
-| `B2B` | Back-to-back game indicator |
-| `WIN_STREAK` | Recent team win momentum |
-| `INJURIES_TEAM` | Number of teammates injured |
-| `INJURIES_OPP` | Number of opponent players injured |
-
-### Model Types
-
-1. **Random Forest** (Default)
-   - Ensemble of 200 decision trees
-   - Best for: General use, stable predictions
-   - Pros: Fast, interpretable, handles noise well
-
-2. **Gradient Boosting**
-   - Sequential tree ensemble
-   - Best for: Capturing complex patterns
-   - Pros: Often more accurate, good with trends
-
-3. **Neural Network**
-   - Deep learning model (requires TensorFlow)
-   - Best for: Large datasets, subtle patterns
-   - Pros: Can capture non-linear relationships
-
-### Line Evaluation
-
-The evaluator compares your prediction to the betting line and provides:
-
-- **Recommendation**: OVER/UNDER with strength (SLIGHT, MODERATE, HIGH)
-- **Confidence %**: Based on historical variance
-- **Probability**: Estimated probability of hitting OVER
-- **Range**: Expected outcome range (confidence interval)
-
----
-
-## Output Example
-
-```
-╔═══════════════════════════════════════════════════════════════════╗
-║                    🏀 NBA LINE EVALUATOR 🏀                       ║
-║              ML-Powered Player Prop Analysis                      ║
-╚═══════════════════════════════════════════════════════════════════╝
-
-============================================================
-  📊 ANALYSIS: NIKOLA JOKIC
-============================================================
-  🎮 Matchup: DEN vs. OKC
-  📍 Location: HOME
-  🆚 Opponent: Oklahoma City Thunder
-
-  📈 vs OKC History (12 games):
-      Avg: 27.3 PTS | 13.1 REB | 9.8 AST
-
-------------------------------------------------------------
-  🤖 ML PREDICTIONS:
-------------------------------------------------------------
-      PTS: 26.4
-      REB: 12.8
-      AST: 9.3
-      PRA: 48.5
-
-------------------------------------------------------------
-  📋 LINE EVALUATIONS:
-------------------------------------------------------------
-
-  🟢 PTS Line: 25.5
-      Prediction: 26.4 (+3.5%)
-      ➤ LEAN OVER (SLIGHT confidence)
-      Prob Over: 58%
-      Range: 21.2 - 31.6
-
-============================================================
-```
-
----
-
-## Data Storage
-
-The tool creates three directories:
-
-```
-nba_line_evaluator/
-├── data/           # Cached player data
-├── models/         # Saved ML models (.pkl files)
-└── history/        # Prediction logs (predictions.json)
-```
-
-### Tracking Accuracy
-
-All predictions are logged to `history/predictions.json`. You can analyze this file to track your model's accuracy over time:
-
-```python
-import json
-with open('history/predictions.json') as f:
-    predictions = json.load(f)
-    
-# After games complete, update with actual results to track hits
-```
-
----
-
-## Improving Model Accuracy
-
-1. **More Data**: The model improves with more historical data
-2. **Regular Retraining**: Use `--retrain` periodically to incorporate new games
-3. **Experiment with Models**: Try different model types for different players
-4. **Track Results**: Log actual outcomes to identify model weaknesses
-
----
-
-## Limitations
-
-- **API Rate Limits**: NBA API has rate limits; the tool includes delays
-- **Injury Data**: Web scraping for injuries may be incomplete
-- **Future Games**: Predictions work best for near-term games
-- **External Factors**: Cannot account for player motivation, game importance, etc.
-
----
-
-## Troubleshooting
-
-**"Player not found"**
-- Try the full name: "LeBron James" not "LeBron"
-- Check spelling
-
-**"Insufficient data"**
-- Player needs at least 20 games for training
-- Try a different season or player
-
-**TensorFlow errors**
-- Neural network is optional; use `--model random_forest` instead
-
-**Rate limit errors**
-- Wait a few minutes and try again
-- The tool includes rate limiting, but heavy use may hit limits
-
----
-
-## License
-
-MIT License - Use freely for personal/educational purposes.
-
-**⚠️ Disclaimer**: This tool is for educational and entertainment purposes only. Sports betting involves risk. Always gamble responsibly.
+For educational and research purposes only. Sports betting involves risk.

@@ -13,7 +13,7 @@ pip install -r api/requirements.txt      # FastAPI layer
 
 ./start_api.sh                           # FastAPI at port 8000 (docs: /api/docs)
 python nba_evaluator.py --interactive    # CLI (no API needed)
-python test_fixes.py                     # Validate ML changes vs 10 real picks
+pytest tests/                            # Test suite
 ```
 
 ### Frontend
