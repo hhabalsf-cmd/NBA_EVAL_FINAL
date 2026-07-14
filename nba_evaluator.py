@@ -1794,6 +1794,7 @@ class MLPredictor:
         self.probability_calibrator = {}  # Isotonic regression for probability calibration
         self.optimized_params = {}  # Per-player optimized hyperparameters
         self.performance_history = []  # Rolling performance tracking
+        self.training_metrics = {}  # Per-stat OOF MAE/bias/coverage from last train()
 
     # Canonical feature list — used for training and feature mismatch detection
     FEATURE_COLS = [
@@ -2187,6 +2188,34 @@ class MLPredictor:
             qmodel.fit(X, y, sample_weight=weights)
             self.quantile_models[f'{stat}_{label}'] = qmodel
 
+    @staticmethod
+    def _compute_oof_metrics(y, oof_preds, q10_preds=None, q90_preds=None):
+        """Compute calibration metrics from out-of-fold predictions.
+
+        Returns a dict suitable for persistence with the model pickle:
+            n            : count of valid OOF predictions
+            mae          : mean absolute error
+            bias         : mean signed error (predicted - actual); positive = over-predicting
+            rmse         : root mean squared error
+            coverage_80  : fraction of actuals inside [q10, q90] (target ~0.80)
+            interval_width : mean (q90 - q10); narrower at fixed coverage = sharper
+        """
+        valid = ~np.isnan(oof_preds)
+        out = {'n': int(valid.sum())}
+        if valid.sum() == 0:
+            return out
+        diff = oof_preds[valid] - y[valid]
+        out['mae'] = float(np.mean(np.abs(diff)))
+        out['bias'] = float(np.mean(diff))
+        out['rmse'] = float(np.sqrt(np.mean(diff ** 2)))
+        if q10_preds is not None and q90_preds is not None:
+            q_valid = valid & ~np.isnan(q10_preds) & ~np.isnan(q90_preds)
+            if q_valid.sum() > 0:
+                in_band = (y[q_valid] >= q10_preds[q_valid]) & (y[q_valid] <= q90_preds[q_valid])
+                out['coverage_80'] = float(np.mean(in_band))
+                out['interval_width'] = float(np.mean(q90_preds[q_valid] - q10_preds[q_valid]))
+        return out
+
     def _train_residual_model(self, X, y, weights, stat, tscv):
         """Train a residual correction model from OOF predictions (Improvement #6)."""
         oof_preds = np.full(len(y), np.nan)
@@ -2200,12 +2229,20 @@ class MLPredictor:
             return
 
         residuals = y[valid_mask] - oof_preds[valid_mask]
-        # Build residual features: [raw_pred, recent_5g_rolling_mean_approx, std_proxy]
+        # Build residual features: [raw_pred, recent_5g_rolling_mean, recent_10g_rolling_mean, recent_std]
+        # All rolling stats use shift(1) so game i sees only games strictly before it.
+        # Earlier versions used np.convolve(mode='same') which is centered and leaked future games
+        # into training; inference uses backward-only `recent_avg`, causing train/inference skew.
+        y_series = pd.Series(y)
+        y_mean = float(y_series.mean()) if len(y_series) else 0.0
+        roll_5 = y_series.rolling(5, min_periods=1).mean().shift(1).fillna(y_mean).values
+        roll_10 = y_series.rolling(10, min_periods=1).mean().shift(1).fillna(y_mean).values
+        roll_std = y_series.rolling(10, min_periods=3).std().shift(1).fillna(3).values
         residual_X = np.column_stack([
             oof_preds[valid_mask],
-            np.convolve(y, np.ones(5)/5, mode='same')[valid_mask],
-            np.convolve(y, np.ones(10)/10, mode='same')[valid_mask],
-            pd.Series(y).rolling(10, min_periods=3).std().fillna(3).values[valid_mask],
+            roll_5[valid_mask],
+            roll_10[valid_mask],
+            roll_std[valid_mask],
         ])
         residual_model = BayesianRidge()
         residual_model.fit(residual_X, residuals)
@@ -2258,6 +2295,8 @@ class MLPredictor:
         }
 
         # --- CQR: compute conformity scores for quantile interval correction ---
+        q10_preds_full = None
+        q90_preds_full = None
         q10_key, q90_key = f'{stat}_q10', f'{stat}_q90'
         if q10_key in self.quantile_models and q90_key in self.quantile_models:
             try:
@@ -2271,6 +2310,9 @@ class MLPredictor:
                     q10_preds[val_idx] = q10_fold.predict(X[val_idx])
                     q90_preds[val_idx] = q90_fold.predict(X[val_idx])
 
+                q10_preds_full = q10_preds
+                q90_preds_full = q90_preds
+
                 cqr_mask = ~np.isnan(q10_preds) & ~np.isnan(q90_preds)
                 if cqr_mask.sum() >= 20:
                     q10_cal = q10_preds[cqr_mask]
@@ -2283,8 +2325,43 @@ class MLPredictor:
                     q_level = min((1 - alpha) * (1 + 1 / len(conformity)), 1.0)
                     cqr_correction = float(np.quantile(conformity, q_level))
                     self.probability_calibrator[stat]['cqr_correction'] = max(0.0, cqr_correction)
+
+                    # Empirically achieved coverage with CQR applied to OOF preds.
+                    # Persisted as Phase B2 input — not yet consumed at inference.
+                    # The implied z-range 2*z((1+c)/2) is what a coverage-aware
+                    # divisor would use in get_confidence(); the current divisor
+                    # is still hardcoded to 2.56 (see comment in get_confidence).
+                    in_band_cqr = (
+                        (y_cal >= q10_cal - cqr_correction)
+                        & (y_cal <= q90_cal + cqr_correction)
+                    )
+                    cqr_cov = float(np.mean(in_band_cqr))
+                    self.probability_calibrator[stat]['cqr_coverage'] = cqr_cov
+                    if 0.50 < cqr_cov < 0.999:
+                        z_half = float(scipy_stats.norm.ppf((1 + cqr_cov) / 2))
+                        self.probability_calibrator[stat]['interval_to_std_divisor'] = (
+                            2 * z_half
+                        )
             except Exception:
                 pass  # CQR is optional; fall through if quantile clone fails
+
+        # --- Persist OOF metrics for this stat (Phase B1 instrumentation) ---
+        # These travel with the pickle so future audits can read them without retraining.
+        metrics = self._compute_oof_metrics(y, oof_preds, q10_preds_full, q90_preds_full)
+        metrics['std_estimate'] = float(std_estimate)
+        # Echo CQR-adjusted coverage into training_metrics for ergonomics.
+        cqr_cov = self.probability_calibrator.get(stat, {}).get('cqr_coverage')
+        if cqr_cov is not None:
+            metrics['coverage_cqr'] = float(cqr_cov)
+        self.training_metrics[stat] = metrics
+        cov = metrics.get('coverage_80')
+        cov_str = f", coverage_80(raw)={cov:.2%}" if cov is not None else ""
+        cqr_str = f", coverage(cqr)={cqr_cov:.2%}" if cqr_cov is not None else ""
+        print(
+            f"    {stat} OOF metrics: n={metrics['n']}, "
+            f"MAE={metrics.get('mae', float('nan')):.2f}, "
+            f"bias={metrics.get('bias', float('nan')):+.2f}{cov_str}{cqr_str}"
+        )
 
     def train(self, df, stats=None):
         """Train models for specified stats with feature selection, quantile regression,
@@ -3241,7 +3318,14 @@ class MLPredictor:
                 q10_adj = q10 - cqr_adj
                 q90_adj = q90 + cqr_adj
 
-                quantile_std = (q90_adj - q10_adj) / 2.56  # Convert 80% interval to approx std
+                # Note: dividing by 2.56 here treats the post-CQR band as if it
+                # were a true 80% interval. After CQR the OOF coverage is closer
+                # to ~85-92% (see probability_calibrator[stat]['cqr_coverage']),
+                # so the implied std is overstated → confidence is dampened.
+                # The conservative direction matches production goals (we are
+                # overconfident, not underconfident); a principled recalibration
+                # belongs to Phase B2 along with CONFIDENCE_STD_SCALE retuning.
+                quantile_std = (q90_adj - q10_adj) / 2.56
 
                 scale = self.CONFIDENCE_STD_SCALE.get(stat, 3.0)
                 cap = self.CONFIDENCE_CAPS.get(stat, 85)
@@ -3386,6 +3470,7 @@ class MLPredictor:
             'performance_history': getattr(self, 'performance_history', []),
             'meta_learners': getattr(self, 'meta_learners', {}),
             'rate_models': getattr(self, 'rate_models', {}),
+            'training_metrics': getattr(self, 'training_metrics', {}),
         }
 
         if self.model_type == 'neural' and TF_AVAILABLE:
@@ -3436,6 +3521,7 @@ class MLPredictor:
         self.performance_history = data.get('performance_history', [])
         self.meta_learners = data.get('meta_learners', {})
         self.rate_models = data.get('rate_models', {})
+        self.training_metrics = data.get('training_metrics', {})
 
         if data['models']:
             self.models = data['models']
@@ -3549,21 +3635,85 @@ class LineEvaluator:
     def __init__(self):
         self.history = []
 
-    def evaluate(self, prediction, line, stat, confidence_info=None, predictor=None):
-        """Evaluate a betting line against prediction with unified probability calculation."""
-        diff = prediction - line
-        diff_pct = (diff / line) * 100
+    # ── Pick selection bands (Phase B2 — derived from 106-pick backtest) ──
+    #
+    # Backtest of 106 graded picks (docs/backtest_pick_rules.md) showed the model's
+    # calibrated `prob_pick_wins` is reliable only in a narrow band:
+    #   prob_pick_wins ≥ 80   → 30% win rate  (catastrophically overconfident tail)
+    #   70 ≤ p < 80           → 53.7% win rate, +2.4% ROI at -110, n=41  ← target
+    #   60 ≤ p < 70           → ~30% win rate (insufficient model edge)
+    #   p < 60                → no real signal
+    #
+    # The OLD rule keyed off |edge| (% difference between prediction and line),
+    # which mapped large edges to the *extreme* prob bucket — exactly the losing
+    # zone. The new rule keys off the calibrated probability directly.
+    PROB_PICK_WINS_TARGET_LO = 70.0   # below: lean only, do not recommend
+    PROB_PICK_WINS_TARGET_HI = 80.0   # at/above: PASS — historical overconfidence
+    PROB_PICK_WINS_LEAN_LO = 60.0     # below: PASS — insufficient signal
 
-        # Determine recommendation
-        if abs(diff_pct) < 3:
-            recommendation = "LEAN OVER" if diff > 0 else "LEAN UNDER"
-            strength = "SLIGHT"
-        elif abs(diff_pct) < 8:
-            recommendation = "OVER" if diff > 0 else "UNDER"
-            strength = "MODERATE"
+    def evaluate(self, prediction, line, stat, confidence_info=None, predictor=None):
+        """Evaluate a betting line against the model's prediction.
+
+        Recommendation logic (Phase B2): driven by the calibrated probability
+        that *this specific pick* wins, not by raw edge magnitude. See class
+        docstring above ``evaluate`` for the empirical bands used.
+        """
+        diff = prediction - line
+        diff_pct = (diff / line) * 100 if line else 0.0
+        direction = "OVER" if diff > 0 else "UNDER"
+
+        # Compute the calibrated prob_over up front so the recommendation
+        # logic can key off it. (Old code computed it after the rec was set.)
+        prob_over: float | None = None
+        if confidence_info:
+            std = confidence_info.get('std', None)
+            if std is not None:
+                calibrator_data = None
+                if predictor and hasattr(predictor, 'probability_calibrator') and stat in predictor.probability_calibrator:
+                    calibrator_data = predictor.probability_calibrator[stat]
+                prob_over = ProbabilityCalculator.calculate(
+                    prediction, line, std, calibrator_data
+                )
+            elif confidence_info['high'] != confidence_info['low']:
+                range_size = confidence_info['high'] - confidence_info['low']
+                position = (line - confidence_info['low']) / range_size
+                prob_over = max(0.0, min(100.0, (1 - position) * 100))
+            else:
+                prob_over = 50.0
+
+        # prob_pick_wins = prob_over for OVER picks, 1 - prob_over for UNDER
+        prob_pick_wins: float | None = None
+        if prob_over is not None:
+            prob_pick_wins = prob_over if direction == "OVER" else 100.0 - prob_over
+
+        # Recommendation bands.
+        # Without a calibrated probability we fall back to the legacy edge-based
+        # rule (this happens when no confidence_info is supplied).
+        if prob_pick_wins is None:
+            if abs(diff_pct) < 3:
+                recommendation = f"LEAN {direction}"
+                strength = "SLIGHT"
+            elif abs(diff_pct) < 8:
+                recommendation = direction
+                strength = "MODERATE"
+            else:
+                recommendation = f"STRONG {direction}"
+                strength = "HIGH"
+        elif prob_pick_wins >= self.PROB_PICK_WINS_TARGET_HI:
+            # Backtest: 80%+ bucket hit 30%, ROI -53%. Refuse the pick.
+            recommendation = "PASS"
+            strength = "OVERCONFIDENT_TAIL"
+        elif prob_pick_wins >= self.PROB_PICK_WINS_TARGET_LO:
+            # The 70-80 calibrated zone: 53.7% historical WR, +2.4% ROI.
+            recommendation = direction
+            strength = "TARGET"
+        elif prob_pick_wins >= self.PROB_PICK_WINS_LEAN_LO:
+            # Marginal — surface as a lean but do not recommend as a pick.
+            recommendation = f"LEAN {direction}"
+            strength = "LEAN"
         else:
-            recommendation = "STRONG OVER" if diff > 0 else "STRONG UNDER"
-            strength = "HIGH"
+            recommendation = "PASS"
+            strength = "INSUFFICIENT_EDGE"
 
         result = {
             'stat': stat,
@@ -3573,32 +3723,18 @@ class LineEvaluator:
             'diff_pct': diff_pct,
             'recommendation': recommendation,
             'strength': strength,
-            'high_edge_warning': abs(diff_pct) > 50,  # picks >50% edge hit <27% historically
+            # Legacy: pick selection used to fire on |edge| > 50; we keep the
+            # warning flag but the new rule does not fire on tail picks anyway.
+            'high_edge_warning': abs(diff_pct) > 50,
         }
 
         if confidence_info:
             result['confidence'] = confidence_info['confidence']
             result['range_low'] = confidence_info['low']
             result['range_high'] = confidence_info['high']
-
-            # --- Unified Probability (Improvement #3) ---
-            std = confidence_info.get('std', None)
-            if std is not None:
-                calibrator_data = None
-                if predictor and hasattr(predictor, 'probability_calibrator') and stat in predictor.probability_calibrator:
-                    calibrator_data = predictor.probability_calibrator[stat]
-                result['prob_over'] = ProbabilityCalculator.calculate(
-                    prediction, line, std, calibrator_data
-                )
-            elif confidence_info['high'] != confidence_info['low']:
-                # Fallback: position-based for legacy models without std
-                range_size = confidence_info['high'] - confidence_info['low']
-                position = (line - confidence_info['low']) / range_size
-                prob_over = max(0, min(100, (1 - position) * 100))
+            if prob_over is not None:
                 result['prob_over'] = prob_over
-            else:
-                # high == low: no spread info, default to coin flip
-                result['prob_over'] = 50.0
+                result['prob_pick_wins'] = round(prob_pick_wins, 1)
 
         return result
     

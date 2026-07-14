@@ -882,6 +882,9 @@ class BestBetsService:
         self.prediction_service = PredictionService()
 
     async def get_todays_best_bets(self, min_edge: float = 5.0, limit: int = 10) -> Dict:
+        # NOTE: ``min_edge`` is retained for API/CLI compatibility but is no
+        # longer used. Phase B2 selection filters on calibrated prob_pick_wins
+        # band (70-80) instead. See backtest in docs/backtest_pick_rules.md.
         """Find the best betting opportunities for today's games."""
         # Get today's props from BDL odds
         props = _fetch_bdl_todays_props()
@@ -917,40 +920,59 @@ class BestBetsService:
                             pred_data = data['predictions'][stat]
                             prediction = pred_data['prediction']
 
-                            # Calculate edge
+                            # Calculate edge (informational only — no longer the filter)
                             edge = prediction - line
                             edge_pct = (edge / line) * 100
+                            direction = "OVER" if edge > 0 else "UNDER"
 
-                            # Only include if edge is within the reliable range (>50% edge picks hit <27% historically)
-                            if abs(edge_pct) >= min_edge and abs(edge_pct) <= 50.0:
-                                direction = "OVER" if edge > 0 else "UNDER"
-                                strength = "STRONG" if abs(edge_pct) >= 8 else "MODERATE" if abs(edge_pct) >= 5 else "SLIGHT"
+                            # Phase B2 selection rule: filter on calibrated
+                            # prob_pick_wins, not on raw edge magnitude.
+                            # Backtest of 106 graded picks (docs/backtest_pick_rules.md)
+                            # showed edge-based selection was anti-correlated with
+                            # success — large-edge picks landed in the
+                            # "overconfident tail" (prob_over ≥ 80) bucket which
+                            # hit at 30%. The 70 ≤ prob_pick_wins < 80 band hit
+                            # at 53.7% and is the only profitable zone.
+                            prob_over = pred_data.get('prob_over')
+                            if prob_over is None:
+                                continue
+                            prob_pick_wins = (
+                                prob_over if direction == "OVER" else 100.0 - prob_over
+                            )
+                            if not (70.0 <= prob_pick_wins < 80.0):
+                                continue
+                            strength = "TARGET"
 
-                                best_bets.append({
-                                    "player": player_name,
-                                    "player_id": data.get('player_id'),
-                                    "team_abbrev": data.get('team_abbrev'),
-                                    "stat": stat,
-                                    "line": line,
-                                    "prediction": prediction,
-                                    "edge": round(edge, 1),
-                                    "edge_pct": round(edge_pct, 1),
-                                    "direction": direction,
-                                    "recommendation": f"{strength} {direction}",
-                                    "prob_over": pred_data.get('prob_over'),
-                                    "game_info": data.get('game_info'),
-                                    "home_team": prop['home_team'],
-                                    "away_team": prop['away_team'],
-                                    "confidence": pred_data.get('confidence')
-                                })
+                            best_bets.append({
+                                "player": player_name,
+                                "player_id": data.get('player_id'),
+                                "team_abbrev": data.get('team_abbrev'),
+                                "stat": stat,
+                                "line": line,
+                                "prediction": prediction,
+                                "edge": round(edge, 1),
+                                "edge_pct": round(edge_pct, 1),
+                                "direction": direction,
+                                "recommendation": f"{strength} {direction}",
+                                "prob_over": prob_over,
+                                "prob_pick_wins": round(prob_pick_wins, 1),
+                                "game_info": data.get('game_info'),
+                                "home_team": prop['home_team'],
+                                "away_team": prop['away_team'],
+                                "confidence": pred_data.get('confidence'),
+                            })
                     elif event['stage'] == 'error':
                         break
             except Exception as e:
                 print(f"Error processing {player_name}: {e}")
                 continue
 
-        # Sort by absolute edge percentage
-        best_bets.sort(key=lambda x: abs(x['edge_pct']), reverse=True)
+        # Sort by closeness to the calibrated centre (~75 prob_pick_wins).
+        # The historical sweet spot was 70-75 → 64% WR; 75-80 → 37% WR. Sorting
+        # by abs(prob_pick_wins - 73) puts the strongest historical zone first.
+        best_bets.sort(
+            key=lambda x: abs(x.get('prob_pick_wins', 50.0) - 73.0)
+        )
 
         return {
             "bets": best_bets[:limit],
