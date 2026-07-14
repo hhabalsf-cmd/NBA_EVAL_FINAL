@@ -199,7 +199,7 @@ export default function ResearchPage() {
                 onClick={() => setActiveStat(s)}
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold font-mono transition-all duration-150 flex-shrink-0"
                 style={activeStat === s
-                  ? { background: 'var(--accent)', color: '#0D0B09' }
+                  ? { background: 'var(--accent)', color: '#09090B' }
                   : { background: 'var(--bg-elevated)', color: 'var(--text-muted)', border: '1px solid rgba(255,255,255,0.06)' }
                 }
               >{s}</button>
@@ -246,7 +246,7 @@ export default function ResearchPage() {
                 onClick={() => setActiveStat(s)}
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold font-mono transition-all duration-150 flex-shrink-0"
                 style={activeStat === s
-                  ? { background: 'var(--accent)', color: '#0D0B09' }
+                  ? { background: 'var(--accent)', color: '#09090B' }
                   : { background: 'var(--bg-elevated)', color: 'var(--text-muted)', border: '1px solid rgba(255,255,255,0.06)' }
                 }
               >{s}</button>
