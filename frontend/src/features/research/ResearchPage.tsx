@@ -199,7 +199,7 @@ export default function ResearchPage() {
                 onClick={() => setActiveStat(s)}
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold font-mono transition-all duration-150 flex-shrink-0"
                 style={activeStat === s
-                  ? { background: 'var(--accent)', color: '#09090B' }
+                  ? { background: 'var(--accent)', color: '#0D0B09' }
                   : { background: 'var(--bg-elevated)', color: 'var(--text-muted)', border: '1px solid rgba(255,255,255,0.06)' }
                 }
               >{s}</button>
@@ -230,7 +230,7 @@ export default function ResearchPage() {
               className="w-20 px-2.5 py-1.5 rounded-lg text-xs font-mono text-center bg-bg-elevated border border-border-subtle text-text-primary focus:outline-none focus:border-accent transition-colors"
             />
             {hasLiveLine && (
-              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ background: 'rgba(107,191,138,0.12)', color: 'var(--accent-success)' }}>
+              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ background: 'rgba(var(--success-rgb),0.12)', color: 'var(--accent-success)' }}>
                 LIVE
               </span>
             )}
@@ -246,7 +246,7 @@ export default function ResearchPage() {
                 onClick={() => setActiveStat(s)}
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold font-mono transition-all duration-150 flex-shrink-0"
                 style={activeStat === s
-                  ? { background: 'var(--accent)', color: '#09090B' }
+                  ? { background: 'var(--accent)', color: '#0D0B09' }
                   : { background: 'var(--bg-elevated)', color: 'var(--text-muted)', border: '1px solid rgba(255,255,255,0.06)' }
                 }
               >{s}</button>

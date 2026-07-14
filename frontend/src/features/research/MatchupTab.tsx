@@ -140,7 +140,7 @@ export default function MatchupTab({ data }: ResearchTabProps) {
                   className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
                   style={{
                     background: p.status === 'out'
-                      ? 'rgba(212,115,110,0.12)' : 'rgba(232,164,48,0.12)',
+                      ? 'rgba(var(--danger-rgb),0.12)' : 'rgba(var(--warning-rgb),0.12)',
                     color: p.status === 'out'
                       ? 'var(--accent-danger)' : 'var(--accent-warning)',
                   }}

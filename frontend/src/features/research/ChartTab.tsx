@@ -89,7 +89,7 @@ export default function ChartTab({ data, activeStat, parsedLine }: ResearchTabPr
             >{v === 'distribution' ? 'Dist' : v}</button>
           ))}
           {parsedLine !== null && (
-            <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-semibold font-mono" style={{ background: 'rgba(230,168,23,0.12)', color: '#E6A817' }}>
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-semibold font-mono" style={{ background: 'rgba(var(--warning-rgb),0.12)', color: 'var(--accent-warning)' }}>
               <span>Line: {parsedLine}</span>
             </div>
           )}
@@ -129,24 +129,24 @@ export default function ChartTab({ data, activeStat, parsedLine }: ResearchTabPr
                 stroke="var(--accent-warning)"
                 strokeDasharray="5 3"
                 strokeWidth={1.5}
-                label={{ value: parsedLine, position: 'right', fill: 'var(--accent-warning)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}
+                label={{ value: parsedLine, position: 'right', fill: 'var(--accent-warning)', fontSize: 11, fontFamily: 'IBM Plex Mono, monospace' }}
               />
             )}
             {/* Std dev band */}
-            <Area type="monotone" dataKey="bandHigh" stroke="none" fill="rgba(6,182,212,0.08)" />
+            <Area type="monotone" dataKey="bandHigh" stroke="none" fill="rgba(var(--accent-rgb),0.08)" />
             <Area type="monotone" dataKey="bandLow" stroke="none" fill="var(--bg-primary)" />
             <Bar dataKey="value" radius={[3, 3, 0, 0]} maxBarSize={28}>
               {chartData.map((entry, index) => (
                 <Cell
                   key={index}
                   fill={parsedLine !== null
-                    ? (entry.isOver ? 'rgba(107,191,138,0.75)' : 'rgba(212,115,110,0.75)')
-                    : 'rgba(6,182,212,0.6)'
+                    ? (entry.isOver ? 'rgba(var(--success-rgb),0.75)' : 'rgba(var(--danger-rgb),0.75)')
+                    : 'rgba(var(--accent-rgb),0.6)'
                   }
                 />
               ))}
             </Bar>
-            <Line type="monotone" dataKey="rollAvg" stroke="#FFFFFF" strokeWidth={2} dot={false} activeDot={{ r: 4, fill: '#FFFFFF' }} />
+            <Line type="monotone" dataKey="rollAvg" stroke="var(--text-primary)" strokeWidth={2} dot={false} activeDot={{ r: 4, fill: 'var(--text-primary)' }} />
           </ComposedChart>
         </ResponsiveContainer>
       )}
@@ -178,8 +178,8 @@ export default function ChartTab({ data, activeStat, parsedLine }: ResearchTabPr
                 <Cell
                   key={index}
                   fill={parsedLine !== null
-                    ? (entry.isOver ? 'rgba(107,191,138,0.75)' : 'rgba(212,115,110,0.75)')
-                    : 'rgba(6,182,212,0.6)'
+                    ? (entry.isOver ? 'rgba(var(--success-rgb),0.75)' : 'rgba(var(--danger-rgb),0.75)')
+                    : 'rgba(var(--accent-rgb),0.6)'
                   }
                 />
               ))}
@@ -193,28 +193,28 @@ export default function ChartTab({ data, activeStat, parsedLine }: ResearchTabPr
         {parsedLine !== null ? (
           <>
             <div className="flex items-center gap-1.5">
-              <div className="w-3 h-3 rounded-sm" style={{ background: 'rgba(107,191,138,0.75)' }} />
+              <div className="w-3 h-3 rounded-sm" style={{ background: 'rgba(var(--success-rgb),0.75)' }} />
               <span>OVER {parsedLine}</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <div className="w-3 h-3 rounded-sm" style={{ background: 'rgba(212,115,110,0.75)' }} />
+              <div className="w-3 h-3 rounded-sm" style={{ background: 'rgba(var(--danger-rgb),0.75)' }} />
               <span>UNDER {parsedLine}</span>
             </div>
           </>
         ) : (
           <div className="flex items-center gap-1.5">
-            <div className="w-3 h-3 rounded-sm" style={{ background: 'rgba(6,182,212,0.6)' }} />
+            <div className="w-3 h-3 rounded-sm" style={{ background: 'rgba(var(--accent-rgb),0.6)' }} />
             <span>Actual {STAT_LABELS[activeStat]}</span>
           </div>
         )}
         {view === 'trend' && (
           <>
             <div className="flex items-center gap-1.5">
-              <div className="w-6 h-0.5" style={{ background: '#FFFFFF' }} />
+              <div className="w-6 h-0.5" style={{ background: 'var(--text-primary)' }} />
               <span>L10 Rolling Avg</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <BarChart3 className="w-3 h-3" style={{ color: 'rgba(6,182,212,0.3)' }} />
+              <BarChart3 className="w-3 h-3" style={{ color: 'rgba(var(--accent-rgb),0.3)' }} />
               <span>1 Std Dev Band</span>
             </div>
           </>

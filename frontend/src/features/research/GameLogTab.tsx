@@ -7,10 +7,10 @@ function StatCell({ val, isHighlighted, isOver }: { val: number; isHighlighted: 
 
   if (isHighlighted && isOver !== null) {
     color = isOver ? 'var(--accent-success)' : 'var(--accent-danger)'
-    bg = isOver ? 'rgba(107,191,138,0.08)' : 'rgba(212,115,110,0.08)'
+    bg = isOver ? 'rgba(var(--success-rgb),0.08)' : 'rgba(var(--danger-rgb),0.08)'
   } else if (isHighlighted) {
     color = 'var(--text-primary)'
-    bg = 'rgba(6,182,212,0.06)'
+    bg = 'rgba(var(--accent-rgb),0.06)'
   }
 
   return (
@@ -63,9 +63,9 @@ export default function GameLogTab({ data, activeStat, parsedLine }: ResearchTab
                   <td className="px-3 py-2 text-center text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>{g.opponent}</td>
                   <td className="px-3 py-2 text-center">
                     {g.result === 'W' ? (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold" style={{ background: 'rgba(107,191,138,0.12)', color: 'var(--accent-success)' }}>W</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold" style={{ background: 'rgba(var(--success-rgb),0.12)', color: 'var(--accent-success)' }}>W</span>
                     ) : g.result === 'L' ? (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold" style={{ background: 'rgba(212,115,110,0.12)', color: 'var(--accent-danger)' }}>L</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold" style={{ background: 'rgba(var(--danger-rgb),0.12)', color: 'var(--accent-danger)' }}>L</span>
                     ) : (
                       <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold" style={{ background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)' }}>
                         {g.is_home ? 'H' : 'A'}

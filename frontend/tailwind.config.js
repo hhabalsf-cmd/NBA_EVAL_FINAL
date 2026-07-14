@@ -42,8 +42,9 @@ export default {
         },
       },
       fontFamily: {
-        sans: ['"Space Grotesk"', 'system-ui', '-apple-system', 'sans-serif'],
-        mono: ['"JetBrains Mono"', 'Consolas', 'monospace'],
+        sans: ['"Instrument Sans"', 'system-ui', '-apple-system', 'sans-serif'],
+        mono: ['"IBM Plex Mono"', 'Consolas', 'monospace'],
+        display: ['"Barlow Condensed"', '"Instrument Sans"', 'system-ui', 'sans-serif'],
       },
       animation: {
         'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',

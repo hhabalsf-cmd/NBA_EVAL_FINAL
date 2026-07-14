@@ -120,8 +120,8 @@ export default function LandingPage() {
           50%       { transform: translateY(-11px) rotate(-2deg); }
         }
         @keyframes livePulse {
-          0%, 100% { opacity: 1;   box-shadow: 0 0 0 0   rgba(107,191,138,0.5); }
-          50%       { opacity: 0.6; box-shadow: 0 0 0 5px rgba(107,191,138,0); }
+          0%, 100% { opacity: 1;   box-shadow: 0 0 0 0   rgba(var(--success-rgb),0.5); }
+          50%       { opacity: 0.6; box-shadow: 0 0 0 5px rgba(var(--success-rgb),0); }
         }
         @keyframes scanLine {
           0%   { transform: translateX(-100%); }

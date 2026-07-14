@@ -33,8 +33,8 @@ export default function ModelEdgeCard({ playerName, stat, line }: ModelEdgeCardP
   const edgeColor = isOver ? 'var(--accent-success)' : 'var(--accent-danger)'
   const EdgeIcon = isOver ? TrendingUp : TrendingDown
   const strengthBg = evaluation.strength === 'HIGH'
-    ? 'rgba(107,191,138,0.12)' : evaluation.strength === 'MODERATE'
-      ? 'rgba(232,164,48,0.12)' : 'rgba(255,255,255,0.06)'
+    ? 'rgba(var(--success-rgb),0.12)' : evaluation.strength === 'MODERATE'
+      ? 'rgba(var(--warning-rgb),0.12)' : 'rgba(255,255,255,0.06)'
   const strengthColor = evaluation.strength === 'HIGH'
     ? 'var(--accent-success)' : evaluation.strength === 'MODERATE'
       ? 'var(--accent-warning)' : 'var(--text-muted)'
@@ -101,7 +101,7 @@ export default function ModelEdgeCard({ playerName, stat, line }: ModelEdgeCardP
       </div>
 
       {evaluation.high_edge_warning && (
-        <p className="text-[10px] mt-2 px-2 py-1 rounded" style={{ background: 'rgba(232,164,48,0.08)', color: 'var(--accent-warning)' }}>
+        <p className="text-[10px] mt-2 px-2 py-1 rounded" style={{ background: 'rgba(var(--warning-rgb),0.08)', color: 'var(--accent-warning)' }}>
           Large edge detected — historically less reliable. Consider checking for injuries or lineup changes.
         </p>
       )}

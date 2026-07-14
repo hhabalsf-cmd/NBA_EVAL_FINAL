@@ -84,7 +84,7 @@ export default function OverviewTab({ data, activeStat, setActiveStat, parsedLin
       ) : (
         <div
           className="rounded-xl p-4 flex items-center gap-3 border"
-          style={{ background: 'rgba(6,182,212,0.05)', borderColor: 'rgba(6,182,212,0.15)' }}
+          style={{ background: 'rgba(var(--accent-rgb),0.05)', borderColor: 'rgba(var(--accent-rgb),0.15)' }}
         >
           <BarChart3 className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--accent)' }} />
           <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
@@ -123,7 +123,7 @@ export default function OverviewTab({ data, activeStat, setActiveStat, parsedLin
                       onClick={() => setActiveStat(stat)}
                       className="cursor-pointer transition-colors"
                       style={{
-                        background: isActive ? 'rgba(6,182,212,0.05)' : undefined,
+                        background: isActive ? 'rgba(var(--accent-rgb),0.05)' : undefined,
                         borderBottom: '1px solid rgba(255,255,255,0.04)',
                       }}
                     >

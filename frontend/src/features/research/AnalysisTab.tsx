@@ -43,7 +43,7 @@ function RangeBar({
       <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>{label}</span>
       <div className="relative h-6 rounded-lg overflow-hidden" style={{ background: 'rgba(255,255,255,0.04)' }}>
         {/* Gradient fill from floor to ceiling */}
-        <div className="absolute inset-0 rounded-lg" style={{ background: 'linear-gradient(90deg, rgba(212,115,110,0.2), rgba(6,182,212,0.15), rgba(107,191,138,0.2))' }} />
+        <div className="absolute inset-0 rounded-lg" style={{ background: 'linear-gradient(90deg, rgba(var(--danger-rgb),0.2), rgba(var(--accent-rgb),0.15), rgba(var(--success-rgb),0.2))' }} />
         {/* Median marker */}
         <div className="absolute top-0 bottom-0 w-0.5" style={{ left: `${Math.min(Math.max(medianPct, 2), 98)}%`, background: 'var(--text-primary)' }} />
         {/* Avg marker */}
@@ -99,7 +99,7 @@ export default function AnalysisTab({ data, activeStat, parsedLine, seasonAvg }:
             </h2>
             {isVolatile && (
               <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-semibold"
-                style={{ background: 'rgba(232,164,48,0.12)', color: 'var(--accent-warning)' }}>
+                style={{ background: 'rgba(var(--warning-rgb),0.12)', color: 'var(--accent-warning)' }}>
                 <AlertTriangle className="w-3 h-3" />
                 High Variance
               </div>
@@ -144,7 +144,7 @@ export default function AnalysisTab({ data, activeStat, parsedLine, seasonAvg }:
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {activeAnalysis.over_streak > 0 && (
               <div className="flex items-center gap-3 rounded-xl p-4"
-                style={{ background: 'rgba(107,191,138,0.08)', border: '1px solid rgba(107,191,138,0.15)' }}>
+                style={{ background: 'rgba(var(--success-rgb),0.08)', border: '1px solid rgba(var(--success-rgb),0.15)' }}>
                 <TrendingUp className="w-5 h-5" style={{ color: 'var(--accent-success)' }} />
                 <div>
                   <p className="text-sm font-semibold" style={{ color: 'var(--accent-success)' }}>
@@ -158,7 +158,7 @@ export default function AnalysisTab({ data, activeStat, parsedLine, seasonAvg }:
             )}
             {activeAnalysis.under_streak > 0 && (
               <div className="flex items-center gap-3 rounded-xl p-4"
-                style={{ background: 'rgba(212,115,110,0.08)', border: '1px solid rgba(212,115,110,0.15)' }}>
+                style={{ background: 'rgba(var(--danger-rgb),0.08)', border: '1px solid rgba(var(--danger-rgb),0.15)' }}>
                 <TrendingDown className="w-5 h-5" style={{ color: 'var(--accent-danger)' }} />
                 <div>
                   <p className="text-sm font-semibold" style={{ color: 'var(--accent-danger)' }}>
@@ -213,10 +213,10 @@ export default function AnalysisTab({ data, activeStat, parsedLine, seasonAvg }:
                       className="text-xs font-semibold font-mono px-1.5 py-0.5 rounded"
                       style={{
                         background: a.consistency_score >= 70
-                          ? 'rgba(107,191,138,0.12)'
+                          ? 'rgba(var(--success-rgb),0.12)'
                           : a.consistency_score >= 50
-                            ? 'rgba(232,164,48,0.12)'
-                            : 'rgba(212,115,110,0.12)',
+                            ? 'rgba(var(--warning-rgb),0.12)'
+                            : 'rgba(var(--danger-rgb),0.12)',
                         color: a.consistency_score >= 70
                           ? 'var(--accent-success)'
                           : a.consistency_score >= 50

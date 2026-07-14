@@ -499,7 +499,7 @@ export default function PicksPage() {
                     <Line
                       type="monotone"
                       dataKey="cumulative_profit"
-                      stroke="#FFFFFF"
+                      stroke="var(--text-primary)"
                       strokeWidth={2}
                       dot={false}
                       name="Profit (units)"

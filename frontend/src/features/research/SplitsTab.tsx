@@ -97,7 +97,7 @@ function ScenarioCard({
           {scenario.currently_out && (
             <span
               className="text-[10px] font-bold px-1.5 py-0.5 rounded"
-              style={{ background: 'rgba(239,68,68,0.15)', color: 'var(--accent-danger)' }}
+              style={{ background: 'rgba(var(--danger-rgb),0.15)', color: 'var(--accent-danger)' }}
             >OUT</span>
           )}
           <span
@@ -224,7 +224,7 @@ export default function SplitsTab({ data, activeStat, seasonAvg, playerName }: R
       {/* Season average reference */}
       <div
         className="rounded-xl px-4 py-3 flex items-center justify-between"
-        style={{ background: 'rgba(6,182,212,0.05)', border: '1px solid rgba(6,182,212,0.12)' }}
+        style={{ background: 'rgba(var(--accent-rgb),0.05)', border: '1px solid rgba(var(--accent-rgb),0.12)' }}
       >
         <span className="text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>
           Season Average ({data.season_averages.games}G sample)

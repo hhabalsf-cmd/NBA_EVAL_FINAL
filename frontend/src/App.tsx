@@ -126,7 +126,7 @@ function App() {
                     key={to}
                     to={to}
                     className={({ isActive }) =>
-                      `relative flex items-center gap-2 px-3.5 py-2 text-sm font-medium rounded-lg transition-all duration-150 ${isActive
+                      `relative flex items-center gap-2 px-3.5 py-2 font-display text-[15px] font-semibold uppercase tracking-wide rounded-lg transition-all duration-150 ${isActive
                         ? 'text-accent'
                         : 'text-text-muted hover:text-text-secondary hover:bg-bg-tertiary hover:-translate-y-px'
                       }`
@@ -187,8 +187,8 @@ function App() {
         {/* Footer */}
         <footer className="hidden sm:block border-t border-border-subtle py-8 mt-auto">
           <div className="max-w-5xl mx-auto px-5 sm:px-8 flex items-center justify-between">
-            <span className="text-text-muted text-xs tracking-wide">ML-Powered Analysis</span>
-            <span className="text-text-muted text-xs tracking-wide font-mono">Bettin' Jrys</span>
+            <span className="text-text-muted text-xs tracking-wide font-mono">ML-Powered Analysis</span>
+            <span className="text-text-muted text-sm font-display font-semibold uppercase tracking-widest">Bettin' Jrys</span>
           </div>
         </footer>
 
