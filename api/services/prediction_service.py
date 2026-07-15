@@ -20,6 +20,7 @@ import statistics
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from sleeper_client import get_headshot_url as get_sleeper_headshot
+from season_utils import get_recent_seasons
 
 # Lazy import cache — nba_evaluator (and TensorFlow) only loads on first prediction
 _nba_ev = None
@@ -51,124 +52,16 @@ _BDL_PROP_TYPE_MAP: Dict[str, str] = {
 }
 
 
-def _fetch_bdl_todays_props() -> list:
-    """Fetch today's player props from BDL odds endpoint.
+def _fetch_todays_props() -> list:
+    """Fetch today's player props from the configured line sources.
 
-    Returns a list of dicts with keys:
-        player, stat, consensus_line, home_team, away_team
-    Drop-in replacement for the old OddsAPI.get_all_todays_props().
-    If no games are found for today, falls back to checking tomorrow.
+    Delegates to line_sources.fetch_todays_props(): Odds API first, then
+    manually entered lines (manual_lines table). Returns a list of dicts:
+        {player, stat, consensus_line, home_team, away_team}
     """
-    import db as _db
-    from bdl_client import get_bdl_client
-    from datetime import timedelta
+    from line_sources import fetch_todays_props
 
-    target_date = date.today()
-    today_str = target_date.strftime("%Y-%m-%d")
-    bdl = get_bdl_client()
-
-    try:
-        games = bdl.get_games(dates=[today_str])
-    except Exception:
-        games = []
-
-    # Fallback to tomorrow if no games
-    if not games:
-        tomorrow_date = target_date + timedelta(days=1)
-        tomorrow_str = tomorrow_date.strftime("%Y-%m-%d")
-        try:
-            games = bdl.get_games(dates=[tomorrow_str])
-        except Exception:
-            games = []
-
-    if not games:
-        return []
-
-    # Build game_id -> {home_team, away_team} lookup
-    game_info: Dict[int, Dict[str, str]] = {}
-    for g in games:
-        gid = g.get("id")
-        if not gid:
-            continue
-        home = (g.get("home_team") or {}).get("abbreviation", "")
-        away = (g.get("visitor_team") or {}).get("abbreviation", "")
-        game_info[gid] = {"home_team": home, "away_team": away}
-
-    # Fetch raw props for every game
-    raw_props: list = []
-    for gid in game_info:
-        try:
-            raw_props.extend(bdl.get_player_props(gid))
-        except Exception:
-            pass
-
-    if not raw_props:
-        return []
-
-    # Resolve player_id -> player_name from our local db
-    try:
-        conn = _db.get_connection()
-        pid_to_name: Dict[str, str] = {}
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT DISTINCT player_id, player_name FROM player_game_logs "
-                    "WHERE player_name IS NOT NULL AND player_id IS NOT NULL"
-                )
-                for row in cur.fetchall():
-                    pid_to_name[str(row["player_id"])] = row["player_name"]
-        finally:
-            _db.put_connection(conn)
-    except Exception:
-        pid_to_name = {}
-
-    # Group lines by (player_id, stat, game_id) across vendors
-    grouped: Dict[tuple, list] = defaultdict(list)
-    for prop in raw_props:
-        # Filter out alternative milestone lines (e.g. 30+ points)
-        if prop.get("market", {}).get("type") != "over_under":
-            continue
-
-        pid = str(prop.get("player_id") or "")
-        ptype = prop.get("prop_type", "")
-        stat = _BDL_PROP_TYPE_MAP.get(ptype)
-        gid = prop.get("game_id")
-        line_val = prop.get("line_value")
-        if not pid or not stat or line_val is None:
-            continue
-        try:
-            grouped[(pid, stat, gid)].append(float(line_val))
-        except (ValueError, TypeError):
-            pass
-
-    result: list = []
-    seen: set = set()  # deduplicate (player, stat) — keep first game encountered
-    for (pid, stat, gid), lines in grouped.items():
-        key = (pid, stat)
-        if key in seen:
-            continue
-        name = pid_to_name.get(pid)
-        if not name:
-            continue
-        
-        # Use median to resist extreme outliers if heavy juicing occurs
-        consensus_line = statistics.median(lines)
-        
-        info = game_info.get(gid or 0, {})
-        result.append({
-            "player": name,
-            "stat": stat,
-            "consensus_line": consensus_line,
-            "home_team": info.get("home_team", ""),
-            "away_team": info.get("away_team", ""),
-        })
-        seen.add(key)
-
-    return result
-
-
-PRED_CACHE_DIR = Path("./cache/predictions")
-
+    return fetch_todays_props()
 
 def _prediction_cache_path(player_name: str) -> Path:
     from zoneinfo import ZoneInfo
@@ -273,7 +166,7 @@ class PredictionService:
         # Refresh cache if stale
         if self._odds_cache is None or (now - self._odds_cache_time) > self._ODDS_CACHE_TTL:
             try:
-                props = _fetch_bdl_todays_props()
+                props = _fetch_todays_props()
             except Exception:
                 props = []
             # Build lookup: normalized_name -> {stat -> line}
@@ -347,7 +240,7 @@ class PredictionService:
             conn = _db.get_connection()
             try:
                 with conn.cursor() as cur:
-                    seasons = ('2025-26', '2024-25')
+                    seasons = tuple(get_recent_seasons(2))
                     cur.execute(
                         """
                         SELECT DISTINCT player_id AS id,
@@ -398,7 +291,7 @@ class PredictionService:
                 with conn.cursor() as cur:
                     # Include current season AND most recent historical season so
                     # the list is populated even before current-season data accumulates
-                    seasons = ('2025-26', '2024-25')
+                    seasons = tuple(get_recent_seasons(2))
                     cur.execute(
                         """
                         SELECT DISTINCT player_id AS id,
@@ -887,7 +780,7 @@ class BestBetsService:
         # band (70-80) instead. See backtest in docs/backtest_pick_rules.md.
         """Find the best betting opportunities for today's games."""
         # Get today's props from BDL odds
-        props = _fetch_bdl_todays_props()
+        props = _fetch_todays_props()
 
         if not props:
             return {

@@ -27,6 +27,7 @@ import joblib
 
 from bdl_client import get_bdl_client
 from bdl_id_mapper import get_team_mapper, get_player_mapper
+from season_utils import get_current_season, get_recent_seasons
 
 from sklearn.preprocessing import RobustScaler
 from sklearn.model_selection import TimeSeriesSplit
@@ -364,8 +365,9 @@ class GamePredictor:
             print(f"Error fetching today's games: {e}")
             return []
 
-    def get_team_stats(self, season='2025-26'):
+    def get_team_stats(self, season=None):
         """Get advanced team stats via BallDontLie API."""
+        season = season or get_current_season()
         if not season or '-' not in season:
             print(f"Invalid season format '{season}', expected 'YYYY-YY'")
             return {}
@@ -512,7 +514,7 @@ class GamePredictor:
             print(f"Error fetching team stats: {e}")
             return {}
 
-    def get_team_game_log(self, team_id, season='2025-26'):
+    def get_team_game_log(self, team_id, season=None):
         """Get a team's game log via BallDontLie API.
 
         team_id is a BDL team ID (as returned by get_todays_games / team_abbrev_to_id).
@@ -521,6 +523,7 @@ class GamePredictor:
         if team_id is None:
             return pd.DataFrame()
 
+        season = season or get_current_season()
         if not season or '-' not in season:
             print(f"Invalid season format '{season}', expected 'YYYY-YY'")
             return pd.DataFrame()
@@ -629,8 +632,9 @@ class GamePredictor:
         self._injuries_cache_time = now
         return self._injuries_cache
 
-    def get_top_scorers(self, season='2025-26'):
+    def get_top_scorers(self, season=None):
         """Get top 2 scorers per team via BallDontLie season averages."""
+        season = season or get_current_season()
         if not season or '-' not in season:
             print(f"Invalid season format '{season}', expected 'YYYY-YY'")
             return {}
@@ -1504,7 +1508,7 @@ class GamePredictor:
     def _get_historical_games(self, seasons=None):
         """Fetch historical game data via BallDontLie API."""
         if seasons is None:
-            seasons = ['2024-25', '2023-24', '2022-23']
+            seasons = get_recent_seasons(4)[1:]
 
         all_games = []
 
@@ -1781,8 +1785,8 @@ class GamePredictor:
         print("Retraining model with latest data (V2)...")
         print()
 
-        current_season = '2025-26'
-        seasons = [current_season, '2024-25', '2023-24']
+        current_season = get_current_season()
+        seasons = get_recent_seasons(3)
 
         success = self.train_model(seasons=seasons)
         if success:

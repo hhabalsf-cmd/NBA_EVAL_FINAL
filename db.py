@@ -37,6 +37,8 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict
+
+from season_utils import get_current_season
 import pandas as pd
 
 import psycopg2
@@ -1723,7 +1725,7 @@ def auto_grade_picks(scraper=None) -> Dict:
             # Get game log (use cached if we already fetched for this player)
             # ONLY fetch current season to avoid matching old games for DNP players
             if player_id not in players_processed:
-                game_log = scraper.get_player_game_log(player_id, seasons=['2025-26'])
+                game_log = scraper.get_player_game_log(player_id, seasons=[get_current_season()])
                 players_processed[player_id] = game_log
             else:
                 game_log = players_processed[player_id]
@@ -2121,6 +2123,87 @@ def clear_old_daily_picks(days_to_keep: int = 7) -> int:
                 (cutoff,)
             )
             deleted = cur.rowcount
+            conn.commit()
+            return deleted
+
+
+# ── Manual line entry (fallback line source) ───────────────────
+
+VALID_LINE_STATS = {'PTS', 'REB', 'AST', 'PRA'}
+
+
+def get_manual_lines(date_str: Optional[str] = None) -> list:
+    """Get manually entered betting lines for a date (defaults to today)."""
+    if date_str is None:
+        date_str = datetime.now().strftime('%Y-%m-%d')
+
+    with borrow_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, game_date, player, stat, line, home_team, away_team, created_at
+                FROM manual_lines
+                WHERE game_date = %s
+                ORDER BY player, stat
+                """,
+                (date_str,)
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+
+def upsert_manual_lines(rows: list, date_str: Optional[str] = None) -> int:
+    """Insert or update manual lines. Each row: {player, stat, line, home_team?, away_team?}.
+
+    Returns the number of rows written. Raises ValueError on invalid input.
+    """
+    if date_str is None:
+        date_str = datetime.now().strftime('%Y-%m-%d')
+
+    validated = []
+    for row in rows:
+        player = (row.get('player') or '').strip()
+        stat = (row.get('stat') or '').strip().upper()
+        line = row.get('line')
+        if not player:
+            raise ValueError("player is required")
+        if stat not in VALID_LINE_STATS:
+            raise ValueError(f"stat must be one of {sorted(VALID_LINE_STATS)}, got '{stat}'")
+        try:
+            line = float(line)
+        except (TypeError, ValueError):
+            raise ValueError(f"line must be numeric, got '{line}'")
+        if line <= 0:
+            raise ValueError(f"line must be positive, got {line}")
+        validated.append((date_str, player, stat, line,
+                          row.get('home_team'), row.get('away_team')))
+
+    if not validated:
+        return 0
+
+    with borrow_conn() as conn:
+        with conn.cursor() as cur:
+            for v in validated:
+                cur.execute(
+                    """
+                    INSERT INTO manual_lines (game_date, player, stat, line, home_team, away_team)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (game_date, player, stat)
+                    DO UPDATE SET line = EXCLUDED.line,
+                                  home_team = EXCLUDED.home_team,
+                                  away_team = EXCLUDED.away_team
+                    """,
+                    v,
+                )
+            conn.commit()
+            return len(validated)
+
+
+def delete_manual_line(line_id: int) -> bool:
+    """Delete a manual line by id. Returns True if a row was deleted."""
+    with borrow_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM manual_lines WHERE id = %s", (line_id,))
+            deleted = cur.rowcount > 0
             conn.commit()
             return deleted
 

@@ -33,6 +33,7 @@ from bs4 import BeautifulSoup
 # BallDontLie API client and ID mappers
 from bdl_client import get_bdl_client
 from bdl_id_mapper import get_team_mapper, get_player_mapper
+from season_utils import get_current_season, get_recent_seasons
 
 # ML Libraries
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
@@ -160,8 +161,9 @@ def should_retrain(player_name: str) -> bool:
     return last_modified < cutoff
 
 
-CURRENT_SEASON = '2025-26'
-HISTORICAL_SEASONS = ['2024-25', '2023-24']
+# Derived from today's date — rolls over automatically each October.
+CURRENT_SEASON = get_current_season()
+HISTORICAL_SEASONS = get_recent_seasons(3)[1:]
 
 # Cache expiration times (in seconds)
 CACHE_EXPIRY = {
@@ -522,7 +524,7 @@ class NBADataScraper:
             return pd.DataFrame()
 
         if seasons is None:
-            seasons = [CURRENT_SEASON, '2024-25', '2023-24']
+            seasons = get_recent_seasons(3)
 
         # Resolve BDL player ID. player_id is normally an nba.com ID, but
         # search_players falls back to using the BDL ID directly when no NBA
@@ -785,13 +787,15 @@ class NBADataScraper:
             print(f"Error getting vs stats: {e}")
             return None
 
-    def get_team_defensive_stats(self, season='2025-26'):
+    def get_team_defensive_stats(self, season=None):
         """Get team defensive ratings and pace for all teams via BallDontLie (GOAT tier).
         Cache hierarchy: local file (1h) → Supabase (24h) → BDL API.
         Two BDL calls are issued in parallel to halve network wait time.
         """
         import db as _db
         import concurrent.futures
+
+        season = season or CURRENT_SEASON
 
         # 1. Local file cache (fastest, 1h TTL)
         cached = CacheManager.get('team_stats', season, expiry_type='team_stats')
@@ -822,12 +826,14 @@ class NBADataScraper:
                 'ast_pct': 0.60, 'tov_pct': 14.0, 'oreb_pct': 0.27, 'dreb_pct': 0.73,
             } for abbrev in TEAM_ABBREV_TO_NAME}
 
-    def get_league_averages(self, season='2025-26'):
+    def get_league_averages(self, season=None):
         """Get league average stats for normalization.
 
         Queries Supabase player_game_logs directly — zero external API calls.
         """
         import db as _db
+
+        season = season or CURRENT_SEASON
 
         cached = CacheManager.get('league_avg', season, expiry_type='league_avg')
         if cached is not None:
@@ -2021,26 +2027,27 @@ class MLPredictor:
         }
 
     @staticmethod
-    def _weighted_cv_mae(model_or_factory, X, y, weights, tscv):
-        """Purged walk-forward cross-validation with sample_weight support.
+    def _purged_splits(n, n_splits=5, purge_gap=3):
+        """Yield (train_idx, val_idx) purged walk-forward splits.
 
-        Uses a 3-sample embargo gap between train and validation sets to prevent
-        leakage through rolling window features (L5 rolling avg, etc.).
+        A ``purge_gap``-sample embargo separates train and validation sets to
+        prevent leakage through rolling-window features (L5 rolling avg, etc.).
         Replaces standard TimeSeriesSplit which has no purge gap.
         """
-        n = len(X)
-        n_splits, purge_gap = 5, 3
         fold_size = n // (n_splits + 1)
-        scores = []
         for i in range(n_splits):
             train_end = fold_size * (i + 1)
             val_start = train_end + purge_gap
             val_end = min(val_start + fold_size, n)
             if val_start >= n or val_end <= val_start:
                 continue
-            train_idx = np.arange(0, train_end)
-            val_idx = np.arange(val_start, val_end)
+            yield np.arange(0, train_end), np.arange(val_start, val_end)
 
+    @staticmethod
+    def _weighted_cv_mae(model_or_factory, X, y, weights, tscv):
+        """Purged walk-forward cross-validation with sample_weight support."""
+        scores = []
+        for train_idx, val_idx in MLPredictor._purged_splits(len(X)):
             m = sklearn_clone(model_or_factory) if hasattr(model_or_factory, 'get_params') else model_or_factory
             m.fit(X[train_idx], y[train_idx], sample_weight=weights[train_idx])
             pred = m.predict(X[val_idx])
@@ -2072,14 +2079,15 @@ class MLPredictor:
                 **params, loss=stat_loss, **gb_extra, random_state=42,
                 validation_fraction=0.15, n_iter_no_change=15, tol=1e-4,
             )
-            tscv = TimeSeriesSplit(n_splits=5)
-
             # Combined objective: MAE + calibration penalty
             # The Brier penalty encourages models whose residual distribution
             # produces well-calibrated probabilities (research: calibration > accuracy for ROI)
+            # Uses the same purged walk-forward splits as _weighted_cv_mae so HPO
+            # cannot tune into rolling-feature leakage (plain TimeSeriesSplit has
+            # no embargo gap and rewarded leaky hyperparameters).
             maes = []
             brier_penalties = []
-            for train_idx, val_idx in tscv.split(X):
+            for train_idx, val_idx in self._purged_splits(len(X)):
                 m = sklearn_clone(model)
                 m.fit(X[train_idx], y[train_idx], sample_weight=weights[train_idx])
                 pred = m.predict(X[val_idx])
@@ -2093,6 +2101,10 @@ class MLPredictor:
                 actual_over = (y[val_idx] > pred).astype(float)
                 brier = np.mean((raw_probs - actual_over) ** 2)
                 brier_penalties.append(brier)
+
+            if not maes:
+                # Too few samples for any purged fold — prune this trial
+                raise optuna.TrialPruned()
 
             # Weight: 80% MAE (last fold), 20% calibration (mean across folds)
             return 0.8 * maes[-1] + 0.2 * np.mean(brier_penalties) * 10  # scale brier to MAE range
