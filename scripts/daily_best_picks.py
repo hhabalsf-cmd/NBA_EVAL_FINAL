@@ -544,8 +544,8 @@ def generate_daily_picks() -> list[dict]:
                 predictions = {
                     stat: val * dampening for stat, val in predictions.items()
                 }
-                if all(s in predictions for s in ('PTS', 'REB', 'AST')):
-                    predictions['PRA'] = predictions['PTS'] + predictions['REB'] + predictions['AST']
+                # Uniform scaling preserves the 85/15 PRA blend — no
+                # re-reconciliation needed (see pra_utils).
         except Exception as e:
             logger.warning(f"Prediction failed for {player_name}: {e}")
             continue

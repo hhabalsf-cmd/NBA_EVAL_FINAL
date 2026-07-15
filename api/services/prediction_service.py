@@ -639,9 +639,10 @@ class PredictionService:
                 preds = {
                     stat: val * dampening for stat, val in preds.items()
                 }
-                # Reconcile PRA with dampened components
-                if all(s in preds for s in ('PTS', 'REB', 'AST')):
-                    preds['PRA'] = preds['PTS'] + preds['REB'] + preds['AST']
+                # PRA needs no re-reconciliation here: the dampening is
+                # uniform across stats, so the scaled PRA is exactly the
+                # 85/15 blend of the scaled components (see pra_utils).
+                # The old pure-sum overwrite silently discarded the blend.
 
             return pred_features, preds
 

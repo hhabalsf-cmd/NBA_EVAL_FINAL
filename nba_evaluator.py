@@ -34,6 +34,12 @@ from bs4 import BeautifulSoup
 from bdl_client import get_bdl_client
 from bdl_id_mapper import get_team_mapper, get_player_mapper
 from season_utils import get_current_season, get_recent_seasons
+from pra_utils import (
+    reconcile_pra,
+    rescale_pra_with_components,
+    pra_std_floor,
+    PRA_COMPONENT_WEIGHT,
+)
 
 # ML Libraries
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
@@ -2273,11 +2279,29 @@ class MLPredictor:
             fold_model.fit(X[train_idx], y[train_idx], sample_weight=weights[train_idx])
             oof_preds[val_idx] = fold_model.predict(X[val_idx])
 
-        valid_mask = ~np.isnan(oof_preds)
+        # Calibrate PRA against what is actually served: the 85/15 blend of
+        # component predictions and the independent PRA model. Calibrating on
+        # the independent model alone understated the served error std →
+        # overconfident PRA prob_over (2026-07 audit).
+        if not hasattr(self, '_calib_oof'):
+            self._calib_oof = {}
+        oof_for_calib = oof_preds
+        if stat == 'PRA':
+            comps = [self._calib_oof.get(s) for s in ('PTS', 'REB', 'AST')]
+            if all(c is not None and len(c) == len(oof_preds) for c in comps):
+                oof_for_calib = (
+                    PRA_COMPONENT_WEIGHT * (comps[0] + comps[1] + comps[2])
+                    + (1 - PRA_COMPONENT_WEIGHT) * oof_preds
+                )
+                print("    PRA calibrator: using blended (85/15) OOF predictions")
+        else:
+            self._calib_oof[stat] = oof_preds
+
+        valid_mask = ~np.isnan(oof_for_calib) & ~np.isnan(oof_preds)
         if valid_mask.sum() < 30:
             return
 
-        preds = oof_preds[valid_mask]
+        preds = oof_for_calib[valid_mask]
         actuals = y[valid_mask]
         std_estimate = np.std(actuals - preds) or 1.0
 
@@ -2388,6 +2412,9 @@ class MLPredictor:
         # Reset selected_features so stale indices from a previous model
         # (trained on a different feature set) are never reused.
         self.selected_features = None
+        # Reset per-stat OOF stash so a retrain never blends PRA calibration
+        # against a previous training run's component predictions.
+        self._calib_oof = {}
 
         # Prepare data - filter out low-minute games (likely injury/rest games)
         df_clean = df.dropna(subset=available_features + stats)
@@ -3093,12 +3120,9 @@ class MLPredictor:
 
             predictions[stat] = pred
 
-        # Reconcile PRA with component predictions to avoid inconsistency.
-        # Heavily weight component sum (85%) since the independent PRA model's
-        # composite predictions compound errors (PRA picks are 0-3 all-time).
-        if 'PRA' in predictions and all(s in predictions for s in ['PTS', 'REB', 'AST']):
-            component_sum = predictions['PTS'] + predictions['REB'] + predictions['AST']
-            predictions['PRA'] = 0.85 * component_sum + 0.15 * predictions['PRA']
+        # Reconcile PRA with component predictions (single source of truth
+        # in pra_utils — same formula used by injury/blowout adjustments).
+        predictions = reconcile_pra(predictions)
 
         return predictions
 
@@ -3150,9 +3174,10 @@ class MLPredictor:
             if 'PTS' in result:
                 result['PTS'] = result['PTS'] * (1 + pts_boost)
 
-        # Reconcile PRA with adjusted components
-        if all(s in result for s in ('PTS', 'REB', 'AST')):
-            result['PRA'] = result['PTS'] + result['REB'] + result['AST']
+        # Re-blend PRA with the adjusted components (same 85/15 formula as
+        # predict()); the independent share is scaled by the same aggregate
+        # ratio. Previously this overwrote PRA with a pure component sum.
+        result = rescale_pra_with_components(predictions, result)
 
         return result
 
@@ -3204,9 +3229,8 @@ class MLPredictor:
                 reb_discount_factor = 0.3
             result['REB'] = result['REB'] * (1 - discount * reb_discount_factor)
 
-        # Reconcile PRA
-        if all(s in result for s in ('PTS', 'REB', 'AST')):
-            result['PRA'] = result['PTS'] + result['REB'] + result['AST']
+        # Re-blend PRA with the discounted components (see pra_utils)
+        result = rescale_pra_with_components(predictions, result)
 
         return result
 
@@ -3288,6 +3312,64 @@ class MLPredictor:
             # Linear interpolation: 30 games → 0.80, 75 games → 0.95
             return max(0.80, 0.80 + 0.15 * (n - 30) / 45)
 
+    def _quantile_band(self, stat, features_df):
+        """Predict the CQR-adjusted (q10, q90) band and implied std for a stat.
+
+        Returns (q10_adj, q90_adj, quantile_std) or raises on any mismatch —
+        callers treat exceptions as "no quantile band available".
+        """
+        q10_key, q90_key = f'{stat}_q10', f'{stat}_q90'
+        feature_values = []
+        for f in self.feature_names:
+            if f in features_df.columns:
+                feature_values.append(features_df[f].values[0])
+            else:
+                feature_values.append(0)
+        X = np.array([feature_values])
+        X_scaled = self.scalers['features'].transform(X)
+        X_pred = X_scaled
+
+        # Apply feature selection to match what the quantile models were trained on
+        if self.selected_features and stat in self.selected_features:
+            q_expected = getattr(self.quantile_models[q10_key], 'n_features_in_', None)
+            sel_count = len(self.selected_features[stat])
+            if q_expected is not None and sel_count == q_expected:
+                X_pred = X_scaled[:, self.selected_features[stat]]
+            elif q_expected is not None and q_expected != X_scaled.shape[1]:
+                # Quantile model feature count doesn't match either option — skip to fallback
+                raise ValueError(f"Quantile model expects {q_expected} features, have {X_scaled.shape[1]} (selected {sel_count})")
+
+        q10 = self.quantile_models[q10_key].predict(X_pred)[0]
+        q90 = self.quantile_models[q90_key].predict(X_pred)[0]
+
+        # Apply CQR correction for guaranteed coverage (Improvement #5b)
+        cqr_adj = 0.0
+        if hasattr(self, 'probability_calibrator') and stat in self.probability_calibrator:
+            cqr_adj = self.probability_calibrator[stat].get('cqr_correction', 0.0)
+        q10_adj = q10 - cqr_adj
+        q90_adj = q90 + cqr_adj
+
+        # Note: dividing by 2.56 here treats the post-CQR band as if it
+        # were a true 80% interval. After CQR the OOF coverage is closer
+        # to ~85-92% (see probability_calibrator[stat]['cqr_coverage']),
+        # so the implied std is overstated → confidence is dampened.
+        # The conservative direction matches production goals (we are
+        # overconfident, not underconfident); a principled recalibration
+        # belongs to Phase B2 along with CONFIDENCE_STD_SCALE retuning.
+        quantile_std = (q90_adj - q10_adj) / 2.56
+        return q10_adj, q90_adj, quantile_std
+
+    def _component_band_std(self, stat, features_df):
+        """Quantile-implied std for a component stat, or None if unavailable."""
+        q10_key, q90_key = f'{stat}_q10', f'{stat}_q90'
+        if q10_key not in self.quantile_models or q90_key not in self.quantile_models:
+            return None
+        try:
+            _, _, band_std = self._quantile_band(stat, features_df)
+            return band_std
+        except Exception:
+            return None
+
     def get_confidence(self, df, stat, prediction, features_df=None):
         """Calculate confidence interval using quantile regression when available,
         falling back to historical variance with per-stat calibration.
@@ -3300,44 +3382,25 @@ class MLPredictor:
         q10_key, q90_key = f'{stat}_q10', f'{stat}_q90'
         if q10_key in self.quantile_models and q90_key in self.quantile_models and features_df is not None:
             try:
-                feature_values = []
-                for f in self.feature_names:
-                    if f in features_df.columns:
-                        feature_values.append(features_df[f].values[0])
-                    else:
-                        feature_values.append(0)
-                X = np.array([feature_values])
-                X_scaled = self.scalers['features'].transform(X)
-                X_pred = X_scaled
+                q10_adj, q90_adj, quantile_std = self._quantile_band(stat, features_df)
 
-                # Apply feature selection to match what the quantile models were trained on
-                if self.selected_features and stat in self.selected_features:
-                    q_expected = getattr(self.quantile_models[q10_key], 'n_features_in_', None)
-                    sel_count = len(self.selected_features[stat])
-                    if q_expected is not None and sel_count == q_expected:
-                        X_pred = X_scaled[:, self.selected_features[stat]]
-                    elif q_expected is not None and q_expected != X_scaled.shape[1]:
-                        # Quantile model feature count doesn't match either option — skip to fallback
-                        raise ValueError(f"Quantile model expects {q_expected} features, have {X_scaled.shape[1]} (selected {sel_count})")
-
-                q10 = self.quantile_models[q10_key].predict(X_pred)[0]
-                q90 = self.quantile_models[q90_key].predict(X_pred)[0]
-
-                # Apply CQR correction for guaranteed coverage (Improvement #5b)
-                cqr_adj = 0.0
-                if hasattr(self, 'probability_calibrator') and stat in self.probability_calibrator:
-                    cqr_adj = self.probability_calibrator[stat].get('cqr_correction', 0.0)
-                q10_adj = q10 - cqr_adj
-                q90_adj = q90 + cqr_adj
-
-                # Note: dividing by 2.56 here treats the post-CQR band as if it
-                # were a true 80% interval. After CQR the OOF coverage is closer
-                # to ~85-92% (see probability_calibrator[stat]['cqr_coverage']),
-                # so the implied std is overstated → confidence is dampened.
-                # The conservative direction matches production goals (we are
-                # overconfident, not underconfident); a principled recalibration
-                # belongs to Phase B2 along with CONFIDENCE_STD_SCALE retuning.
-                quantile_std = (q90_adj - q10_adj) / 2.56
+                # PRA errors compound PTS+REB+AST (positively correlated via
+                # minutes), so its std can never be below the RSS of the
+                # component stds. The independent PRA model's quantile band
+                # understated this → overconfident PRA prob_over (audit
+                # 2026-07: all graded PRA picks landed at prob 74-84).
+                if stat == 'PRA':
+                    comp_stds = [
+                        self._component_band_std(s, features_df)
+                        for s in ('PTS', 'REB', 'AST')
+                    ]
+                    floored_std = pra_std_floor(quantile_std, comp_stds)
+                    if floored_std > quantile_std:
+                        # Widen the band symmetrically to match the floored std
+                        widen = (floored_std - quantile_std) * 2.56 / 2
+                        q10_adj -= widen
+                        q90_adj += widen
+                        quantile_std = floored_std
 
                 scale = self.CONFIDENCE_STD_SCALE.get(stat, 3.0)
                 cap = self.CONFIDENCE_CAPS.get(stat, 85)
