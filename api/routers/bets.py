@@ -3,13 +3,19 @@ import asyncio
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 import db
 from ..limiter import limiter
-from ..schemas.prediction import DailyPick, DailyPicksResponse
-from ..routers.auth import verify_service_key
+from ..schemas.prediction import (
+    DailyPick,
+    DailyPicksResponse,
+    ManualLine,
+    ManualLinesResponse,
+    ManualLinesUpsert,
+)
+from ..routers.auth import get_current_user, verify_service_key
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +71,68 @@ async def trigger_generate_daily_picks(request: Request):
         status_code=202,
         content={"status": "accepted", "message": "Daily picks generation started in background"},
     )
+
+
+# ── Manual line entry (fallback line source) ─────────────────────────
+
+
+def _row_to_manual_line(row: dict) -> ManualLine:
+    r = dict(row)
+    if hasattr(r.get('game_date'), 'isoformat'):
+        r['game_date'] = r['game_date'].isoformat()
+    r['line'] = float(r['line'])
+    return ManualLine(**r)
+
+
+@router.get("/lines", response_model=ManualLinesResponse)
+@limiter.limit("60/minute")
+async def get_manual_lines(
+    request: Request,
+    date: str = Query(default=None, description="YYYY-MM-DD (defaults to today)"),
+    current_user: dict = Depends(get_current_user),
+):
+    """List manually entered lines for a date."""
+    date_str = date or datetime.now().strftime('%Y-%m-%d')
+    rows = db.get_manual_lines(date_str)
+    return ManualLinesResponse(
+        lines=[_row_to_manual_line(r) for r in rows],
+        date=date_str,
+    )
+
+
+@router.post("/lines", response_model=ManualLinesResponse)
+@limiter.limit("30/minute")
+async def upsert_manual_lines(
+    request: Request,
+    payload: ManualLinesUpsert,
+    current_user: dict = Depends(get_current_user),
+):
+    """Insert or update manual lines (unique per game_date+player+stat)."""
+    date_str = payload.game_date or datetime.now().strftime('%Y-%m-%d')
+    try:
+        db.upsert_manual_lines([l.model_dump() for l in payload.lines], date_str)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    rows = db.get_manual_lines(date_str)
+    logger.info("Manual lines upserted by %s: %d lines for %s",
+                current_user.get('id'), len(payload.lines), date_str)
+    return ManualLinesResponse(
+        lines=[_row_to_manual_line(r) for r in rows],
+        date=date_str,
+    )
+
+
+@router.delete("/lines/{line_id}")
+@limiter.limit("30/minute")
+async def delete_manual_line(
+    request: Request,
+    line_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    """Delete a manual line by id."""
+    if not db.delete_manual_line(line_id):
+        raise HTTPException(status_code=404, detail="Line not found")
+    return {"deleted": line_id}
 
 
 def _row_to_daily_pick(row: dict) -> dict:

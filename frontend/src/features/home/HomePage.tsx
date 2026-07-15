@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
-import { ArrowRight, BarChart3, ChevronDown, Search as SearchIcon, Target, TrendingUp } from 'lucide-react'
+import { ArrowRight, BarChart3, ChevronDown, ClipboardEdit, Search as SearchIcon, Target, TrendingUp } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { motion, type Variants } from 'framer-motion'
 import PlayerSearch from '../../shared/components/PlayerSearch'
 import BetCard from './BetCard'
+import ManualLinesPanel from './ManualLinesPanel'
 import { getTodaysDailyPicks, saveDailyPickToMyPicks, dailyPickToBestBet, type DailyPick } from './api'
 import { getPerformanceStats } from '../picks/api'
 import { useTilt } from '../../shared/hooks/useTilt'
@@ -81,6 +82,7 @@ function BestBetsSection() {
   const [visibleCount, setVisibleCount] = useState(PICKS_PER_PAGE)
   const queryClient = useQueryClient()
   const [savingId, setSavingId] = useState<number | null>(null)
+  const [showLinesPanel, setShowLinesPanel] = useState(false)
 
   const { data: dailyPicks, isLoading } = useQuery({
     queryKey: ['daily-picks'],
@@ -111,9 +113,19 @@ function BestBetsSection() {
           <TrendingUp className="w-5 h-5 text-accent" />
           <h2 className="heading-display text-2xl font-semibold text-text-primary">Best Bets Today</h2>
         </div>
-        {dailyPicks && dailyPicks.length > 0 && (
-          <span className="text-xs text-text-muted font-mono">{dailyPicks.length} picks</span>
-        )}
+        <div className="flex items-center gap-3">
+          {dailyPicks && dailyPicks.length > 0 && (
+            <span className="text-xs text-text-muted font-mono">{dailyPicks.length} picks</span>
+          )}
+          <button
+            onClick={() => setShowLinesPanel((v) => !v)}
+            className="flex items-center gap-1.5 text-xs font-medium text-text-muted hover:text-accent transition-colors"
+            aria-expanded={showLinesPanel}
+          >
+            <ClipboardEdit className="w-3.5 h-3.5" />
+            Lines
+          </button>
+        </div>
       </div>
 
       {isLoading && (
@@ -158,8 +170,17 @@ function BestBetsSection() {
       {!isLoading && (!dailyPicks || dailyPicks.length === 0) && (
         <div className="card p-10 text-center border-dashed opacity-60">
           <p className="text-sm text-text-secondary">Daily picks are generated at 8 AM ET. Check back soon.</p>
+          <p className="text-xs text-text-muted mt-2">
+            No live odds source?{' '}
+            <button onClick={() => setShowLinesPanel(true)} className="text-accent hover:underline">
+              Enter lines manually
+            </button>{' '}
+            to feed the next generation run.
+          </p>
         </div>
       )}
+
+      {showLinesPanel && <ManualLinesPanel />}
     </div>
   )
 }

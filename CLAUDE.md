@@ -40,7 +40,11 @@ Both servers must run simultaneously. Vite proxies `/api/*` → `localhost:8000`
 
 **`FeatureEngineer`** — 82 canonical features (`FEATURE_COLS`): rolling avgs (5/10 + EMA for PTS/MIN), efficiency metrics, opponent defensive features (`OPP_DEF_RATING_NORM`, `OPP_PACE_NORM`), enhanced opponent context (off_rating, net_rating, eFG%, OREB%, DREB%), matchup history, home/away splits, B2B/rest, hot/cold streak, rebound splits (OREB/DREB), 3PT shooting features, FT rate, foul trouble, schedule density, travel, Vegas lines. `extract_opp_stats()` helper extracts all opponent context from team_stats dict. 26 dead/redundant features pruned (see commit `7ab42e3`).
 
-**`OddsAPI`** — Key lookup: function param → `ODDS_API_KEY` env var → `config.json`. Market map: `player_points→PTS`, `player_rebounds→REB`, `player_assists→AST`, `player_points_rebounds_assists→PRA`. **Status: quota exhausted** — replace key in `config.json` to re-enable (only affects line auto-population on PlayerPage).
+**`OddsAPI`** — Key lookup: function param → `ODDS_API_KEY` env var → `config.json`. Market map: `player_points→PTS`, `player_rebounds→REB`, `player_assists→AST`, `player_points_rebounds_assists→PRA`. **Status: quota exhausted** — replace key in `config.json` to re-enable.
+
+**`line_sources.py`** — Unified prop-line sourcing with fallback: OddsAPI → manual lines (Supabase `manual_lines` table, entered via `POST /api/bets/lines` / the Manual Lines panel on HomePage). BDL props are permanently gone (GOAT-tier endpoint, Apr 2026 downgrade). Feeds `BestBetsService` and `scripts/daily_best_picks.py`.
+
+**`season_utils.py`** — `get_current_season()` / `get_recent_seasons(n)` derive the NBA season string from the date (rollover Oct 1). Never hardcode season strings like `'2025-26'`.
 
 **`MLPredictor`** — Per-player per-stat models (PTS/REB/AST/PRA):
 - TimeSeriesSplit CV (no lookahead bias), stacking ensemble (RF + GB + XGBoost + LightGBM)
@@ -67,6 +71,9 @@ Both servers must run simultaneously. Vite proxies `/api/*` → `localhost:8000`
 | POST | `/api/players/evaluate-line` | Single stat/line evaluation |
 | GET | `/api/players/{name}/research` | Game log, rolling avgs, splits, matchup context |
 | GET | `/api/bets/today` | Daily best bets |
+| GET | `/api/bets/lines?date=` | Manual lines for a date |
+| POST | `/api/bets/lines` | Upsert manual lines (fallback line source) |
+| DELETE | `/api/bets/lines/{id}` | Delete a manual line |
 | GET | `/api/picks?days=30&pending_only=false` | Pick history |
 | POST | `/api/picks` | Create pick |
 | PUT | `/api/picks/{id}/grade` | Grade a pick |
@@ -130,8 +137,8 @@ Organized by **feature**, not file type. Each feature folder contains its page, 
 #### Theme
 - **Always use `var(--x)` CSS variables — never hardcoded hex values**
 - Dark default, light overrides under `:root.light` in `index.css`
-- `--accent: #C9A87C` (primary), `--accent-success` (green), `--accent-danger` (red)
-- Fonts: Inter (body), JetBrains Mono (stats/numbers)
+- `--accent: #06B6D4` cyan (primary), `--accent-success` (green), `--accent-danger` (red); RGB-triplet vars (`--accent-rgb` etc.) for alpha variants — use `rgba(var(--accent-rgb), 0.x)`, never hardcoded rgba
+- Fonts: Instrument Sans (body), Barlow Condensed (display headings, `.heading-display`/`font-display`), IBM Plex Mono (stats/numbers)
 
 ---
 
@@ -163,7 +170,8 @@ game_predictions: id, timestamp, game_date, home_team, away_team, home/away_team
 
 ## Known Issues / Sunsetted Features
 
-- **Live Odds**: Quota exhausted (500/500). Replace `odds_api_key` in `config.json`. Only affects line auto-population on PlayerPage.
+- **Live Odds**: OddsAPI quota exhausted (500/500) — replace `odds_api_key` in `config.json` to re-enable auto lines. Until then, Best Bets runs off manually entered lines (HomePage → Lines panel).
+- **BDL props/odds/standings/box scores**: permanently unavailable since the Apr 2026 GOAT→ALL-STAR tier downgrade. `bdl_client` raises `RuntimeError` on those endpoints.
 
 ## Security Policy
 

@@ -149,89 +149,36 @@ def _get_teams_playing_today() -> list[dict]:
 
 def _fetch_player_props_lookup(games: list[dict]) -> dict:
     """
-    Fetch player props for all of today's games from BDL v2 API.
-    Returns: {'by_id': {bdl_player_id: {stat: median_line}}}
+    Fetch player props for today from the configured line sources
+    (line_sources.fetch_todays_props: Odds API -> manual lines).
 
-    Only uses over_under market type props. Computes median line across
-    vendors for each player+stat combo to resist outlier lines.
+    Returns: {'by_id': {}, 'by_name': {player_name_lower: {stat: line}}}
 
-    BDL v2 response format per prop:
-      {'player_id': int, 'prop_type': str, 'line_value': str,
-       'market': {'type': 'over_under', ...}, 'vendor': str, ...}
+    Note: sources are name-keyed, so 'by_id' is always empty and consumers
+    resolve through the name fallback. BDL props (the old id-keyed source)
+    were disabled with the April 2026 tier downgrade.
     """
-    _PROP_TYPE_MAP: dict[str, str] = {
-        'points': 'PTS',
-        'rebounds': 'REB',
-        'assists': 'AST',
-        'points_rebounds_assists': 'PRA',
-    }
+    from line_sources import fetch_todays_props
 
-    bdl = get_bdl_client()
-    # Collect all lines per player+stat for median calculation
-    # {bdl_player_id: {stat: [line_values_from_different_vendors]}}
-    raw_lines: dict[int, dict[str, list[float]]] = {}
+    props = fetch_todays_props()
 
-    for g in games:
-        bdl_game_id = g.get('bdl_game_id')
-        if bdl_game_id is None:
-            logger.debug("_fetch_player_props_lookup: skipping game with no bdl_game_id: %s", g)
-            continue
-
-        try:
-            raw_props = bdl.get_player_props(game_id=bdl_game_id)
-        except Exception as exc:
-            logger.warning(
-                "_fetch_player_props_lookup: failed to fetch props for game_id=%s: %s",
-                bdl_game_id, exc,
-            )
-            continue
-
-        for prop in raw_props:
-            # BDL v2: player_id at top level, filter for over_under market
-            market = prop.get('market') or {}
-            if market.get('type') != 'over_under':
-                continue
-
-            bdl_player_id = prop.get('player_id')
-            if bdl_player_id is None:
-                continue
-
-            prop_type = str(prop.get('prop_type') or '').lower()
-            stat = _PROP_TYPE_MAP.get(prop_type)
-            if stat is None:
-                # Check for combo props containing all three components
-                if 'points' in prop_type and 'rebounds' in prop_type and 'assists' in prop_type:
-                    stat = 'PRA'
-                else:
-                    continue
-
-            raw_line = prop.get('line_value')
-            if raw_line is None:
-                continue
-
-            bdl_player_id = int(bdl_player_id)
-            line_val = float(raw_line)
-
-            # Accumulate lines from all vendors for median calculation
-            player_lines = raw_lines.get(bdl_player_id, {})
-            stat_lines = player_lines.get(stat, [])
-            raw_lines[bdl_player_id] = {**player_lines, stat: [*stat_lines, line_val]}
-
-    # Compute median line per player+stat (consensus across vendors)
-    props_lookup: dict[int, dict[str, float]] = {}
+    by_name: dict[str, dict[str, float]] = {}
     total_props = 0
-    for pid, stat_dict in raw_lines.items():
-        player_entry: dict[str, float] = {}
-        for stat, lines in stat_dict.items():
-            player_entry[stat] = round(float(np.median(lines)), 1)
-            total_props += 1
-        props_lookup[pid] = player_entry
+    for prop in props:
+        name_l = str(prop.get('player') or '').strip().lower()
+        stat = prop.get('stat')
+        line = prop.get('consensus_line')
+        if not name_l or not stat or line is None:
+            continue
+        entry = by_name.get(name_l, {})
+        by_name[name_l] = {**entry, stat: round(float(line), 1)}
+        total_props += 1
 
     logger.info(
-        "_fetch_player_props_lookup: fetched %d consensus lines across %d players.",
-        total_props, len(props_lookup),
+        "_fetch_player_props_lookup: %d consensus lines across %d players.",
+        total_props, len(by_name),
     )
-    return {'by_id': props_lookup, 'by_name': {}}
+    return {'by_id': {}, 'by_name': by_name}
 
 
 def _get_players_for_teams(team_abbrevs: set[str]) -> list[dict]:

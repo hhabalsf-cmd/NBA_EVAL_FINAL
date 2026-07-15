@@ -522,3 +522,40 @@ class ParlayResponse(BaseModel):
 
 class ParlayCreate(BaseModel):
     pick_ids: List[int] = Field(..., min_length=2, max_length=6)
+
+
+# ── Manual line entry (fallback line source) ─────────────────────────
+
+
+class ManualLineCreate(BaseModel):
+    """One manually entered betting line."""
+    player: str = Field(..., min_length=2, max_length=100)
+    stat: Literal['PTS', 'REB', 'AST', 'PRA']
+    line: float = Field(..., gt=0, lt=200)
+    home_team: Optional[str] = Field(default=None, max_length=3)
+    away_team: Optional[str] = Field(default=None, max_length=3)
+
+
+class ManualLinesUpsert(BaseModel):
+    """Batch upsert of manual lines for a date (defaults to today)."""
+    lines: List[ManualLineCreate] = Field(..., min_length=1, max_length=200)
+    game_date: Optional[str] = Field(
+        default=None, pattern=r'^\d{4}-\d{2}-\d{2}$',
+        description="YYYY-MM-DD; defaults to today",
+    )
+
+
+class ManualLine(BaseModel):
+    id: int
+    game_date: str
+    player: str
+    stat: str
+    line: float
+    home_team: Optional[str] = None
+    away_team: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+class ManualLinesResponse(BaseModel):
+    lines: List[ManualLine]
+    date: str

@@ -1,8 +1,53 @@
 import { supabase } from '../../shared/lib/supabase'
+import { apiFetch, API_BASE, throwResponseError } from '../../api/client'
 import { createPick } from '../picks/api'
 import type { BestBet, DailyPick, Pick } from '../../api/types'
 
 export type { BestBet, DailyPick } from '../../api/types'
+
+// ── Manual line entry (fallback line source) ──────────────────────────
+
+export interface ManualLine {
+  id: number
+  game_date: string
+  player: string
+  stat: 'PTS' | 'REB' | 'AST' | 'PRA'
+  line: number
+  home_team?: string | null
+  away_team?: string | null
+}
+
+export interface ManualLineInput {
+  player: string
+  stat: ManualLine['stat']
+  line: number
+  home_team?: string | null
+  away_team?: string | null
+}
+
+export async function getManualLines(date?: string): Promise<ManualLine[]> {
+  const qs = date ? `?date=${encodeURIComponent(date)}` : ''
+  const res = await apiFetch(`${API_BASE}/bets/lines${qs}`)
+  if (!res.ok) await throwResponseError(res, 'Failed to load manual lines')
+  const body = (await res.json()) as { lines: ManualLine[] }
+  return body.lines
+}
+
+export async function upsertManualLines(lines: ManualLineInput[], gameDate?: string): Promise<ManualLine[]> {
+  const res = await apiFetch(`${API_BASE}/bets/lines`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ lines, game_date: gameDate }),
+  })
+  if (!res.ok) await throwResponseError(res, 'Failed to save lines')
+  const body = (await res.json()) as { lines: ManualLine[] }
+  return body.lines
+}
+
+export async function deleteManualLine(id: number): Promise<void> {
+  const res = await apiFetch(`${API_BASE}/bets/lines/${id}`, { method: 'DELETE' })
+  if (!res.ok) await throwResponseError(res, 'Failed to delete line')
+}
 
 /** Convert a DailyPick to a BestBet so existing BetCard works unchanged. */
 export function dailyPickToBestBet(pick: DailyPick): BestBet {
