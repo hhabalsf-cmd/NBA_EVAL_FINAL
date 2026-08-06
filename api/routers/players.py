@@ -1,11 +1,12 @@
 """Player search and prediction endpoints."""
 import json
 import logging
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from typing import Optional
 
 from ..limiter import limiter
+from ..routers.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,7 @@ async def search_players(request: Request, q: str = Query(..., min_length=2, des
 
 @router.post("/predict")
 @limiter.limit("10/minute")
-async def predict_player_stats(request: Request, body: PredictionRequest):
+async def predict_player_stats(request: Request, body: PredictionRequest, current_user: dict = Depends(get_current_user)):
     """
     Get ML predictions for a player's stats.
     Returns Server-Sent Events for progress updates.
@@ -108,7 +109,7 @@ async def predict_player_stats(request: Request, body: PredictionRequest):
 
 @router.post("/predict/sync", response_model=PredictionResponse)
 @limiter.limit("10/minute")
-async def predict_player_stats_sync(request: Request, body: PredictionRequest):
+async def predict_player_stats_sync(request: Request, body: PredictionRequest, current_user: dict = Depends(get_current_user)):
     """
     Get ML predictions for a player's stats (non-streaming).
     Useful for programmatic access.
@@ -140,7 +141,7 @@ async def predict_player_stats_sync(request: Request, body: PredictionRequest):
 
 @router.get("/{player_name}/team-injuries")
 @limiter.limit("30/minute")
-async def get_team_injuries(request: Request, player_name: str):
+async def get_team_injuries(request: Request, player_name: str, current_user: dict = Depends(get_current_user)):
     """Get injury report for a player's team and their next opponent (30-min cached)."""
     service = get_prediction_service()
 
@@ -173,7 +174,7 @@ async def get_team_injuries(request: Request, player_name: str):
 
 @router.get("/{player_name}/odds")
 @limiter.limit("30/minute")
-async def get_player_odds(request: Request, player_name: str):
+async def get_player_odds(request: Request, player_name: str, current_user: dict = Depends(get_current_user)):
     """Get today's consensus prop lines for a player (30-min cached)."""
     service = get_prediction_service()
     result = service.get_player_odds(player_name)
@@ -182,7 +183,7 @@ async def get_player_odds(request: Request, player_name: str):
 
 @router.get("/{player_name}/research", response_model=PlayerResearchResponse)
 @limiter.limit("20/minute")
-async def get_player_research(request: Request, player_name: str):
+async def get_player_research(request: Request, player_name: str, current_user: dict = Depends(get_current_user)):
     """
     Get comprehensive research stats for a player.
     Returns game log, rolling averages, home/away/B2B/defense splits, and matchup context.
@@ -555,7 +556,7 @@ async def get_player_research(request: Request, player_name: str):
 
 @router.get("/{player_name}/scenarios", response_model=ScenariosResponse)
 @limiter.limit("20/minute")
-async def get_player_scenarios(request: Request, player_name: str):
+async def get_player_scenarios(request: Request, player_name: str, current_user: dict = Depends(get_current_user)):
     """
     Get 'with/without' absence splits for teammates and opponents.
     Shows how the player's stats change when specific teammates or opponent
@@ -832,7 +833,7 @@ async def get_player_scenarios(request: Request, player_name: str):
 
 @router.post("/evaluate-line", response_model=LineEvaluation)
 @limiter.limit("30/minute")
-async def evaluate_line(request: Request, body: LineEvaluationRequest):
+async def evaluate_line(request: Request, body: LineEvaluationRequest, current_user: dict = Depends(get_current_user)):
     """Evaluate a betting line against a prediction."""
     service = get_prediction_service()
 

@@ -10,7 +10,7 @@ from typing import Optional
 from ..limiter import limiter
 
 logger = logging.getLogger(__name__)
-from ..routers.auth import get_current_user, verify_service_key
+from ..routers.auth import get_current_user, require_admin, verify_service_key
 
 from ..schemas.prediction import (
     TodaysGamesResponse,
@@ -60,7 +60,7 @@ def get_todays_games(request: Request):
 
 @router.post("/predict")
 @limiter.limit("10/minute")
-async def predict_todays_games(request: Request):
+async def predict_todays_games(request: Request, current_user: dict = Depends(get_current_user)):
     """
     Predict today's games with SSE progress updates.
     Returns Server-Sent Events for real-time progress.
@@ -139,7 +139,7 @@ def grade_prediction(
     request: Request,
     prediction_id: int,
     body: GradeBody,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_admin),
 ):
     """Manually grade a game prediction with the actual winner."""
     service = get_game_service()

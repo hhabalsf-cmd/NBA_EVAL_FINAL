@@ -126,7 +126,14 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         isLoading: false,
       })
     } catch (err) {
-      set({ error: (err as Error).message, isLoading: false })
+      // The DB trigger enforcing the cap raises REGISTRATION_CLOSED, which
+      // Supabase auth surfaces as a generic "Database error saving new user".
+      const raw = (err as Error).message ?? ''
+      const message =
+        raw.includes('REGISTRATION_CLOSED') || raw.includes('Database error saving new user')
+          ? "Registration is currently closed — we're at capacity during the free trial. Check back soon!"
+          : raw
+      set({ error: message, isLoading: false })
     }
   },
 

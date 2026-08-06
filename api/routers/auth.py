@@ -102,6 +102,20 @@ def get_current_user(request: Request) -> dict:
     }
 
 
+def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    """FastAPI dependency — like get_current_user but 403s unless profiles.role == 'admin'.
+
+    Guards endpoints that mutate shared/global state (manual lines, manual
+    game grading) so any authenticated user can't poison data everyone sees.
+    """
+    if current_user.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+    return current_user
+
+
 # ── Service key dependency ──────────────────────────────────────
 
 FASTAPI_SERVICE_KEY = os.getenv("FASTAPI_SERVICE_KEY")

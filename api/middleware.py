@@ -6,11 +6,57 @@ full application (routers, DB pool, model storage).
 Middleware order is defined in main.py — add_middleware() wraps outside-in,
 so the LAST one added is the OUTERMOST.
 """
+import logging
+
 from fastapi import Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
+
+logger = logging.getLogger(__name__)
+
+
+class CatchAllExceptionMiddleware:
+    """Turn unhandled exceptions into JSON 500s from INSIDE the CORS layer.
+
+    Starlette's default ServerErrorMiddleware sits outside all user
+    middleware, so its 500s carry no CORS headers and the browser reports an
+    opaque network error instead of the real failure. This must be added
+    immediately BEFORE CORSMiddleware in main.py (i.e. wrapped by it) so
+    error responses pass through CORS and get the headers.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        response_started = False
+
+        async def _send(message):
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, _send)
+        except Exception:
+            logger.exception(
+                "Unhandled exception on %s %s",
+                scope.get("method"), scope.get("path"),
+            )
+            if response_started:
+                raise  # Too late to send a fresh response — let the server abort
+            response = JSONResponse(
+                status_code=500,
+                content={"detail": "Internal server error"},
+            )
+            await response(scope, receive, send)
 
 
 class SelectiveGZipMiddleware:

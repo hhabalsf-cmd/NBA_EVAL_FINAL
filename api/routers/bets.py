@@ -16,7 +16,7 @@ from ..schemas.prediction import (
     ManualLinesResponse,
     ManualLinesUpsert,
 )
-from ..routers.auth import get_current_user, verify_service_key
+from ..routers.auth import get_current_user, require_admin, verify_service_key
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +106,7 @@ async def get_manual_lines(
 async def upsert_manual_lines(
     request: Request,
     payload: ManualLinesUpsert,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_admin),
 ):
     """Insert or update manual lines (unique per game_date+player+stat)."""
     date_str = payload.game_date or today_et_str()
@@ -128,7 +128,7 @@ async def upsert_manual_lines(
 async def delete_manual_line(
     request: Request,
     line_id: int,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_admin),
 ):
     """Delete a manual line by id."""
     if not db.delete_manual_line(line_id):

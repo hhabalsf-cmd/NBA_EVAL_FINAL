@@ -25,6 +25,8 @@ const MAX_PAGES = 4
 export default function GamesPage() {
   const queryClient = useQueryClient()
   const { isAuthenticated } = useAuthStore()
+  // Manual grading writes results everyone sees — the API 403s non-admins
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin')
   const [activeTab, setActiveTab] = useState<Tab>('today')
   const [gradingId, setGradingId] = useState<number | null>(null)
   const [page, setPage] = useState(1)
@@ -406,6 +408,8 @@ export default function GamesPage() {
                                 <X className="w-3.5 h-3.5" />
                               </button>
                             </div>
+                          ) : !isAdmin ? (
+                            <span className="text-xs text-text-muted font-medium px-2 py-1">Pending</span>
                           ) : (
                             <button
                               onClick={() => setGradingId(item.id)}

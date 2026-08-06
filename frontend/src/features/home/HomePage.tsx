@@ -8,6 +8,7 @@ import BetCard from './BetCard'
 import ManualLinesPanel from './ManualLinesPanel'
 import { getTodaysDailyPicks, saveDailyPickToMyPicks, dailyPickToBestBet, type DailyPick } from './api'
 import { getPerformanceStats } from '../picks/api'
+import { useAuthStore } from '../auth/authStore'
 import { useTilt } from '../../shared/hooks/useTilt'
 
 const fadeUp: Variants = {
@@ -83,6 +84,8 @@ function BestBetsSection() {
   const queryClient = useQueryClient()
   const [savingId, setSavingId] = useState<number | null>(null)
   const [showLinesPanel, setShowLinesPanel] = useState(false)
+  // Manual line entry mutates lines everyone sees — the API 403s non-admins
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin')
 
   const { data: dailyPicks, isLoading } = useQuery({
     queryKey: ['daily-picks'],
@@ -117,14 +120,16 @@ function BestBetsSection() {
           {dailyPicks && dailyPicks.length > 0 && (
             <span className="text-xs text-text-muted font-mono">{dailyPicks.length} picks</span>
           )}
-          <button
-            onClick={() => setShowLinesPanel((v) => !v)}
-            className="flex items-center gap-1.5 text-xs font-medium text-text-muted hover:text-accent transition-colors"
-            aria-expanded={showLinesPanel}
-          >
-            <ClipboardEdit className="w-3.5 h-3.5" />
-            Lines
-          </button>
+          {isAdmin && (
+            <button
+              onClick={() => setShowLinesPanel((v) => !v)}
+              className="flex items-center gap-1.5 text-xs font-medium text-text-muted hover:text-accent transition-colors"
+              aria-expanded={showLinesPanel}
+            >
+              <ClipboardEdit className="w-3.5 h-3.5" />
+              Lines
+            </button>
+          )}
         </div>
       </div>
 
@@ -170,17 +175,19 @@ function BestBetsSection() {
       {!isLoading && (!dailyPicks || dailyPicks.length === 0) && (
         <div className="card p-10 text-center border-dashed opacity-60">
           <p className="text-sm text-text-secondary">Daily picks are generated at 8 AM ET. Check back soon.</p>
-          <p className="text-xs text-text-muted mt-2">
-            No live odds source?{' '}
-            <button onClick={() => setShowLinesPanel(true)} className="text-accent hover:underline">
-              Enter lines manually
-            </button>{' '}
-            to feed the next generation run.
-          </p>
+          {isAdmin && (
+            <p className="text-xs text-text-muted mt-2">
+              No live odds source?{' '}
+              <button onClick={() => setShowLinesPanel(true)} className="text-accent hover:underline">
+                Enter lines manually
+              </button>{' '}
+              to feed the next generation run.
+            </p>
+          )}
         </div>
       )}
 
-      {showLinesPanel && <ManualLinesPanel />}
+      {isAdmin && showLinesPanel && <ManualLinesPanel />}
     </div>
   )
 }

@@ -11,9 +11,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 import psycopg2
 
 from .middleware import (
+    CatchAllExceptionMiddleware,
     RequestBodyLimitMiddleware,
     SecurityHeadersMiddleware,
     SelectiveGZipMiddleware,
@@ -127,9 +129,13 @@ app.add_exception_handler(Exception, _general_exception_handler)
 
 # Middleware stack — add_middleware() wraps outside-in, so the LAST one added
 # is the OUTERMOST. Intended request path (outermost first):
-#   CORS → gzip (SSE-aware) → security headers → body limit → app
-# CORS must stay outermost so every response (including errors) carries CORS
-# headers for the browser.
+#   CORS → catch-all-500 → gzip (SSE-aware) → security headers → body limit → rate limit → app
+# CORS must stay outermost so every response (including 500s from the
+# catch-all) carries CORS headers for the browser.
+
+# Rate limiting — without this middleware the Limiter's default_limits are
+# never enforced (only per-route @limiter.limit decorators would apply)
+app.add_middleware(SlowAPIMiddleware)
 
 # Request body size limit (2 MB)
 app.add_middleware(RequestBodyLimitMiddleware)
@@ -139,6 +145,9 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 # GZip compression — skips text/event-stream so SSE progress isn't buffered
 app.add_middleware(SelectiveGZipMiddleware, minimum_size=1000)
+
+# Catch-all 500 — added right before CORS so error responses carry CORS headers
+app.add_middleware(CatchAllExceptionMiddleware)
 
 # CORS middleware for frontend
 _default_origins = "http://localhost:5173,http://localhost:5174,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:3000"
