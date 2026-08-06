@@ -1,4 +1,5 @@
 """Live parlay status endpoint — real-time game stats for active parlays."""
+from __future__ import annotations
 
 import logging
 import sys
