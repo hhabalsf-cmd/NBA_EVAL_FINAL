@@ -22,10 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / '.env', override=True)
 
-from nba_api.stats.static import players as nba_players
-from nba_evaluator import NBADataScraper, FeatureEngineer, MLPredictor
 from season_utils import today_et
-from api.services.prediction_service import PredictionService
 
 DEFAULT_MAX_AGE_DAYS = 7
 
@@ -63,6 +60,13 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
+
+    # Heavy imports stay inside main() so tests can import should_skip/parse_args
+    # without loading the ML stack.
+    from nba_api.stats.static import players as nba_players
+    from nba_evaluator import NBADataScraper, FeatureEngineer, MLPredictor
+    from api.services.prediction_service import PredictionService
+
     print("Initializing mass pre-training for all active NBA players...")
     if args.force:
         print("--force: retraining every player from scratch.")
