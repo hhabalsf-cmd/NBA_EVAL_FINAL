@@ -3616,28 +3616,58 @@ class MLPredictor:
 
         return True
 
+    # Local/memory copies older than this look for a newer Supabase copy on load.
+    MODEL_MAX_AGE_DAYS = 7
+
+    @staticmethod
+    def _model_age_days(data: dict):
+        """Age in days of a model data dict, or None if unknown."""
+        trained_at = data.get('trained_at')
+        if not trained_at:
+            return None
+        try:
+            trained_date = datetime.strptime(str(trained_at)[:10], '%Y-%m-%d').date()
+        except ValueError:
+            return None
+        return (today_et() - trained_date).days
+
+    @classmethod
+    def _is_stale(cls, data: dict) -> bool:
+        age = cls._model_age_days(data)
+        return age is None or age > cls.MODEL_MAX_AGE_DAYS
+
     def load(self, player_name):
-        """Load model from L1 memory -> L2 disk -> L3 Supabase Storage."""
+        """Load model from L1 memory -> L2 disk -> L3 Supabase Storage.
+
+        Stale hits (trained_at missing or older than MODEL_MAX_AGE_DAYS) fall
+        through to Supabase Storage in case a fresher copy was uploaded by
+        another environment; the stale copy is still used as a last resort so
+        load never gets worse than the old behavior.
+        """
+        stale_fallback = None  # (data, source) of the freshest stale copy seen
+
         # L1: in-memory cache (avoids pickle I/O)
         cached = _model_cache_get(player_name)
         if cached is not None:
-            self._restore_from_dict(cached, player_name)
-            print(f"Loaded model from memory cache")
-            return True
+            if not self._is_stale(cached):
+                self._restore_from_dict(cached, player_name)
+                print(f"Loaded model from memory cache")
+                return True
+            stale_fallback = (cached, 'memory cache')
 
         # L2: disk
         filename = MODEL_DIR / f"{player_name.replace(' ', '_')}_model.pkl"
-        if filename.exists():
+        if stale_fallback is None and filename.exists():
             try:
                 with open(filename, 'rb') as f:
                     data = pickle.load(f)
-
-                self._restore_from_dict(data, player_name)
-
-                # Promote to L1 cache
-                _model_cache_put(player_name, data)
-                print(f"Loaded model from {filename}")
-                return True
+                if not self._is_stale(data):
+                    self._restore_from_dict(data, player_name)
+                    # Promote to L1 cache
+                    _model_cache_put(player_name, data)
+                    print(f"Loaded model from {filename}")
+                    return True
+                stale_fallback = (data, str(filename))
             except Exception as e:
                 print(f"Error loading model from disk: {e}")
 
@@ -3647,12 +3677,26 @@ class MLPredictor:
                 with open(filename, 'rb') as f:
                     data = pickle.load(f)
 
-                self._restore_from_dict(data, player_name)
-                _model_cache_put(player_name, data)
-                print(f"Loaded model from Supabase Storage")
-                return True
+                # Only prefer the download when it isn't older than what we have
+                local_age = self._model_age_days(stale_fallback[0]) if stale_fallback else None
+                remote_age = self._model_age_days(data)
+                if (stale_fallback is None or remote_age is None or local_age is None
+                        or remote_age <= local_age):
+                    self._restore_from_dict(data, player_name)
+                    _model_cache_put(player_name, data)
+                    print(f"Loaded model from Supabase Storage")
+                    return True
             except Exception as e:
                 print(f"Error loading model after Supabase download: {e}")
+
+        # Fall back to the stale copy rather than failing outright — the
+        # 7-day self-heal in update()/_needs_full_retrain() refreshes it.
+        if stale_fallback is not None:
+            data, source = stale_fallback
+            self._restore_from_dict(data, player_name)
+            _model_cache_put(player_name, data)
+            print(f"Loaded stale model from {source} (no fresher copy in Supabase)")
+            return True
 
         return False
 

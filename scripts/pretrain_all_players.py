@@ -8,8 +8,12 @@ features and trains the Gradient Boost models, permanently caching them to disk
 so the application has zero loading times for any user searches.
 """
 
+from __future__ import annotations
+
+import argparse
 import sys
 import time
+from datetime import datetime, date
 from pathlib import Path
 
 # Add project root to path
@@ -20,10 +24,50 @@ load_dotenv(Path(__file__).parent.parent / '.env', override=True)
 
 from nba_api.stats.static import players as nba_players
 from nba_evaluator import NBADataScraper, FeatureEngineer, MLPredictor
+from season_utils import today_et
 from api.services.prediction_service import PredictionService
 
-def main():
+DEFAULT_MAX_AGE_DAYS = 7
+
+
+def should_skip(trained_at, max_age_days: int, force: bool,
+                today: date | None = None) -> bool:
+    """Return True when an existing model is fresh enough to keep.
+
+    Args:
+        trained_at: 'YYYY-MM-DD' string from the model pickle (or None).
+        max_age_days: Models older than this get retrained.
+        force: Retrain regardless of age.
+        today: Reference date, defaults to today in ET (injectable for tests).
+    """
+    if force:
+        return False
+    if not trained_at:
+        return False  # Unknown age — retrain to be safe
+    try:
+        trained_date = datetime.strptime(str(trained_at)[:10], '%Y-%m-%d').date()
+    except ValueError:
+        return False
+    ref = today if today is not None else today_et()
+    return (ref - trained_date).days <= max_age_days
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Pre-train models for all active players")
+    parser.add_argument('--force', action='store_true',
+                        help="Retrain every player even if a fresh model exists")
+    parser.add_argument('--max-age-days', type=int, default=DEFAULT_MAX_AGE_DAYS,
+                        help=f"Retrain models older than this many days (default {DEFAULT_MAX_AGE_DAYS})")
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
     print("Initializing mass pre-training for all active NBA players...")
+    if args.force:
+        print("--force: retraining every player from scratch.")
+    else:
+        print(f"Retraining models older than {args.max_age_days} days.")
     scraper = NBADataScraper()
     pred_svc = PredictionService()
     active_list = nba_players.get_active_players()
@@ -50,13 +94,17 @@ def main():
             failed_count += 1
             continue
             
-        # 2. Check if model already exists
+        # 2. Skip only when an existing model is fresh enough
         predictor = MLPredictor(model_type='gradient_boost')
-        if predictor.load(player_info['player_name']):
-            print(f"Model already exists for {player_name}. Skipping to save API calls.")
-            skipped_count += 1
-            continue
-            
+        if not args.force and predictor.load(player_info['player_name']):
+            if should_skip(getattr(predictor, 'trained_at', None), args.max_age_days, args.force):
+                print(f"Fresh model exists for {player_name} (trained {predictor.trained_at}). Skipping.")
+                skipped_count += 1
+                continue
+            print(f"Model for {player_name} is stale (trained {predictor.trained_at}) — retraining.")
+            predictor = MLPredictor(model_type='gradient_boost')  # clean slate for retrain
+
+
         # 3. Fetch Game Log (automatically pulls 3 seasons if not in DB)
         try:
             game_log = scraper.get_player_game_log(player_info['player_id'])
