@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
+from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
 from slowapi.errors import RateLimitExceeded
 import psycopg2
@@ -77,6 +78,29 @@ async def lifespan(app: FastAPI):
         _logger.info("Game model not available yet — will train on first use")
 
     yield
+
+
+class SelectiveGZipMiddleware:
+    """GZip that passes Server-Sent Events through uncompressed.
+
+    Starlette's GZipMiddleware buffers streamed response bodies, which holds
+    back every SSE progress event until the stream closes — the frontend
+    progress bars sit frozen at 0% and jump to done. Requests that accept
+    text/event-stream bypass compression entirely; everything else gets the
+    normal GZip path.
+    """
+
+    def __init__(self, app, minimum_size: int = 1000):
+        self.app = app
+        self.gzip_app = GZipMiddleware(app, minimum_size=minimum_size)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            headers = Headers(scope=scope)
+            if "text/event-stream" in headers.get("accept", ""):
+                await self.app(scope, receive, send)
+                return
+        await self.gzip_app(scope, receive, send)
 
 
 class RequestBodyLimitMiddleware(BaseHTTPMiddleware):
@@ -156,14 +180,20 @@ app.add_exception_handler(psycopg2.OperationalError, _db_exception_handler)
 app.add_exception_handler(psycopg2.InterfaceError, _db_exception_handler)
 app.add_exception_handler(Exception, _general_exception_handler)
 
+# Middleware stack — add_middleware() wraps outside-in, so the LAST one added
+# is the OUTERMOST. Intended request path (outermost first):
+#   CORS → gzip (SSE-aware) → security headers → body limit → app
+# CORS must stay outermost so every response (including errors) carries CORS
+# headers for the browser.
+
 # Request body size limit (2 MB)
 app.add_middleware(RequestBodyLimitMiddleware)
 
 # Security headers
 app.add_middleware(SecurityHeadersMiddleware)
 
-# GZip compression (auto-skips SSE responses)
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+# GZip compression — skips text/event-stream so SSE progress isn't buffered
+app.add_middleware(SelectiveGZipMiddleware, minimum_size=1000)
 
 # CORS middleware for frontend
 _default_origins = "http://localhost:5173,http://localhost:5174,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:3000"
