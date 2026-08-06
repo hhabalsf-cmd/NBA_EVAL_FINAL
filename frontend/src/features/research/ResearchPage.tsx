@@ -49,7 +49,7 @@ export default function ResearchPage() {
   // Auto-populate line from sportsbook odds when stat changes
   useEffect(() => {
     if (!odds || !odds.found) return
-    const oddsLine = (odds as Record<string, any>)[activeStat]
+    const oddsLine = (odds as unknown as Record<string, number | null | undefined>)[activeStat]
     if (oddsLine != null && oddsLine > 0) {
       setLineInput(String(oddsLine))
     }
@@ -69,7 +69,7 @@ export default function ResearchPage() {
 
   const hasLiveLine = useMemo(() => {
     if (!odds || !odds.found) return false
-    return (odds as Record<string, any>)[activeStat] != null
+    return (odds as unknown as Record<string, number | null | undefined>)[activeStat] != null
   }, [odds, activeStat])
 
   // ── No player selected ────────────────────────────────────────────────────
@@ -199,7 +199,7 @@ export default function ResearchPage() {
                 onClick={() => setActiveStat(s)}
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold font-mono transition-all duration-150 flex-shrink-0"
                 style={activeStat === s
-                  ? { background: 'var(--accent)', color: '#09090B' }
+                  ? { background: 'var(--accent)', color: 'var(--bg-primary)' }
                   : { background: 'var(--bg-elevated)', color: 'var(--text-muted)', border: '1px solid rgba(255,255,255,0.06)' }
                 }
               >{s}</button>
@@ -246,7 +246,7 @@ export default function ResearchPage() {
                 onClick={() => setActiveStat(s)}
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold font-mono transition-all duration-150 flex-shrink-0"
                 style={activeStat === s
-                  ? { background: 'var(--accent)', color: '#09090B' }
+                  ? { background: 'var(--accent)', color: 'var(--bg-primary)' }
                   : { background: 'var(--bg-elevated)', color: 'var(--text-muted)', border: '1px solid rgba(255,255,255,0.06)' }
                 }
               >{s}</button>

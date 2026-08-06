@@ -87,7 +87,7 @@ export default function PlayerSearch({
         state: { headshot_url: player.headshot_url },
       })
     }
-  }, [onSelect, navigate])
+  }, [onSelect, navigate, replace])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (!isOpen || results.length === 0) return

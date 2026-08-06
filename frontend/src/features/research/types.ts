@@ -45,7 +45,7 @@ export function delta(val: number, base: number): number {
 
 export function hitColor(pct: number): string {
   if (pct >= 60) return 'var(--accent-success)'
-  if (pct >= 40) return '#E6A817'
+  if (pct >= 40) return 'var(--accent-warning)'
   return 'var(--accent-danger)'
 }
 

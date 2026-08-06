@@ -36,32 +36,34 @@ Both servers must run simultaneously. Vite proxies `/api/*` → `localhost:8000`
 ```python
 { 'OKC': {'def_rating': float, 'pace': float, 'opp_pts': float, 'opp_ast': float, 'pts_rank': int} }
 ```
-**CRITICAL:** Always use **lowercase** keys (`def_rating`, `pace`, `opp_ast`). Uppercase (`DEF_RATING`) silently returns fallback. API failure fallback: `def_rating: 110, pace: 100`.
+**CRITICAL:** Always use **lowercase** keys (`def_rating`, `pace`, `opp_ast`). Uppercase (`DEF_RATING`) silently returns fallback. Early-season (< 10 games per team): current-season stats blend with prior-season stats regressed 50% to the league mean; total failure falls back to `def_rating: 110, pace: 100`.
 
-**`FeatureEngineer`** — 82 canonical features (`FEATURE_COLS`): rolling avgs (5/10 + EMA for PTS/MIN), efficiency metrics, opponent defensive features (`OPP_DEF_RATING_NORM`, `OPP_PACE_NORM`), enhanced opponent context (off_rating, net_rating, eFG%, OREB%, DREB%), matchup history, home/away splits, B2B/rest, hot/cold streak, rebound splits (OREB/DREB), 3PT shooting features, FT rate, foul trouble, schedule density, travel, Vegas lines. `extract_opp_stats()` helper extracts all opponent context from team_stats dict. 26 dead/redundant features pruned (see commit `7ab42e3`).
+**`FeatureEngineer`** — 84 canonical features (`FEATURE_COLS`): rolling avgs (5/10 + EMA for PTS/MIN), efficiency metrics, opponent defensive features (`OPP_DEF_RATING_NORM`, `OPP_PACE_NORM`), enhanced opponent context (off_rating, net_rating, eFG%, OREB%, DREB%), matchup history, home/away splits, B2B/rest, hot/cold streak, rebound splits (OREB/DREB), 3PT shooting features, FT rate, foul trouble, schedule density, travel, Vegas lines, per-season `GAMES_THIS_SEASON`/`SEASON_PHASE` (GAME_NUM restarts each season — logs concatenate 3 seasons). `extract_opp_stats()` helper extracts all opponent context from team_stats dict.
 
 **`OddsAPI`** — Key lookup: function param → `ODDS_API_KEY` env var → `config.json`. Market map: `player_points→PTS`, `player_rebounds→REB`, `player_assists→AST`, `player_points_rebounds_assists→PRA`. **Status: quota exhausted** — replace key in `config.json` to re-enable.
 
 **`line_sources.py`** — Unified prop-line sourcing with fallback: OddsAPI → manual lines (Supabase `manual_lines` table, entered via `POST /api/bets/lines` / the Manual Lines panel on HomePage). BDL props are permanently gone (GOAT-tier endpoint, Apr 2026 downgrade). Feeds `BestBetsService` and `scripts/daily_best_picks.py`.
 
-**`season_utils.py`** — `get_current_season()` / `get_recent_seasons(n)` derive the NBA season string from the date (rollover Oct 1). Never hardcode season strings like `'2025-26'`.
+**`season_utils.py`** — Single source of truth for BOTH season strings and dates. `get_current_season()` / `get_recent_seasons(n)` derive the NBA season string (rollover Oct 1); `today_et()` / `today_et_str()` / `now_et()` give the Eastern-Time "game day". **Never hardcode season strings like `'2025-26'`, and never use `date.today()`/`datetime.now()` for game dates** — UTC servers roll over at 7–8 PM ET mid-slate.
 
-**`MLPredictor`** — Per-player per-stat models (PTS/REB/AST/PRA):
-- TimeSeriesSplit CV (no lookahead bias), stacking ensemble (RF + GB + XGBoost + LightGBM)
-- Quantile regression for `range_low`/`range_high`, isotonic probability calibration
+**`MLPredictor`** — Per-player per-stat models (`ALL_STATS = PTS/REB/AST/PRA`):
+- GradientBoostingRegressor per stat with Optuna HPO (default `gradient_boost`; optional ensemble/neural paths exist but are not the production path)
+- TimeSeriesSplit CV (no lookahead bias); quantile regression for `range_low`/`range_high`; probability calibration (Platt); PRA std floored at the RSS of component stds
 - `CONFIDENCE_CAPS`: PTS 88%, REB 82%, AST 78%, PRA 80%
-- PRA formula: 85% × component sum + 15% independent PRA model
-- Persistence: `models/{PlayerName}_model.pkl`
+- PRA formula: 85% × component sum + 15% independent PRA model. `train()`/`update()` default to `ALL_STATS`; PRA has dedicated train/update blocks — generic stat loops must not include it
+- Early-season damping: < 10 current-season games → confidence ×0.75–1.0, std ×1.3–1.0 (linear taper)
+- Persistence: L1 memory → L2 `models/{PlayerName}_model.pkl` → L3 Supabase Storage (`ml-models` bucket, source of truth). Stale local copies (> 7 days) check Supabase for a fresher one on load; `scripts/pretrain_all_players.py --force|--max-age-days` refreshes the fleet
+- `NBA_EVAL_DISABLE_TF=1` skips the optional TensorFlow import (set in tests/conftest.py; TF is not installed in production)
 
-**`enhanced_predictor.py`** — Bayesian hyperparameter search (Optuna, 40 trials), advanced stacking. `ELITE_DEFENSES`/`WEAK_DEFENSES` are hardcoded binary flags only — not used for display logic.
-
-**`game_predictor.py`** — ELO ratings (MOV-adjusted), Four Factors, stacking ensemble. Persisted at `models/games/game_predictor.pkl`.
+**`game_predictor.py`** — ELO ratings (MOV-adjusted), Four Factors, stacking ensemble. Persisted at `models/games/game_predictor.pkl` (+ Supabase Storage copy).
 
 ---
 
 ### API Layer — `api/`
 
-**`main.py`** — FastAPI, CORS (localhost:5173, :3000), docs at `/api/docs`.
+**`main.py`** — FastAPI, docs at `/api/docs`. Middleware (outermost first): CORS → catch-all-500 (JSON 500s carry CORS headers) → SelectiveGZip (skips `text/event-stream` so SSE isn't buffered) → security headers → 2MB body limit → SlowAPI rate limit (120/min default; key = rightmost `X-Forwarded-For`). Custom middleware lives in `api/middleware.py`.
+
+**Auth:** prediction/research/odds/evaluate-line endpoints and `POST /api/games/predict` require a Supabase Bearer token (`get_current_user`); `POST/DELETE /api/bets/lines` and `PUT /api/games/{id}/grade` require `profiles.role = 'admin'` (`require_admin`); auto-grade/sync/cron endpoints use `X-Service-Key`.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -104,7 +106,7 @@ Both servers must run simultaneously. Vite proxies `/api/*` → `localhost:8000`
 
 ### Frontend — `frontend/src/`
 
-**Stack:** React 18, TypeScript, Vite 5, Tailwind CSS 3, React Query 5, Zustand 4, Recharts 2
+**Stack:** React 18, TypeScript, Vite 6, Tailwind CSS 3, React Query 5, Zustand 4, Recharts 2, eslint 9 (flat config in `eslint.config.mjs`)
 
 Organized by **feature**, not file type. Each feature folder contains its page, components, hooks, and API functions.
 
@@ -144,18 +146,26 @@ Organized by **feature**, not file type. Each feature folder contains its page, 
 
 ### Data Storage
 
-**`picks_history.db`** (SQLite):
+**Supabase PostgreSQL** (all persistent data — `db.py` connects via `DATABASE_URL`):
 ```
-picks: id, timestamp, player, player_id, team_abbrev, stat, line, prediction,
-       direction, edge, confidence, opponent, is_home, actual_result, won,
-       model_type, game_date, graded_at, voided, void_reason, prob_over
-
+picks:            id, timestamp, player, player_id, team_abbrev, stat, line, prediction,
+                  direction, edge, confidence, opponent, is_home, actual_result, won,
+                  model_type, game_date, graded_at, voided, void_reason, prob_over
 game_predictions: id, timestamp, game_date, home_team, away_team, home/away_team_id,
                   predicted_winner, home/away_win_prob, confidence, actual_winner,
                   correct, key_factors (JSON), model_version, graded_at, extended_data (JSON)
+player_game_logs: per-player per-season logs (nightly sync) — feeds features + team stats
+daily_picks:      generated best bets per generated_date
+manual_lines:     fallback line source (unique per game_date+player+stat)
+profiles:         auth profiles (username, role, avatar_url, is_public);
+                  registration capped at 10 by a BEFORE INSERT trigger
+                  (supabase/limit_registrations.sql)
 ```
+- **All game-date columns store ET dates** (see `season_utils.today_et`)
+- pg_cron (see `supabase/pg_cron_setup.sql`): picks/games grading at 05:30/05:35 UTC (past ET midnight year-round), daily picks + game predictions at 13:00 UTC, nightly sync at 06:00 UTC, keepalive every 10 min
 - Never hard-delete picks — use `voided=1` + `void_reason`
-- `config.json` — `{"odds_api_key": "..."}` (also reads `ODDS_API_KEY` env var)
+- `config.json` — `{"odds_api_key": "..."}` (also reads `ODDS_API_KEY` env var; resolution lives in `line_sources._resolve_odds_api_key`)
+- ML models: Supabase Storage bucket `ml-models` (source of truth); local `models/` is a cache
 - Cache dirs (gitignored): `./cache/`, `./data/`, `./history/`
 
 ---
@@ -164,7 +174,7 @@ game_predictions: id, timestamp, game_date, home_team, away_team, home/away_team
 
 - **SSE streaming:** `usePrediction` hook drives progress bar for player + game predictions
 - **Per-player models:** Pass `retrain=True` to force retraining from scratch
-- **Defense via features:** `OPP_DEF_RATING_NORM`/`OPP_PACE_NORM` fed into all models — one signal among 57. VS_OPP history can override season-level defensive signal
+- **Defense via features:** `OPP_DEF_RATING_NORM`/`OPP_PACE_NORM` fed into all models — one signal among 84. VS_OPP history can override season-level defensive signal
 - **Mutation invalidation:** Grading cascades `invalidateQueries` on `['picks']`, `['performance-stats']`, `['cumulative-profit']`
 - **Injury adjustments:** Usage redistribution when teammates out; opponent weakening when key opponents out
 

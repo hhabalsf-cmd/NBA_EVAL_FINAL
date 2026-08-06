@@ -4,6 +4,15 @@ import { getTeamInjuries, type InjuredPlayer } from '../predictions/api'
 import type { ResearchTabProps } from './types'
 
 export default function MatchupTab({ data }: ResearchTabProps) {
+  // Hooks must run unconditionally — keep this above the no-game early return
+  const { data: injuries, isLoading: injuriesLoading } = useQuery({
+    queryKey: ['team-injuries-research', data.player_name],
+    queryFn: () => getTeamInjuries(data.player_name),
+    enabled: !!data.player_name && !!data.next_game,
+    staleTime: 1000 * 60 * 5,
+    retry: 1,
+  })
+
   if (!data.next_game) {
     return (
       <div className="card p-8 flex flex-col items-center gap-3">
@@ -17,15 +26,6 @@ export default function MatchupTab({ data }: ResearchTabProps) {
   }
 
   const oppAbbrev = data.next_game.opponent
-
-  // Fetch opponent injuries (API takes player name, returns {team, opponent})
-  const { data: injuries, isLoading: injuriesLoading } = useQuery({
-    queryKey: ['team-injuries-research', data.player_name],
-    queryFn: () => getTeamInjuries(data.player_name),
-    enabled: !!data.player_name,
-    staleTime: 1000 * 60 * 5,
-    retry: 1,
-  })
 
   // Flatten opponent injuries into a single list
   const oppInjuries: InjuredPlayer[] = injuries?.opponent

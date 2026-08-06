@@ -32,7 +32,7 @@ export default function PlayerPage() {
   const { playerName } = useParams<{ playerName: string }>()
   const navigate = useNavigate()
   const location = useLocation()
-  const headshotUrl: string | undefined = (location.state as any)?.headshot_url
+  const headshotUrl: string | undefined = (location.state as { headshot_url?: string } | null)?.headshot_url
   const { isLoading, progress, message, result, error, predict } = usePrediction()
 
   const [lineInputs, setLineInputs] = useState<Record<string, string>>({})

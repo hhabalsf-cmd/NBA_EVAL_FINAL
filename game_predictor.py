@@ -78,15 +78,33 @@ warnings.filterwarnings("ignore")
 GAME_MODEL_DIR = MODEL_DIR / "games"
 GAME_MODEL_DIR.mkdir(exist_ok=True)
 
-# Team timezone offsets (UTC) for travel effects
+# Team home time zones (IANA) for travel effects. Fixed UTC offsets were
+# wrong half the year: Phoenix skips DST, so its offset relative to every
+# other team changes seasonally.
 TEAM_TIMEZONE = {
-    'BOS': -5, 'BKN': -5, 'NYK': -5, 'PHI': -5, 'TOR': -5,
-    'CHI': -6, 'CLE': -5, 'DET': -5, 'IND': -5, 'MIL': -6,
-    'ATL': -5, 'CHA': -5, 'MIA': -5, 'ORL': -5, 'WAS': -5,
-    'DEN': -7, 'MIN': -6, 'OKC': -6, 'POR': -8, 'UTA': -7,
-    'GSW': -8, 'LAC': -8, 'LAL': -8, 'PHX': -7, 'SAC': -8,
-    'DAL': -6, 'HOU': -6, 'MEM': -6, 'NOP': -6, 'SAS': -6,
+    'BOS': 'America/New_York', 'BKN': 'America/New_York', 'NYK': 'America/New_York',
+    'PHI': 'America/New_York', 'TOR': 'America/Toronto',
+    'CHI': 'America/Chicago', 'CLE': 'America/New_York', 'DET': 'America/Detroit',
+    'IND': 'America/Indiana/Indianapolis', 'MIL': 'America/Chicago',
+    'ATL': 'America/New_York', 'CHA': 'America/New_York', 'MIA': 'America/New_York',
+    'ORL': 'America/New_York', 'WAS': 'America/New_York',
+    'DEN': 'America/Denver', 'MIN': 'America/Chicago', 'OKC': 'America/Chicago',
+    'POR': 'America/Los_Angeles', 'UTA': 'America/Denver',
+    'GSW': 'America/Los_Angeles', 'LAC': 'America/Los_Angeles', 'LAL': 'America/Los_Angeles',
+    'PHX': 'America/Phoenix', 'SAC': 'America/Los_Angeles',
+    'DAL': 'America/Chicago', 'HOU': 'America/Chicago', 'MEM': 'America/Chicago',
+    'NOP': 'America/Chicago', 'SAS': 'America/Chicago',
 }
+
+
+def _team_utc_offset_hours(abbrev: str) -> float:
+    """Current UTC offset in hours for a team's home time zone (DST-aware)."""
+    tz_name = TEAM_TIMEZONE.get(abbrev, 'America/New_York')
+    try:
+        offset = datetime.now(ZoneInfo(tz_name)).utcoffset()
+        return offset.total_seconds() / 3600 if offset else -5.0
+    except Exception:
+        return -5.0
 
 
 # ── Elo Rating System ──────────────────────────────────────────
@@ -788,7 +806,7 @@ class GamePredictor:
                 matchup = str(last_game.iloc[-1].get('MATCHUP', ''))
                 if '@' in matchup:
                     opp = matchup.split()[-1]
-                    tz_change = abs(TEAM_TIMEZONE.get(team_abbrev, -5) - TEAM_TIMEZONE.get(opp, -5))
+                    tz_change = abs(_team_utc_offset_hours(team_abbrev) - _team_utc_offset_hours(opp))
 
         return {'rest': rest, 'b2b': b2b, 'three_in_four': three_in_four,
                 'tz_change': tz_change, 'games_in_7': games_in_7}
@@ -1785,7 +1803,6 @@ class GamePredictor:
         print("Retraining model with latest data (V2)...")
         print()
 
-        current_season = get_current_season()
         seasons = get_recent_seasons(3)
 
         success = self.train_model(seasons=seasons)

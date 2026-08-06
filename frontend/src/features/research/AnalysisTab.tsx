@@ -202,7 +202,7 @@ export default function AnalysisTab({ data, activeStat, parsedLine, seasonAvg }:
                     <span className="text-xs font-mono font-bold" style={{ color: 'var(--text-muted)' }}>{stat}</span>
                   </td>
                   <td className="px-3 py-2 text-center font-mono text-sm" style={{ color: 'var(--text-primary)' }}>
-                    {getStatValue(data.season_averages, stat as any).toFixed(1)}
+                    {getStatValue(data.season_averages, stat as Parameters<typeof getStatValue>[1]).toFixed(1)}
                   </td>
                   <td className="px-3 py-2 text-center font-mono text-sm" style={{ color: 'var(--text-secondary)' }}>{a.median.toFixed(1)}</td>
                   <td className="px-3 py-2 text-center font-mono text-sm" style={{ color: 'var(--text-secondary)' }}>{a.std_dev.toFixed(1)}</td>

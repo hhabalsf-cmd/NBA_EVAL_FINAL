@@ -112,11 +112,11 @@ _PROJ_TTL = 30 * 60  # 30 minutes
 
 
 def _get_current_nba_week() -> int:
-    """Rough estimate of the current NBA week number (1-based, starting Oct 22)."""
+    """Rough estimate of the current NBA week number (1-based, starting ~Oct 22)."""
     import datetime
-    season_start = datetime.date(2024, 10, 22)
-    today = datetime.date.today()
-    delta = (today - season_start).days
+    from season_utils import get_current_season, today_et
+    season_start = datetime.date(int(get_current_season()[:4]), 10, 22)
+    delta = (today_et() - season_start).days
     return max(1, delta // 7 + 1)
 
 

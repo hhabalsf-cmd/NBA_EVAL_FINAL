@@ -1,0 +1,11 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "unit: fast tests with no network or database dependency",
+    "integration: tests needing a live database or external service",
+    "slow: long-running tests (model training); deselect with -m 'not slow'",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::FutureWarning",
+]
