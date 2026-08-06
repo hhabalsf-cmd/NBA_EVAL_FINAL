@@ -60,8 +60,12 @@ try:
 except ImportError:
     OPTUNA_AVAILABLE = False
 
-# Neural Network (TensorFlow/Keras)
+# Neural Network (TensorFlow/Keras) — optional; not installed in production.
+# NBA_EVAL_DISABLE_TF=1 skips the import entirely: TF is unused by the
+# default gradient_boost path and its import can deadlock restricted shells.
 try:
+    if os.environ.get('NBA_EVAL_DISABLE_TF') == '1':
+        raise ImportError("TensorFlow disabled via NBA_EVAL_DISABLE_TF")
     import tensorflow as tf
     from tensorflow import keras
     from tensorflow.keras import layers
@@ -167,9 +171,18 @@ def should_retrain(player_name: str) -> bool:
     return last_modified < cutoff
 
 
-# Derived from today's date — rolls over automatically each October.
+# DEPRECATED: frozen at import time, so a long-lived API worker started in
+# September keeps the old season forever. Kept only for import compatibility —
+# internal code calls get_current_season()/get_recent_seasons() at call time.
 CURRENT_SEASON = get_current_season()
 HISTORICAL_SEASONS = get_recent_seasons(3)[1:]
+
+# Every stat the app serves. Retrain paths must use this list so no path
+# silently trains/updates a subset and drops the PRA model artifacts.
+ALL_STATS = ['PTS', 'REB', 'AST', 'PRA']
+# PRA is derived (PTS+REB+AST) and has dedicated train/update blocks;
+# generic per-stat loops iterate the components only.
+COMPONENT_STATS = ['PTS', 'REB', 'AST']
 
 # Cache expiration times (in seconds)
 CACHE_EXPIRY = {
@@ -546,7 +559,7 @@ class NBADataScraper:
         for season in seasons:
             season_int = int(season.split('-')[0])
 
-            if season != CURRENT_SEASON:
+            if season != get_current_season():
                 # Historical: check Supabase first
                 cached_df = _db.get_game_logs_from_supabase(str(player_id), season)
                 if cached_df is not None and not cached_df.empty:
@@ -801,7 +814,7 @@ class NBADataScraper:
         import db as _db
         import concurrent.futures
 
-        season = season or CURRENT_SEASON
+        season = season or get_current_season()
 
         # 1. Local file cache (fastest, 1h TTL)
         cached = CacheManager.get('team_stats', season, expiry_type='team_stats')
@@ -821,16 +834,107 @@ class NBADataScraper:
             from stats_aggregator import compute_team_season_stats
             team_data = compute_team_season_stats(season)
             if team_data:
+                team_data = self._blend_early_season_team_stats(team_data, season)
                 CacheManager.set('team_stats', team_data, season)
                 return team_data
             raise ValueError("compute_team_season_stats returned empty")
         except Exception as e:
             print(f"Error computing team defensive stats: {e}")
+            # Early October: no current-season data yet. Last season's stats
+            # regressed 50% to the league mean beat a flat 110/100 that makes
+            # every one of the 30 defenses look identical.
+            baseline = self._prior_season_team_baseline(season)
+            if baseline:
+                print(f"Using prior-season team stats regressed 50% to league mean")
+                return baseline
             return {abbrev: {
                 'def_rating': 110, 'pace': 100, 'opp_pts': 110, 'pts_rank': 15, 'opp_ast': 25,
                 'off_rating': 110, 'net_rating': 0, 'efg_pct': 0.50, 'ts_pct': 0.56,
                 'ast_pct': 0.60, 'tov_pct': 14.0, 'oreb_pct': 0.27, 'dreb_pct': 0.73,
             } for abbrev in TEAM_ABBREV_TO_NAME}
+
+    # Numeric per-team stats that can be blended/regressed toward league mean
+    _BLENDABLE_TEAM_KEYS = (
+        'def_rating', 'pace', 'opp_pts', 'opp_ast', 'off_rating', 'net_rating',
+        'efg_pct', 'ts_pct', 'ast_pct', 'tov_pct', 'oreb_pct', 'dreb_pct',
+    )
+
+    def _prior_season_team_baseline(self, season):
+        """Prior-season team stats regressed 50% toward the league mean, or None.
+
+        Regression to the mean reflects roster turnover: an elite defense last
+        year is probably still good, but not last-year-elite."""
+        import db as _db
+        prev_start = int(season[:4]) - 1
+        prev = f"{prev_start}-{(prev_start + 1) % 100:02d}"
+
+        source = None
+        try:
+            source = _db.get_team_stats_from_supabase(prev)
+        except Exception:
+            pass
+        if not source:
+            try:
+                from stats_aggregator import compute_team_season_stats
+                source = compute_team_season_stats(prev)
+            except Exception:
+                pass
+        if not source:
+            return None
+
+        league = {}
+        for key in self._BLENDABLE_TEAM_KEYS:
+            vals = [t[key] for t in source.values()
+                    if isinstance(t.get(key), (int, float))]
+            if vals:
+                league[key] = sum(vals) / len(vals)
+
+        baseline = {}
+        for abbrev, stats in source.items():
+            regressed = dict(stats)
+            for key, mean in league.items():
+                if isinstance(stats.get(key), (int, float)):
+                    regressed[key] = round(0.5 * stats[key] + 0.5 * mean, 3)
+            baseline[abbrev] = regressed
+        return baseline
+
+    def _blend_early_season_team_stats(self, team_data, season):
+        """Blend sparse current-season team stats with the prior-season baseline.
+
+        A team with g < 10 games gets weight g/10 on this season's numbers and
+        the rest on last season regressed to the mean; teams with no games yet
+        get the baseline outright. No-op once every team has 10+ games."""
+        def _games(stats):
+            try:
+                return int(stats.get('w', 0)) + int(stats.get('l', 0))
+            except (TypeError, ValueError):
+                return 0
+
+        sparse = {ab for ab, st in team_data.items() if _games(st) < 10}
+        missing = set(TEAM_ABBREV_TO_NAME) - set(team_data)
+        if not sparse and not missing:
+            return team_data
+
+        baseline = self._prior_season_team_baseline(season)
+        if not baseline:
+            return team_data
+
+        blended = dict(team_data)
+        for abbrev in sparse:
+            base = baseline.get(abbrev)
+            if not base:
+                continue
+            w = min(1.0, _games(team_data[abbrev]) / 10)
+            mixed = dict(team_data[abbrev])
+            for key in self._BLENDABLE_TEAM_KEYS:
+                cur, prior = team_data[abbrev].get(key), base.get(key)
+                if isinstance(cur, (int, float)) and isinstance(prior, (int, float)):
+                    mixed[key] = round(w * cur + (1 - w) * prior, 3)
+            blended[abbrev] = mixed
+        for abbrev in missing:
+            if abbrev in baseline:
+                blended[abbrev] = dict(baseline[abbrev])
+        return blended
 
     def get_league_averages(self, season=None):
         """Get league average stats for normalization.
@@ -839,7 +943,7 @@ class NBADataScraper:
         """
         import db as _db
 
-        season = season or CURRENT_SEASON
+        season = season or get_current_season()
 
         cached = CacheManager.get('league_avg', season, expiry_type='league_avg')
         if cached is not None:
@@ -873,8 +977,11 @@ class OddsAPI:
     }
 
     def __init__(self, api_key=None):
-        """Initialize with API key from param, env var, or config file"""
-        self.api_key = api_key or os.environ.get('ODDS_API_KEY')
+        """Initialize with API key from param, env var, or config.json."""
+        # line_sources owns key resolution (env var → config.json) so the CLI
+        # and API paths can't disagree about where the key lives.
+        from line_sources import _resolve_odds_api_key
+        self.api_key = api_key or _resolve_odds_api_key()
 
         if not self.api_key:
             print("No Odds API key found. Set ODDS_API_KEY env var or add to config.json")
@@ -1280,8 +1387,21 @@ class FeatureEngineer:
         # Extended rest indicator (3+ days off)
         df['EXTENDED_REST'] = (df['DAYS_REST'] >= 3).astype(int)
 
-        # Game number in season
-        df['GAME_NUM'] = range(1, len(df) + 1)
+        # Game number WITHIN each season — logs concatenate multiple seasons,
+        # so a global counter would mark every current-season game as
+        # late-season/playoffs and never emit an early-season signal.
+        if 'SEASON' in df.columns:
+            season_key = df['SEASON'].astype(str)
+        elif 'SEASON_ID' in df.columns:
+            # NBA API SEASON_ID is e.g. '22025' (regular) / '42025' (playoffs);
+            # keying on the season year keeps playoff games numbered after 82
+            season_key = df['SEASON_ID'].astype(str).str[-4:]
+        else:
+            season_key = pd.Series('all', index=df.index)
+        df['GAME_NUM'] = df.groupby(season_key).cumcount() + 1
+
+        # Games played so far in that row's season (continuous early-season signal)
+        df['GAMES_THIS_SEASON'] = df['GAME_NUM']
 
         # Season phase (early=1, mid=2, late=3, playoffs=4)
         df['SEASON_PHASE'] = pd.cut(df['GAME_NUM'],
@@ -1605,6 +1725,8 @@ class FeatureEngineer:
             'IS_COLD': latest.get('IS_COLD', 0),
             # Season phase
             'SEASON_PHASE': latest.get('SEASON_PHASE', 2),
+            # The upcoming game is one deeper into the season than the latest log row
+            'GAMES_THIS_SEASON': latest.get('GAMES_THIS_SEASON', 41) + 1,
 
             # =====================
             # ADVANCED STATS
@@ -1831,6 +1953,7 @@ class MLPredictor:
         'IS_HOT', 'IS_COLD',
         # Season phase
         'SEASON_PHASE',
+        'GAMES_THIS_SEASON',
         # Opponent context
         'OPP_DEF_RATING_NORM', 'OPP_PACE_NORM', 'OPP_AST_ALLOWED_NORM',
         # Efficiency metrics (keep ROLL_5 only — ROLL_10_TS_PCT redundant)
@@ -2401,9 +2524,14 @@ class MLPredictor:
 
     def train(self, df, stats=None):
         """Train models for specified stats with feature selection, quantile regression,
-        residual correction, probability calibration, and optional Optuna HPO."""
+        residual correction, probability calibration, and optional Optuna HPO.
+
+        PRA is always trained via its dedicated block below (it is derived from
+        the components), so the per-stat loop runs on component stats only.
+        """
         if stats is None:
-            stats = ['PTS', 'REB', 'AST']
+            stats = ALL_STATS
+        stats = [s for s in stats if s != 'PRA']
         feature_cols = self.FEATURE_COLS
 
         # Filter to available features
@@ -2718,7 +2846,8 @@ class MLPredictor:
         - Model is older than 7 days
         """
         if stats is None:
-            stats = ['PTS', 'REB', 'AST']
+            stats = ALL_STATS  # A partial default here silently dropped PRA on every self-heal retrain
+        stats = [s for s in stats if s != 'PRA']  # PRA has its own update block below
         if not self.models or not self.last_game_date:
             print("No existing model to update, training from scratch...")
             return self.train(df, stats)
@@ -2857,10 +2986,10 @@ class MLPredictor:
     def _update_recent_averages(self, df, stats=None):
         """Update recent averages (L10) and full-season averages from latest data."""
         if stats is None:
-            stats = ['PTS', 'REB', 'AST']
+            stats = COMPONENT_STATS
         if not hasattr(self, 'season_averages'):
             self.season_averages = {}
-        for stat in stats + ['PRA']:
+        for stat in dict.fromkeys(list(stats) + ['PRA']):
             if stat == 'PRA':
                 if all(s in df.columns for s in ['PTS', 'REB', 'AST']):
                     pra_series = df['PTS'] + df['REB'] + df['AST']
@@ -3370,13 +3499,46 @@ class MLPredictor:
         except Exception:
             return None
 
+    @staticmethod
+    def _current_season_games(df):
+        """Games the player has logged in the current season, or None if unknown."""
+        try:
+            cur = get_current_season()
+            if 'SEASON' in df.columns:
+                return int((df['SEASON'].astype(str) == cur).sum())
+            if 'SEASON_ID' in df.columns:
+                return int((df['SEASON_ID'].astype(str).str[-4:] == cur[:4]).sum())
+            if 'GAMES_THIS_SEASON' in df.columns and len(df):
+                return int(df['GAMES_THIS_SEASON'].iloc[-1])
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _early_season_damping(games_this_season):
+        """(confidence_mult, std_mult) softening outputs while a season is young.
+
+        With fewer than 10 current-season games the model is extrapolating
+        from last season's role/team context, so confidence is discounted up
+        to 25% and uncertainty inflated up to 30%, tapering linearly to
+        neutral at 10 games. Layered on top of the sample-size penalty.
+        """
+        if games_this_season is None or games_this_season >= 10:
+            return 1.0, 1.0
+        g = max(0, games_this_season)
+        return 0.75 + 0.25 * g / 10, 1 + 0.3 * (10 - g) / 10
+
     def get_confidence(self, df, stat, prediction, features_df=None):
         """Calculate confidence interval using quantile regression when available,
         falling back to historical variance with per-stat calibration.
 
-        Applies a sample-size penalty for players with limited training data."""
+        Applies a sample-size penalty for players with limited training data
+        and an early-season damping while current-season games < 10."""
 
         sample_penalty = self._sample_size_penalty()
+        early_conf_mult, early_std_mult = self._early_season_damping(
+            self._current_season_games(df)
+        )
 
         # --- Quantile Regression bounds (Improvement #4) ---
         q10_key, q90_key = f'{stat}_q10', f'{stat}_q90'
@@ -3407,6 +3569,13 @@ class MLPredictor:
                 raw_confidence = 100 - quantile_std * scale
                 confidence = min(cap, max(55, raw_confidence))
                 confidence = confidence * sample_penalty  # Apply sample-size discount
+                confidence = confidence * early_conf_mult
+
+                if early_std_mult > 1.0:
+                    widen = quantile_std * (early_std_mult - 1) * 1.28
+                    q10_adj -= widen
+                    q90_adj += widen
+                    quantile_std = quantile_std * early_std_mult
 
                 return {
                     'low': round(q10_adj, 1),
@@ -3428,6 +3597,8 @@ class MLPredictor:
             raw_confidence = 100 - combined_std * scale
             confidence = min(cap, max(55, raw_confidence))
             confidence = confidence * sample_penalty  # Apply sample-size discount
+            confidence = confidence * early_conf_mult
+            combined_std = combined_std * early_std_mult
 
             return {
                 'low': round(prediction - 1.5 * combined_std, 1),
@@ -4065,15 +4236,17 @@ def find_best_bets(min_edge=5.0, max_edge=55.0, max_results=20, select_games=Fal
         # Filter to only selected games
         all_props = [p for p in all_props if p['home_team'] in selected_teams or p['away_team'] in selected_teams]
     else:
-        # Get all today's props
-        all_props = odds_api.get_all_todays_props()
+        # Unified source chain: Odds API → manual lines (Supabase)
+        from line_sources import fetch_todays_props
+        all_props = fetch_todays_props()
 
     if not all_props:
         print("\n No player props available for today.")
         print("   This could mean:")
         print("   - No games scheduled today")
         print("   - Props not yet posted (check closer to game time)")
-        print("   - API key issue (check ODDS_API_KEY env var)")
+        print("   - API key issue (check ODDS_API_KEY env var / config.json)")
+        print("   - No manual lines entered for today (POST /api/bets/lines)")
         return []
 
     # Pre-fetch team stats

@@ -75,6 +75,8 @@ export interface PredictionResult {
   games_trained_on: number
   game_log?: GameLogEntry[]
   avg_min_l10?: number
+  /** Games logged in the current season; < 10 marks early-season estimates */
+  games_this_season?: number | null
 }
 
 export interface LineEvaluation {

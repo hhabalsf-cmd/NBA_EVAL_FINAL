@@ -28,9 +28,11 @@ interface PredictionCardProps {
   stat: string
   prediction: StatPrediction
   onChartClick?: () => void
+  /** Render the early-season badge (player has < 10 games this season) */
+  earlySeason?: boolean
 }
 
-export default function PredictionCard({ stat, prediction, onChartClick }: PredictionCardProps) {
+export default function PredictionCard({ stat, prediction, onChartClick, earlySeason }: PredictionCardProps) {
   const animatedPrediction = useCountUp(prediction.prediction)
   const tilt = useTilt({ maxTilt: 8, scale: 1.03 })
 
@@ -85,6 +87,19 @@ export default function PredictionCard({ stat, prediction, onChartClick }: Predi
         <span className="text-[11px] font-medium uppercase tracking-wider text-text-muted">{getStatLabel()}</span>
         <span className="font-mono font-semibold text-sm text-text-secondary">{stat}</span>
       </div>
+
+      {earlySeason && (
+        <div
+          className="inline-block mb-3 px-2 py-0.5 rounded-full text-[10px] font-medium uppercase tracking-wide"
+          style={{
+            color: 'var(--accent-warning, var(--accent))',
+            backgroundColor: 'rgba(var(--accent-rgb), 0.12)',
+          }}
+          title="Fewer than 10 games this season — confidence is reduced and ranges widened while the model relearns this season's role"
+        >
+          Early-season estimate
+        </div>
+      )}
 
       <div className="mb-4">
         <div className="font-mono text-3xl font-bold text-text-primary tracking-tight">

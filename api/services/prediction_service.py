@@ -747,6 +747,7 @@ class PredictionService:
             "games_trained_on": predictor.games_trained_on,
             "game_log": game_log_data,
             "avg_min_l10": avg_min_l10,
+            "games_this_season": predictor._current_season_games(df_features),
         }
         _save_prediction_cache(canonical_name, result_data)
 

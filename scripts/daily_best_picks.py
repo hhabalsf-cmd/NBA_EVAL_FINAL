@@ -461,7 +461,7 @@ def generate_daily_picks() -> list[dict]:
             # Train a new model on the spot
             logger.info(f"Training new model for {player_name} ({len(df)} games)...")
             try:
-                train_success = predictor.train(df, stats=STATS_TO_EVALUATE[:3])  # PTS, REB, AST
+                train_success = predictor.train(df, stats=STATS_TO_EVALUATE)
                 if not train_success:
                     logger.warning(f"Training failed for {player_name}")
                     players_skipped += 1

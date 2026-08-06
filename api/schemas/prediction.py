@@ -92,6 +92,9 @@ class PredictionResponse(BaseModel):
     games_trained_on: int
     game_log: Optional[List[GameLogEntry]] = None
     avg_min_l10: Optional[float] = None
+    # Player's games logged in the current season; < 10 means predictions are
+    # early-season estimates (confidence damped, uncertainty widened)
+    games_this_season: Optional[int] = None
 
 
 # === Line Evaluation Schemas ===

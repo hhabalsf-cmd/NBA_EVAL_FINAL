@@ -339,6 +339,7 @@ export default function PlayerPage() {
                   stat={stat}
                   prediction={prediction}
                   onChartClick={() => setChartStat(stat)}
+                  earlySeason={result.games_this_season != null && result.games_this_season < 10}
                 />
               </motion.div>
             )
