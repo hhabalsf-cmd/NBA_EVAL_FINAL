@@ -44,7 +44,6 @@ from nba_evaluator import (
     FeatureEngineer,
     MLPredictor,
     MODEL_DIR,
-    CURRENT_SEASON,
 )
 
 # ── NBA CDN headshot fallback ──────────────────────────────────
@@ -181,10 +180,11 @@ def _fetch_player_props_lookup(games: list[dict]) -> dict:
     return {'by_id': {}, 'by_name': by_name}
 
 
-def _get_players_for_teams(team_abbrevs: set[str]) -> list[dict]:
+def _get_players_for_teams(team_abbrevs: set[str], seasons: list[str]) -> list[dict]:
     """
     Return active players on the given teams by scanning Supabase game logs.
-    Filters to players who average >= MIN_MINUTES_AVG in the current season.
+    Pools the given seasons so the eligibility gate (avg minutes + game count)
+    still passes in October/November before current-season games accumulate.
     """
     logger.info(f"Finding active players on {len(team_abbrevs)} teams...")
     conn = db.get_connection()
@@ -194,14 +194,14 @@ def _get_players_for_teams(team_abbrevs: set[str]) -> list[dict]:
                 SELECT
                     player_id,
                     MAX(player_name) AS player_name,
-                    MAX(matchup) AS last_matchup,
+                    (ARRAY_AGG(matchup ORDER BY game_date DESC))[1] AS last_matchup,
                     AVG(min) AS avg_min,
                     COUNT(*) AS games_played
                 FROM player_game_logs
-                WHERE season = %s
+                WHERE season = ANY(%s)
                 GROUP BY player_id
                 HAVING AVG(min) >= %s AND COUNT(*) >= %s
-            """, (CURRENT_SEASON, MIN_MINUTES_AVG, MIN_GAMES_TO_TRAIN))
+            """, (list(seasons), MIN_MINUTES_AVG, MIN_GAMES_TO_TRAIN))
             rows = cur.fetchall()
     finally:
         db.put_connection(conn)
@@ -288,7 +288,7 @@ def _compute_vs_stats(game_log_df, opponent: str):
     }
 
 
-def _sync_game_logs_for_prop_players(props_lookup: dict) -> int:
+def _sync_game_logs_for_prop_players(props_lookup: dict, current_season: str) -> int:
     """
     Ensure game logs in Supabase are up-to-date for all players who have prop lines.
     Always re-fetches current season from BDL — insert uses ON CONFLICT DO NOTHING
@@ -303,7 +303,7 @@ def _sync_game_logs_for_prop_players(props_lookup: dict) -> int:
     logger.info(f"Syncing game logs for {len(bdl_player_ids)} players with prop lines...")
 
     scraper = NBADataScraper()
-    season_int = int(CURRENT_SEASON.split('-')[0])
+    season_int = int(current_season.split('-')[0])
     synced = 0
 
     for bdl_pid in bdl_player_ids:
@@ -311,9 +311,9 @@ def _sync_game_logs_for_prop_players(props_lookup: dict) -> int:
         # insert_game_logs_to_supabase uses ON CONFLICT DO NOTHING,
         # so existing rows are skipped and only new games are inserted.
         try:
-            df = scraper._fetch_bdl_game_log(bdl_pid, bdl_pid, season_int, CURRENT_SEASON)
+            df = scraper._fetch_bdl_game_log(bdl_pid, bdl_pid, season_int, current_season)
             if df is not None and not df.empty:
-                db.insert_game_logs_to_supabase(df, str(bdl_pid), CURRENT_SEASON)
+                db.insert_game_logs_to_supabase(df, str(bdl_pid), current_season)
                 synced += 1
                 logger.debug(f"Synced {len(df)} games for player {bdl_pid}")
         except Exception as exc:
@@ -333,6 +333,11 @@ def generate_daily_picks() -> list[dict]:
     Main entry point: evaluate all eligible players and return
     the top picks sorted by abs(edge) descending.
     """
+    # Resolve seasons at call time — this runs inside a long-lived API worker,
+    # so import-time constants would freeze the pre-rollover season.
+    seasons = get_recent_seasons(3)
+    current_season = seasons[0]
+
     # 1. Get today's games (or tomorrow's if none today)
     games = _get_teams_playing_today()
     if not games:
@@ -363,7 +368,7 @@ def generate_daily_picks() -> list[dict]:
         team_game_map[g['away_abbrev']] = g
 
     # 2. Ensure game logs exist for all players with prop lines
-    _sync_game_logs_for_prop_players(props_lookup)
+    _sync_game_logs_for_prop_players(props_lookup, current_season)
 
     # 3. Get team defensive stats and injury report
     scraper = NBADataScraper()
@@ -375,7 +380,7 @@ def generate_daily_picks() -> list[dict]:
     logger.info(f"Loaded injury report: {total_out} players out across {len(injuries)} teams.")
 
     # 4. Get eligible players
-    eligible_players = _get_players_for_teams(team_abbrevs_today)
+    eligible_players = _get_players_for_teams(team_abbrevs_today, seasons)
     if not eligible_players:
         logger.info("No eligible players found.")
         return []
@@ -400,8 +405,9 @@ def generate_daily_picks() -> list[dict]:
         is_home = game['home_abbrev'] == team_abbrev
         opponent = game['away_abbrev'] if is_home else game['home_abbrev']
 
-        # Load game log from Supabase (no NBA API call)
-        game_log = db.get_game_logs_from_supabase(str(player_id), CURRENT_SEASON)
+        # Load game log from Supabase (no NBA API call) — pool recent seasons
+        # so models have training data before the current season accumulates
+        game_log = db.get_game_logs_multi_season(str(player_id), seasons)
         if game_log is None or len(game_log) < MIN_GAMES_TO_TRAIN:
             logger.debug(f"Skipping {player_name}: only {len(game_log) if game_log is not None else 0} games (need {MIN_GAMES_TO_TRAIN})")
             players_skipped += 1

@@ -229,6 +229,35 @@ def get_game_logs_from_supabase(player_id: str, season: str):
     return df
 
 
+def get_game_logs_multi_season(player_id: str, seasons: List[str]):
+    """
+    Return a DataFrame of game logs for player_id across the given seasons,
+    oldest game first, or None if no rows exist. Column names match NBA API
+    format. Pools seasons so early-season pipelines still have training data.
+    """
+    if not seasons:
+        raise ValueError("seasons must be a non-empty list")
+
+    with borrow_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM player_game_logs
+                WHERE player_id = %s AND season = ANY(%s)
+                ORDER BY game_date ASC
+                """,
+                (player_id, list(seasons)),
+            )
+            rows = cur.fetchall()
+
+    if not rows:
+        return None
+
+    df = pd.DataFrame([dict(r) for r in rows])
+    df = df.rename(columns=_DB_TO_NBA_COLS)
+    return df
+
+
 def insert_game_logs_to_supabase(df: pd.DataFrame, player_id: str, season: str) -> None:
     """
     Bulk-insert game log rows into Supabase. Safe to re-run — uses ON CONFLICT DO NOTHING.
