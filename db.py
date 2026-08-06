@@ -38,7 +38,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict
 
-from season_utils import get_current_season
+from season_utils import get_current_season, today_et, today_et_str
 import pandas as pd
 
 import psycopg2
@@ -481,7 +481,7 @@ def get_todays_stored_predictions() -> list:
     with borrow_conn() as conn:
         cursor = conn.cursor()
 
-        today = datetime.now().strftime('%Y-%m-%d')
+        today = today_et_str()
         # Fetch most recent prediction per matchup for today
         cursor.execute("""
             SELECT * FROM game_predictions
@@ -653,7 +653,7 @@ def auto_grade_game_predictions() -> dict:
     graded_count = 0
     errors = []
     results = []
-    today = datetime.now().date()
+    today = today_et()
 
     for pred in pending:
         game_date = pred.get('game_date', '')
@@ -1695,7 +1695,7 @@ def auto_grade_picks(scraper=None) -> Dict:
     players_processed = {}
 
     # Get today's date for comparison
-    today = datetime.now().date()
+    today = today_et()
 
     for pick in pending:
         player_name = pick['player']
@@ -2088,7 +2088,7 @@ def get_daily_picks(date_str: str = None) -> list:
         List of pick dicts ordered by rank
     """
     if date_str is None:
-        date_str = datetime.now().strftime('%Y-%m-%d')
+        date_str = today_et_str()
 
     with borrow_conn() as conn:
         with conn.cursor() as cur:
@@ -2135,7 +2135,7 @@ VALID_LINE_STATS = {'PTS', 'REB', 'AST', 'PRA'}
 def get_manual_lines(date_str: Optional[str] = None) -> list:
     """Get manually entered betting lines for a date (defaults to today)."""
     if date_str is None:
-        date_str = datetime.now().strftime('%Y-%m-%d')
+        date_str = today_et_str()
 
     with borrow_conn() as conn:
         with conn.cursor() as cur:
@@ -2157,7 +2157,7 @@ def upsert_manual_lines(rows: list, date_str: Optional[str] = None) -> int:
     Returns the number of rows written. Raises ValueError on invalid input.
     """
     if date_str is None:
-        date_str = datetime.now().strftime('%Y-%m-%d')
+        date_str = today_et_str()
 
     validated = []
     for row in rows:

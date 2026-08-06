@@ -27,7 +27,7 @@ import joblib
 
 from bdl_client import get_bdl_client
 from bdl_id_mapper import get_team_mapper, get_player_mapper
-from season_utils import get_current_season, get_recent_seasons
+from season_utils import get_current_season, get_recent_seasons, today_et
 
 from sklearn.preprocessing import RobustScaler
 from sklearn.model_selection import TimeSeriesSplit
@@ -312,7 +312,7 @@ class GamePredictor:
             return cached
 
         try:
-            today_str = datetime.now(ZoneInfo("America/New_York")).date().strftime('%Y-%m-%d')
+            today_str = today_et().strftime('%Y-%m-%d')
             bdl = get_bdl_client()
             raw_games = bdl.get_games(dates=[today_str])
 
@@ -2014,7 +2014,7 @@ class GamePredictor:
                     'net_rating': away_stats.get('net_rating', 0),
                     'pace': away_stats.get('pace', 100),
                 },
-                'game_date': str(game_date or datetime.now().strftime('%Y-%m-%d'))[:10],
+                'game_date': str(game_date or today_et().strftime('%Y-%m-%d'))[:10],
             },
             'predicted_winner': predicted_winner,
             'home_win_prob': round(home_win_prob * 100, 1),
@@ -2310,7 +2310,7 @@ def main():
             if args.save:
                 matchup = pred['matchup']
                 db.save_game_prediction({
-                    'game_date': matchup.get('game_date', datetime.now().strftime('%Y-%m-%d')),
+                    'game_date': matchup.get('game_date', today_et().strftime('%Y-%m-%d')),
                     'home_team': home,
                     'away_team': away,
                     'home_team_id': matchup['home_team'].get('team_id'),
@@ -2355,7 +2355,7 @@ def main():
             home = matchup['home_team']
             away = matchup['away_team']
             _db.save_game_prediction({
-                'game_date': matchup.get('game_date', datetime.now().strftime('%Y-%m-%d')),
+                'game_date': matchup.get('game_date', today_et().strftime('%Y-%m-%d')),
                 'home_team': home['team_abbrev'],
                 'away_team': away['team_abbrev'],
                 'home_team_id': home.get('team_id'),

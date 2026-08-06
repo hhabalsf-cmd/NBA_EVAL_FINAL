@@ -18,11 +18,13 @@ SELECT cron.schedule(
   $$
 );
 
--- Fetch closing lines for CLV tracking (11:00 PM ET = 4:00 AM UTC)
--- Runs 30 min before auto-grade to capture closing lines before picks are graded
+-- Fetch closing lines for CLV tracking (5:00 AM UTC = 12:00/1:00 AM ET, always past ET midnight)
+-- Runs 30 min before auto-grade to capture closing lines before picks are graded.
+-- NOTE: grading uses ET dates (season_utils.today_et), so these jobs MUST run
+-- after midnight ET year-round — 05:xx UTC covers both EST (UTC-5) and EDT (UTC-4).
 SELECT cron.schedule(
   'nightly-closing-lines',
-  '0 4 * * *',
+  '0 5 * * *',
   $$
   SELECT net.http_post(
     url := '<your-fastapi-url>/api/picks/update-closing-lines',
@@ -32,10 +34,10 @@ SELECT cron.schedule(
   $$
 );
 
--- Nightly picks grading (11:30 PM ET = 4:30 AM UTC)
+-- Nightly picks grading (5:30 AM UTC = 12:30/1:30 AM ET, always past ET midnight)
 SELECT cron.schedule(
   'nightly-auto-grade-picks',
-  '30 4 * * *',
+  '30 5 * * *',
   $$
   SELECT net.http_post(
     url := '<your-fastapi-url>/api/picks/auto-grade',
@@ -45,10 +47,10 @@ SELECT cron.schedule(
   $$
 );
 
--- Nightly game grading (11:35 PM ET = 4:35 AM UTC)
+-- Nightly game grading (5:35 AM UTC = 12:35/1:35 AM ET, always past ET midnight)
 SELECT cron.schedule(
   'nightly-auto-grade-games',
-  '35 4 * * *',
+  '35 5 * * *',
   $$
   SELECT net.http_post(
     url := '<your-fastapi-url>/api/games/auto-grade',

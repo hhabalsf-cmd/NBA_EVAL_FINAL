@@ -33,7 +33,7 @@ from bs4 import BeautifulSoup
 # BallDontLie API client and ID mappers
 from bdl_client import get_bdl_client
 from bdl_id_mapper import get_team_mapper, get_player_mapper
-from season_utils import get_current_season, get_recent_seasons
+from season_utils import get_current_season, get_recent_seasons, today_et, today_et_str
 from pra_utils import (
     reconcile_pra,
     rescale_pra_with_components,
@@ -389,7 +389,7 @@ class NBADataScraper:
         """Get today's NBA games via BallDontLie API (FREE tier)."""
         print("Fetching today's schedule...")
         try:
-            today_str = datetime.now().date().strftime('%Y-%m-%d')
+            today_str = today_et_str()
             bdl = get_bdl_client()
             raw_games = bdl.get_games(dates=[today_str])
 
@@ -3533,7 +3533,7 @@ class MLPredictor:
             'feature_importance': self.feature_importance,
             'recent_averages': getattr(self, 'recent_averages', {}),
             'last_game_date': getattr(self, 'last_game_date', None),
-            'trained_at': datetime.now().strftime('%Y-%m-%d'),
+            'trained_at': today_et_str(),
             'games_trained_on': getattr(self, 'games_trained_on', 0),
             'version': '3.0',  # Version tracking for compatibility
             # New v3.0 artifacts
@@ -4251,7 +4251,7 @@ def track_picks_interactive(results, model_type='random_forest'):
             'opponent': bet['opponent'],
             'is_home': bet['is_home'],
             'model_type': model_type,
-            'game_date': datetime.now().strftime('%Y-%m-%d'),
+            'game_date': today_et_str(),
             'player_id': bet.get('player_id'),
             'team_abbrev': bet.get('team_abbrev')
         }
@@ -4314,7 +4314,7 @@ def show_history(days=30):
             if game_date:
                 try:
                     pd_date = datetime.strptime(game_date, '%Y-%m-%d').date()
-                    if (datetime.now().date() - pd_date).days >= 2:
+                    if (today_et() - pd_date).days >= 2:
                         stale_count += 1
                 except ValueError:
                     pass
@@ -4464,7 +4464,7 @@ def auto_grade_cli():
         if gd:
             try:
                 pick_date = datetime.strptime(gd[:10], '%Y-%m-%d').date()
-                days_old = (datetime.now().date() - pick_date).days
+                days_old = (today_et() - pick_date).days
                 if days_old >= 1:
                     old_pending.append((p, days_old))
             except ValueError:
@@ -4888,7 +4888,7 @@ def interactive_mode():
                                 'opponent': opponent,
                                 'is_home': is_home,
                                 'model_type': model_type,
-                                'game_date': datetime.now().strftime('%Y-%m-%d'),
+                                'game_date': today_et_str(),
                                 'player_id': player_info['player_id'],
                                 'team_abbrev': team_abbrev
                             })

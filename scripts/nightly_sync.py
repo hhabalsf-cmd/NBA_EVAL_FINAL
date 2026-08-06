@@ -16,7 +16,7 @@ Schedule as cron (11:45 PM ET every night):
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Add project root to path
@@ -29,8 +29,7 @@ import db
 from bdl_client import get_bdl_client
 from bdl_id_mapper import get_team_mapper, get_player_mapper
 from nba_evaluator import NBADataScraper
-
-CURRENT_SEASON = '2025-26'
+from season_utils import get_current_season, now_et, today_et
 
 
 def get_active_player_ids():
@@ -55,10 +54,15 @@ def get_active_player_ids():
 
 
 def get_todays_players():
-    """Get team abbreviations that played today via BallDontLie API."""
+    """Get team abbreviations that played on the most recent ET game day."""
     print("Checking today's games...")
     try:
-        today_str = datetime.now().date().strftime('%Y-%m-%d')
+        # Before noon ET the sync is grading last night's slate, whose
+        # games carry yesterday's ET date.
+        target = today_et()
+        if now_et().hour < 12:
+            target = target - timedelta(days=1)
+        today_str = target.strftime('%Y-%m-%d')
         bdl = get_bdl_client()
         raw_games = bdl.get_games(dates=[today_str])
         if not raw_games:
@@ -83,8 +87,8 @@ def get_todays_players():
         return set()
 
 
-def sync_player_game_logs(player_list, max_players=None):
-    """Fetch and store current-season game logs via BallDontLie API."""
+def sync_player_game_logs(player_list, season, max_players=None):
+    """Fetch and store game logs for the given season via BallDontLie API."""
     import pandas as pd
 
     synced = 0
@@ -105,7 +109,7 @@ def sync_player_game_logs(player_list, max_players=None):
 
         try:
             # Check if we already have recent data
-            existing = db.get_game_logs_from_supabase(str(player_id), CURRENT_SEASON)
+            existing = db.get_game_logs_from_supabase(str(player_id), season)
             if existing is not None and len(existing) > 0:
                 latest_date = pd.to_datetime(existing['GAME_DATE']).max()
                 days_old = (datetime.now() - latest_date).days
@@ -114,13 +118,13 @@ def sync_player_game_logs(player_list, max_players=None):
                     continue
 
             # Fetch via NBADataScraper (uses BDL internally)
-            df = scraper.get_player_game_log(player_id, seasons=[CURRENT_SEASON])
+            df = scraper.get_player_game_log(player_id, seasons=[season])
 
             if df is None or df.empty:
                 skipped += 1
                 continue
 
-            db.insert_game_logs_to_supabase(df, str(player_id), CURRENT_SEASON)
+            db.insert_game_logs_to_supabase(df, str(player_id), season)
             synced += 1
 
             if (i + 1) % 25 == 0:
@@ -134,13 +138,13 @@ def sync_player_game_logs(player_list, max_players=None):
     return synced
 
 
-def sync_team_stats():
+def sync_team_stats(season):
     """Fetch and store team defensive stats."""
     print("\n Syncing team defensive stats...")
     try:
         from nba_evaluator import NBADataScraper
         scraper = NBADataScraper()
-        team_data = scraper.get_team_defensive_stats(CURRENT_SEASON)
+        team_data = scraper.get_team_defensive_stats(season)
         if team_data:
             print(f"Updated stats for {len(team_data)} teams")
             return True
@@ -155,14 +159,18 @@ def main():
     print(f"NBA Nightly Data Sync — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"{'='*60}")
 
+    # Resolve at call time so the October rollover picks up the new season.
+    season = get_current_season()
+    print(f"Season: {season}")
+
     # 1. Get all active players
     all_players = get_active_player_ids()
 
     # 2. Sync game logs
-    sync_player_game_logs(all_players)
+    sync_player_game_logs(all_players, season)
 
     # 3. Sync team stats
-    sync_team_stats()
+    sync_team_stats(season)
 
     elapsed = time.time() - start
     print(f"\n Total time: {elapsed / 60:.1f} minutes")

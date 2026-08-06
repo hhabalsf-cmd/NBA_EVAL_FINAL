@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from game_predictor import GamePredictor
+from season_utils import today_et_str
 import db
 
 
@@ -114,7 +115,7 @@ class GamePredictionService:
                 home = matchup['home_team']
                 away = matchup['away_team']
                 db.save_game_prediction({
-                    'game_date': matchup.get('game_date', datetime.now().strftime('%Y-%m-%d')),
+                    'game_date': matchup.get('game_date', today_et_str()),
                     'home_team': home['team_abbrev'],
                     'away_team': away['team_abbrev'],
                     'home_team_id': home.get('team_id'),
@@ -177,7 +178,7 @@ class GamePredictionService:
                     home = matchup['home_team']
                     away = matchup['away_team']
                     db.save_game_prediction({
-                        'game_date': matchup.get('game_date', datetime.now().strftime('%Y-%m-%d')),
+                        'game_date': matchup.get('game_date', today_et_str()),
                         'home_team': home['team_abbrev'],
                         'away_team': away['team_abbrev'],
                         'home_team_id': home.get('team_id'),

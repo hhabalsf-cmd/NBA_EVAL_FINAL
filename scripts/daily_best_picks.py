@@ -38,6 +38,7 @@ from bdl_id_mapper import get_team_mapper, get_player_mapper
 from sleeper_client import get_headshot_url as get_sleeper_headshot
 
 import db
+from season_utils import get_recent_seasons, today_et, today_et_str
 from nba_evaluator import (
     NBADataScraper,
     FeatureEngineer,
@@ -107,9 +108,8 @@ def _get_teams_playing_today() -> list[dict]:
     """
     logger.info("Fetching today's NBA schedule...")
     from datetime import timedelta
-    from zoneinfo import ZoneInfo
 
-    target_date = datetime.now(ZoneInfo("America/New_York")).date()
+    target_date = today_et()
     today_str = target_date.strftime('%Y-%m-%d')
     bdl = get_bdl_client()
     raw_games = bdl.get_games(dates=[today_str])
@@ -696,7 +696,7 @@ def run() -> dict:
     Generate picks and persist to Supabase.
     Returns a summary dict for logging / API response.
     """
-    today_str = datetime.now().strftime('%Y-%m-%d')
+    today_str = today_et_str()
     logger.info(f"Starting Daily Best Picks generation for {today_str}")
 
     start_time = time.time()

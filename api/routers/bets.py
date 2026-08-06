@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 import db
+from season_utils import today_et_str
 from ..limiter import limiter
 from ..schemas.prediction import (
     DailyPick,
@@ -32,7 +33,7 @@ async def get_todays_daily_picks(
     Get pre-computed daily picks for today (or a specific date).
     No auth required — picks are visible to everyone.
     """
-    date_str = date or datetime.now().strftime('%Y-%m-%d')
+    date_str = date or today_et_str()
     picks = db.get_daily_picks(date_str)
 
     return DailyPicksResponse(
@@ -92,7 +93,7 @@ async def get_manual_lines(
     current_user: dict = Depends(get_current_user),
 ):
     """List manually entered lines for a date."""
-    date_str = date or datetime.now().strftime('%Y-%m-%d')
+    date_str = date or today_et_str()
     rows = db.get_manual_lines(date_str)
     return ManualLinesResponse(
         lines=[_row_to_manual_line(r) for r in rows],
@@ -108,7 +109,7 @@ async def upsert_manual_lines(
     current_user: dict = Depends(get_current_user),
 ):
     """Insert or update manual lines (unique per game_date+player+stat)."""
-    date_str = payload.game_date or datetime.now().strftime('%Y-%m-%d')
+    date_str = payload.game_date or today_et_str()
     try:
         db.upsert_manual_lines([l.model_dump() for l in payload.lines], date_str)
     except ValueError as e:
@@ -142,7 +143,7 @@ def _row_to_daily_pick(row: dict) -> dict:
     if hasattr(result.get('generated_date'), 'isoformat'):
         result['generated_date'] = result['generated_date'].isoformat()
     elif result.get('generated_date') is None:
-        result['generated_date'] = datetime.now().strftime('%Y-%m-%d')
+        result['generated_date'] = today_et_str()
     else:
         result['generated_date'] = str(result['generated_date'])
     return result
