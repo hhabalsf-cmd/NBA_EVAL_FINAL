@@ -491,16 +491,20 @@ def save_game_prediction(prediction_data: dict) -> int:
         pred_id = cursor.fetchone()['id']
         conn.commit()
 
-        # Enforce 40-prediction cap — delete oldest predictions beyond the limit
-        cursor.execute("""
-            DELETE FROM game_predictions
-            WHERE id NOT IN (
-                SELECT id FROM game_predictions
-                ORDER BY timestamp DESC
-                LIMIT 40
-            )
-        """)
-        conn.commit()
+        # NOTE: a 40-row cap used to live here, hard-deleting every prediction
+        # past the newest 40 on each insert. It was removed on 2026-08-24.
+        #
+        # It had already fired: the surviving ids ran 406-445 contiguously while
+        # the two 2026-04-20 games were ids 404/405, permanently gone. That cap
+        # made the sample structurally incapable of growing past 40, which is
+        # incompatible with the >= 500 graded-sample exit criterion in
+        # docs/NEXT_STEPS_2026-08-23.md, and it silently destroyed the graded
+        # history any accuracy audit depends on (see
+        # docs/audit_game_predictor_2026-08-24.md).
+        #
+        # It also contradicted the repo-wide rule that graded rows are never
+        # hard-deleted. If row growth ever needs bounding, archive or soft-void
+        # instead -- do not reintroduce a destructive cap on the write path.
 
     return pred_id
 
@@ -896,6 +900,24 @@ def save_pick(pick_data: dict) -> int:
         return pick_id
 
 
+def _real_picks_clause() -> str:
+    """SQL fragment excluding paper picks, or '' when the column does not exist.
+
+    Paper picks carry user_id IS NULL, so every user-scoped query already
+    excludes them. This guards the un-scoped callers (the Excel export, and any
+    future global caller) so the forward paper sample can never be silently
+    folded into the real performance record.
+    """
+    try:
+        import paper_tracking
+
+        if paper_tracking.has_paper_pick_support():
+            return " AND (is_paper IS NULL OR is_paper = 0)"
+    except Exception as exc:
+        _logger.warning("Could not check paper-pick support, not filtering: %s", exc)
+    return ""
+
+
 def get_picks_history(days: int = 30, user_id: str = None, limit: int = None) -> list:
     """
     Get picks history for the last N days or by row limit.
@@ -920,9 +942,9 @@ def get_picks_history(days: int = 30, user_id: str = None, limit: int = None) ->
                     LIMIT %s
                 """, (user_id, limit))
             else:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT * FROM picks
-                    WHERE (voided IS NULL OR voided = 0)
+                    WHERE (voided IS NULL OR voided = 0) {_real_picks_clause()}
                     ORDER BY timestamp DESC
                     LIMIT %s
                 """, (limit,))
@@ -935,9 +957,10 @@ def get_picks_history(days: int = 30, user_id: str = None, limit: int = None) ->
                     ORDER BY timestamp DESC
                 """, (cutoff, user_id))
             else:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT * FROM picks
                     WHERE timestamp >= %s AND (voided IS NULL OR voided = 0)
+                          {_real_picks_clause()}
                     ORDER BY timestamp DESC
                 """, (cutoff,))
 
@@ -1119,8 +1142,11 @@ def get_performance_stats(user_id: str = None) -> dict:
         cursor = conn.cursor()
 
         # Total non-voided picks
+        real_only = _real_picks_clause()
+
         cursor.execute(
-            f"SELECT COUNT(*) FROM picks WHERE (voided IS NULL OR voided = 0) {uid_filter}",
+            f"SELECT COUNT(*) FROM picks WHERE (voided IS NULL OR voided = 0) "
+            f"{real_only} {uid_filter}",
             params,
         )
         total_picks = cursor.fetchone()['count']
@@ -1147,7 +1173,8 @@ def get_performance_stats(user_id: str = None) -> dict:
                 COUNT(*) FILTER (WHERE ABS(edge) >= 12 AND won IN (0, 1))                    AS e12_total,
                 COUNT(*) FILTER (WHERE ABS(edge) >= 12 AND won = 1)                          AS e12_wins
             FROM picks
-            WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0) {uid_filter}
+            WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0)
+                  {real_only} {uid_filter}
         """, params)
         row = cursor.fetchone()
 
@@ -1371,29 +1398,24 @@ def get_calibration_stats(user_id: str = None) -> dict:
         if r.get('closing_line') is not None and r.get('opening_line') is not None
     ]
     if clv_picks:
-        clv_values = []
-        positive_clv_count = 0
-        for r in clv_picks:
-            opening = r['opening_line']
-            closing = r['closing_line']
-            direction = r['direction']
-            # CLV: did the closing line move in our favor?
-            # OVER: positive CLV if closing > opening (line moved up, we got the lower number)
-            # UNDER: positive CLV if closing < opening (line moved down, we got the higher number)
-            if direction == 'OVER':
-                clv = closing - opening
-            else:
-                clv = opening - closing
-            clv_values.append(clv)
-            if clv > 0:
-                positive_clv_count += 1
+        # Single source of truth for the sign convention -- see clv.compute_clv.
+        import clv as clv_math
 
-        avg_clv = sum(clv_values) / len(clv_values)
-        clv_data = {
-            'avg_clv': round(avg_clv, 2),
-            'positive_clv_rate': round(positive_clv_count / len(clv_values) * 100, 1),
-            'sample_size': len(clv_values),
-        }
+        clv_values = []
+        for r in clv_picks:
+            try:
+                clv_values.append(clv_math.compute_clv(
+                    r['direction'], r['opening_line'], r['closing_line']))
+            except ValueError as exc:
+                _logger.warning("Skipping CLV for pick %s: %s", r.get('id'), exc)
+
+        summary = clv_math.summarize_clv(clv_values)
+        if summary['n']:
+            clv_data = {
+                'avg_clv': round(summary['avg_clv'], 2),
+                'positive_clv_rate': round(summary['positive_clv_rate'] * 100, 1),
+                'sample_size': summary['n'],
+            }
 
     return {
         'brier_score': round(brier_score, 4),
@@ -1411,91 +1433,52 @@ def get_calibration_stats(user_id: str = None) -> dict:
     }
 
 
-def update_closing_lines() -> dict:
-    """Fetch closing lines from BDL odds API for pending picks and store them.
+def update_closing_lines(date_str: str = None, lookback_days: int = 1) -> dict:
+    """Record closing lines for picks that do not have one yet.
 
-    Called by cron before nightly auto-grade. For each ungraded pick with a
-    game_date of today (or yesterday), fetches the latest odds and stores the
-    closing line.
+    Called by cron (``POST /api/picks/update-closing-lines``) before the nightly
+    auto-grade sweep.
+
+    History: this used to call ``bdl_client.get_odds()``, which has raised
+    NotImplementedError unconditionally since the April 2026 GOAT-tier
+    downgrade. The exception was caught by a broad ``except Exception`` and
+    reported as an entry in ``errors``, so the endpoint returned HTTP 200 with
+    ``updated: 0`` every night and nothing ever noticed. That is why
+    ``closing_line`` is NULL on all 114 existing picks and CLV is permanently
+    dead for that sample.
+
+    It now reads the append-only ``line_snapshots`` log, which is fed by manual
+    line entry (``POST /api/bets/lines``) — the only line source that actually
+    works. Idempotent: an already-recorded closing line is never overwritten.
 
     Returns:
         Dict with 'updated' count and 'errors' list.
     """
-    with borrow_conn() as conn:
-        cursor = conn.cursor()
-        # Get pending picks that need closing lines (today's and yesterday's games)
-        cursor.execute("""
-            SELECT id, player, stat, game_date, direction, line, opening_line
-            FROM picks
-            WHERE won IS NULL
-              AND closing_line IS NULL
-              AND game_date IS NOT NULL
-              AND (voided IS NULL OR voided = 0)
-              AND game_date >= (CURRENT_DATE - INTERVAL '1 day')::text
-        """)
-        pending = cursor.fetchall()
-
-    if not pending:
-        return {'updated': 0, 'errors': []}
-
-    # Fetch odds for the relevant dates
-    updated = 0
-    errors = []
     try:
-        from bdl_client import get_bdl_client
-        bdl = get_bdl_client()
+        import paper_tracking
 
-        dates = list({p['game_date'] for p in pending if p.get('game_date')})
-        odds_data = bdl.get_odds(dates=dates)
+        result = paper_tracking.snapshot_closing_lines(
+            date_str=date_str, lookback_days=lookback_days, dry_run=False,
+        )
+    except Exception as exc:
+        _logger.error("Closing-line capture failed: %s", exc, exc_info=True)
+        return {'updated': 0, 'errors': [str(exc)]}
 
-        # Build lookup: (date, player_name_lower) → prop lines
-        # For now, use the game spread/total as a proxy since player prop
-        # closing lines require matching specific prop types.
-        # The key CLV signal is: did the line move from opening to closing?
-        # This is populated when the pick's player prop line is found in odds_data.
-        for pick in pending:
-            try:
-                game_date = pick['game_date']
-                # Search odds for player props matching this pick
-                for odds_game in odds_data:
-                    game = odds_game.get('game', {})
-                    odds_date = game.get('date', '')[:10]
-                    if odds_date != game_date:
-                        continue
+    if result['updated'] == 0 and result['candidates'] > 0:
+        _logger.warning(
+            "Closing lines: %d picks awaiting a closing line but none recorded "
+            "(%d snapshots available, skipped: %s). Lines must be re-entered "
+            "near tip-off for CLV to exist.",
+            result['candidates'], result['snapshots'], result['skipped'],
+        )
 
-                    # Check all books for player props matching this stat/player
-                    for book in odds_game.get('books', []):
-                        for prop in book.get('player_props', []):
-                            prop_player = prop.get('player', {}).get('full_name', '').lower()
-                            if pick['player'].lower() not in prop_player and prop_player not in pick['player'].lower():
-                                continue
-
-                            # Match stat type
-                            stat_map = {'PTS': 'points', 'REB': 'rebounds', 'AST': 'assists', 'PRA': 'points_rebounds_assists'}
-                            prop_type = prop.get('type', '')
-                            if stat_map.get(pick['stat'], '') not in prop_type:
-                                continue
-
-                            closing = prop.get('line')
-                            if closing is not None:
-                                with borrow_conn() as conn2:
-                                    cur2 = conn2.cursor()
-                                    cur2.execute(
-                                        "UPDATE picks SET closing_line = %s WHERE id = %s",
-                                        (float(closing), pick['id'])
-                                    )
-                                    conn2.commit()
-                                    updated += 1
-                                break
-                        else:
-                            continue
-                        break
-            except Exception as e:
-                errors.append(f"Pick {pick['id']}: {str(e)}")
-    except Exception as e:
-        errors.append(f"BDL odds fetch failed: {str(e)}")
-
-    return {'updated': updated, 'errors': errors}
+    return {
+        'updated': result['updated'],
+        'candidates': result['candidates'],
+        'snapshots': result['snapshots'],
+        'skipped': result['skipped'],
+        'errors': [],
+    }
 
 
 def get_cumulative_profit(user_id: str = None) -> list:
@@ -2224,7 +2207,43 @@ def upsert_manual_lines(rows: list, date_str: Optional[str] = None) -> int:
                     v,
                 )
             conn.commit()
-            return len(validated)
+
+    _append_line_snapshots(validated, date_str)
+    return len(validated)
+
+
+def _append_line_snapshots(validated: list, date_str: str) -> None:
+    """Mirror manual line entries into the append-only snapshot log.
+
+    manual_lines keeps one mutable row per (game_date, player, stat), so
+    re-entering a line near tip-off destroys the earlier observation. CLV needs
+    the whole path, so every entry is also appended to line_snapshots.
+
+    Best effort: a failure here must not fail the admin's line entry, which is
+    the live line source Best Bets runs off. The failure is logged loudly rather
+    than swallowed, and the snapshot log is reconstructible by re-entering.
+    """
+    try:
+        import paper_tracking
+
+        if not paper_tracking.has_line_snapshot_support():
+            _logger.warning(
+                "line_snapshots table missing — %d manual lines recorded without "
+                "a CLV snapshot. Apply %s.",
+                len(validated), paper_tracking.MIGRATION_FILE,
+            )
+            return
+        paper_tracking.record_line_snapshots(
+            [{"game_date": v[0], "player": v[1], "stat": v[2], "line": v[3]}
+             for v in validated],
+            date_str,
+            source=paper_tracking.SOURCE_MANUAL,
+        )
+    except Exception as exc:
+        _logger.error(
+            "Failed to append %d line snapshots for %s: %s",
+            len(validated), date_str, exc, exc_info=True,
+        )
 
 
 def delete_manual_line(line_id: int) -> bool:
