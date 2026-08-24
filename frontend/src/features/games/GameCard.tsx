@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import { GamePrediction } from './api'
+import { hasRealRecord, matchupHasRealRatings } from './teamStats'
 import { useTilt } from '../../shared/hooks/useTilt'
 
 interface GameCardProps {
@@ -14,6 +15,9 @@ export default function GameCard({ prediction }: GameCardProps) {
   const { home_team, away_team } = matchup
   const homeIsWinner = predicted_winner === home_team.team_abbrev
   const tilt = useTilt({ maxTilt: 5, scale: 1.02 })
+  // `get_team_stats()` returns {} since the BDL tier downgrade, so these fields
+  // arrive as "0-0" / 110-110-0 placeholders. Never render those as real data.
+  const showRatings = matchupHasRealRatings(home_team, away_team)
 
   return (
     <motion.div
@@ -36,7 +40,9 @@ export default function GameCard({ prediction }: GameCardProps) {
           <div className={`font-mono text-xl font-bold mb-0.5 ${!homeIsWinner ? 'text-accent' : 'text-text-primary'}`}>
             {away_team.team_abbrev}
           </div>
-          <div className="text-[11px] text-text-muted">{away_team.record}</div>
+          {hasRealRecord(away_team) && (
+            <div className="text-[11px] text-text-muted">{away_team.record}</div>
+          )}
         </div>
         <div className="flex-shrink-0 mx-4">
           <div className="w-8 h-8 rounded-full bg-bg-elevated flex items-center justify-center text-[11px] text-text-muted font-mono">
@@ -47,7 +53,9 @@ export default function GameCard({ prediction }: GameCardProps) {
           <div className={`font-mono text-xl font-bold mb-0.5 ${homeIsWinner ? 'text-accent' : 'text-text-primary'}`}>
             {home_team.team_abbrev}
           </div>
-          <div className="text-[11px] text-text-muted">{home_team.record}</div>
+          {hasRealRecord(home_team) && (
+            <div className="text-[11px] text-text-muted">{home_team.record}</div>
+          )}
         </div>
       </div>
 
@@ -111,6 +119,7 @@ export default function GameCard({ prediction }: GameCardProps) {
         </div>
       )}
 
+      {showRatings && (
       <div className="border-t border-border-subtle pt-4 mt-4">
         <div className="grid grid-cols-3 gap-2 sm:gap-3 text-center text-[10px]">
           <div>
@@ -140,6 +149,7 @@ export default function GameCard({ prediction }: GameCardProps) {
           </div>
         </div>
       </div>
+      )}
     </motion.div>
   )
 }

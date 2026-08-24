@@ -1,8 +1,20 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, BarChart3, Search as SearchIcon, Target, Activity } from 'lucide-react'
+import { ArrowRight, Activity } from 'lucide-react'
 import { getPerformanceStats } from '../picks/api'
+import ModelAccuracyBanner from '../../shared/components/ModelAccuracyBanner'
+import { PREDICTIONS_ENABLED } from '../../shared/lib/flags'
+import { GhostStatCard, GhostResearchStatCard } from './GhostStatCard'
+import { SamplePredictionCards, SampleResearchCards } from './SampleCards'
+import {
+  GHOST_PREDICTION_CARDS,
+  GHOST_RESEARCH_CARDS,
+  landingCtaCopy,
+  landingHeroCopy,
+  landingSampleCopy,
+  landingSteps,
+} from './copy'
 
 // ── Animated counter ─────────────────────────────────────────────────────────
 function AnimatedNumber({
@@ -36,59 +48,28 @@ function AnimatedNumber({
   return <>{prefix}{displayed.toFixed(decimals)}{suffix}</>
 }
 
-// ── Ghost decorative stat card ────────────────────────────────────────────────
-function GhostStatCard({
-  player, stat, value, line, isOver, conf,
-}: {
-  player: string
-  stat: string
-  value: number
-  line: number
-  isOver: boolean
-  conf: number
-}) {
-  return (
-    <div className="bg-bg-secondary border border-border-subtle rounded-xl p-3 w-40 shadow-lg">
-      <div className="text-[9px] text-text-muted uppercase tracking-wider mb-1.5 truncate">{player}</div>
-      <div className="flex items-end justify-between gap-2">
-        <div>
-          <div className="font-mono text-base font-bold text-text-primary leading-none">{value}</div>
-          <div className="text-[9px] text-text-muted mt-0.5">{stat} · L{line}</div>
-        </div>
-        <div className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-          isOver ? 'text-accent-success bg-accent-success/10' : 'text-accent-danger bg-accent-danger/10'
-        }`}>
-          {isOver ? 'OVER' : 'UNDER'}
-        </div>
-      </div>
-      <div className="mt-2">
-        <div className="flex justify-between text-[8px] text-text-muted mb-1">
-          <span>Conf</span>
-          <span>{conf}%</span>
-        </div>
-        <div className="h-0.5 bg-bg-elevated rounded-full overflow-hidden">
-          <div className="h-full rounded-full bg-accent-success" style={{ width: `${conf}%` }} />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-const GHOST_CARDS = [
-  { player: 'LeBron James', stat: 'PTS', value: 27.5, line: 26.5, isOver: true,  conf: 78 },
-  { player: 'S. Curry',     stat: 'PTS', value: 31.2, line: 29.5, isOver: true,  conf: 82 },
-  { player: 'N. Jokić',     stat: 'REB', value: 12.1, line: 11.5, isOver: true,  conf: 71 },
-  { player: 'A. Edwards',   stat: 'AST', value: 4.2,  line: 5.0,  isOver: false, conf: 68 },
-]
-
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function LandingPage() {
+  const hero = landingHeroCopy(PREDICTIONS_ENABLED)
+  const sample = landingSampleCopy(PREDICTIONS_ENABLED)
+  const cta = landingCtaCopy(PREDICTIONS_ENABLED)
+  const steps = landingSteps(PREDICTIONS_ENABLED)
+
+  // Win rate / ROI marketing is a claim about the model. Gated with everything
+  // else — the query is not even issued when predictions are off.
   const { data: stats } = useQuery({
     queryKey: ['performance-stats'],
     queryFn: getPerformanceStats,
     staleTime: 1000 * 60 * 5,
+    enabled: PREDICTIONS_ENABLED,
   })
+
+  const renderGhost = (index: number) => (
+    PREDICTIONS_ENABLED
+      ? <GhostStatCard {...GHOST_PREDICTION_CARDS[index]} />
+      : <GhostResearchStatCard {...GHOST_RESEARCH_CARDS[index]} />
+  )
 
   return (
     <div className="space-y-12 sm:space-y-20">
@@ -173,25 +154,25 @@ export default function LandingPage() {
           className="absolute top-6 -left-2 sm:-left-14 pointer-events-none select-none hidden sm:block"
           style={{ animation: 'ghostFloat1 7s ease-in-out infinite', opacity: 0.12, transform: 'translateZ(-40px)' }}
         >
-          <GhostStatCard {...GHOST_CARDS[0]} />
+          {renderGhost(0)}
         </div>
         <div
           className="absolute top-14 -right-2 sm:-right-14 pointer-events-none select-none hidden sm:block"
           style={{ animation: 'ghostFloat2 8.5s ease-in-out infinite', opacity: 0.12, transform: 'translateZ(-60px)' }}
         >
-          <GhostStatCard {...GHOST_CARDS[1]} />
+          {renderGhost(1)}
         </div>
         <div
           className="absolute bottom-8 -left-6 sm:-left-20 pointer-events-none select-none hidden md:block"
           style={{ animation: 'ghostFloat3 6.5s ease-in-out infinite', opacity: 0.09, transform: 'translateZ(-80px)' }}
         >
-          <GhostStatCard {...GHOST_CARDS[2]} />
+          {renderGhost(2)}
         </div>
         <div
           className="absolute bottom-16 -right-4 sm:-right-16 pointer-events-none select-none hidden md:block"
           style={{ animation: 'ghostFloat4 9.5s ease-in-out infinite', opacity: 0.09, transform: 'translateZ(-50px)' }}
         >
-          <GhostStatCard {...GHOST_CARDS[3]} />
+          {renderGhost(3)}
         </div>
 
         {/* Content — foreground layer */}
@@ -203,16 +184,16 @@ export default function LandingPage() {
               style={{ animation: 'livePulse 2s ease-in-out infinite' }}
             />
             <span className="text-[10px] font-semibold text-text-muted uppercase tracking-widest">
-              ML-Powered Analytics
+              {hero.badge}
             </span>
           </div>
 
           <h1 className="heading-display text-5xl sm:text-6xl md:text-7xl font-bold text-text-primary mb-4 sm:mb-5 leading-none">
-            Stop guessing.<br />
-            <span className="text-accent">Start evaluating.</span>
+            {hero.headingTop}<br />
+            <span className="text-accent">{hero.headingAccent}</span>
           </h1>
           <p className="text-text-secondary text-[15px] sm:text-[17px] leading-relaxed mb-8 sm:mb-10 max-w-lg mx-auto">
-            ML models trained on NBA data surface the edge in player props. Know when to bet — and when to pass.
+            {hero.subheading}
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
             <Link to="/signup" className="btn btn-primary text-base px-6 py-3 w-full sm:w-auto">
@@ -226,8 +207,8 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── Live Stats Bar ───────────────────────────────────────────────── */}
-      {stats && stats.graded_picks > 0 && (
+      {/* ── Live Stats Bar ── betting track record; gated ───────────────── */}
+      {PREDICTIONS_ENABLED && stats && stats.graded_picks > 0 && (
         <section className="card p-4 sm:p-6 relative overflow-hidden">
           {/* Scanning light streak */}
           <div
@@ -238,6 +219,7 @@ export default function LandingPage() {
               animation: 'scanLine 5s linear infinite',
             }}
           />
+          <ModelAccuracyBanner className="relative mb-5" />
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 sm:gap-5">
             <div className="flex flex-wrap items-center justify-center sm:justify-start gap-6 sm:gap-8">
               <div className="text-center">
@@ -276,47 +258,19 @@ export default function LandingPage() {
         </section>
       )}
 
-      {/* ── Sample Predictions ──────────────────────────────────────── */}
+      {/* ── Sample cards ── fixed illustrative values, never live output ─── */}
       <section>
         <div className="mb-6">
-          <h2 className="heading-display text-3xl font-semibold text-text-primary">Live Predictions</h2>
-          <p className="text-sm text-text-secondary mt-1">See what our ML models produce for today's players</p>
+          <h2 className="heading-display text-3xl font-semibold text-text-primary">{sample.title}</h2>
+          <p className="text-sm text-text-secondary mt-1">{sample.subtitle}</p>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {GHOST_CARDS.slice(0, 3).map(card => (
-            <div key={card.player} className="card p-5 relative overflow-hidden">
-              <div
-                className="absolute inset-0 pointer-events-none"
-                style={{ background: `linear-gradient(135deg, var(--accent)0A 0%, transparent 60%)` }}
-              />
-              <div className="relative">
-                <div className="text-xs text-text-muted uppercase tracking-wider mb-2">{card.player}</div>
-                <div className="flex items-end justify-between gap-3">
-                  <div>
-                    <div className="font-mono text-2xl font-bold text-text-primary">{card.value}</div>
-                    <div className="text-xs text-text-muted mt-0.5">{card.stat} prediction</div>
-                  </div>
-                  <div className="text-right">
-                    <div className={`text-xs font-bold px-2 py-1 rounded ${
-                      card.isOver ? 'text-accent-success bg-accent-success/10' : 'text-accent-danger bg-accent-danger/10'
-                    }`}>
-                      {card.isOver ? 'OVER' : 'UNDER'} {card.line}
-                    </div>
-                    <div className="text-[10px] text-text-muted mt-1">{card.conf}% confidence</div>
-                  </div>
-                </div>
-                <div className="mt-3">
-                  <div className="h-1 bg-bg-elevated rounded-full overflow-hidden">
-                    <div className="h-full rounded-full bg-accent" style={{ width: `${card.conf}%` }} />
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+        {PREDICTIONS_ENABLED && <ModelAccuracyBanner className="mb-6" />}
+        {PREDICTIONS_ENABLED
+          ? <SamplePredictionCards cards={GHOST_PREDICTION_CARDS.slice(0, 3)} />
+          : <SampleResearchCards cards={GHOST_RESEARCH_CARDS.slice(0, 3)} />}
         <div className="text-center mt-4">
           <Link to="/signup" className="text-sm text-accent hover:text-accent-hover transition-colors">
-            Create a free account to run your own predictions →
+            {cta.sampleLink}
           </Link>
         </div>
       </section>
@@ -341,11 +295,7 @@ export default function LandingPage() {
               style={{ background: 'linear-gradient(90deg, transparent, var(--border-default), transparent)' }}
             />
 
-            {([
-              { Icon: SearchIcon, step: '01', title: 'Search Player',  desc: "Enter any NBA player's name to begin analysis",                      color: 'var(--accent)' },
-              { Icon: BarChart3,  step: '02', title: 'ML Prediction',   desc: 'Our model analyzes historical data, matchups, and trends',           color: 'var(--accent-warning)' },
-              { Icon: Target,     step: '03', title: 'Evaluate Lines',  desc: 'Compare predictions to betting lines and save your picks',           color: 'var(--accent-success)' },
-            ] as const).map(({ Icon, step, title, desc, color }) => (
+            {steps.map(({ Icon, step, title, desc, color }) => (
               <div key={step} className="flex flex-col items-center text-center gap-4">
                 <div className="relative">
                   <div
@@ -368,13 +318,14 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── Track Record ─────────────────────────────────────────────────── */}
-      {stats && Object.keys(stats.by_stat).length > 0 && (
+      {/* ── Track Record ── win-rate claims; gated ─────────────────────── */}
+      {PREDICTIONS_ENABLED && stats && Object.keys(stats.by_stat).length > 0 && (
         <section>
           <div className="mb-6">
             <h2 className="heading-display text-3xl font-semibold text-text-primary">Track Record</h2>
             <p className="text-sm text-text-secondary mt-1">Updated in real time from graded picks</p>
           </div>
+          <ModelAccuracyBanner className="mb-6" />
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {(['PTS', 'REB', 'AST', 'PRA'] as const).map(stat => {
               const statData = stats.by_stat[stat]
@@ -434,9 +385,9 @@ export default function LandingPage() {
           style={{ background: 'var(--accent)', opacity: 0.07 }}
         />
         <div className="relative">
-          <h2 className="text-xl font-semibold text-text-primary mb-3 tracking-tight">Ready to find an edge?</h2>
+          <h2 className="text-xl font-semibold text-text-primary mb-3 tracking-tight">{cta.heading}</h2>
           <p className="text-sm text-text-secondary mb-6 max-w-sm mx-auto">
-            Create a free account to get started with ML-powered prop analysis.
+            {cta.body}
           </p>
           <Link to="/signup" className="btn btn-primary text-base px-8 py-3 w-full sm:w-auto">
             Get Started Free

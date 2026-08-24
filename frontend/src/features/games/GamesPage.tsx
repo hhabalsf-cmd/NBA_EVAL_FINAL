@@ -4,7 +4,10 @@ import { useAuthStore } from '../../features/auth/authStore'
 import { Loader2, BarChart3, Cpu, Users, Zap, X, RefreshCw } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import GameCard from './GameCard'
+import GameScheduleCard from './GameScheduleCard'
 import AccuracyTracker from './AccuracyTracker'
+import ModelAccuracyBanner, { GAME_MODEL_ACCURACY_NOTICE } from '../../shared/components/ModelAccuracyBanner'
+import { PREDICTIONS_ENABLED } from '../../shared/lib/flags'
 import {
   getTodaysGamePredictions,
   getGameAccuracyStats,
@@ -53,11 +56,13 @@ export default function GamesPage() {
     enabled: !isStreaming,
   })
 
+  // Model accuracy is a claim about the ELO predictor: gated with everything
+  // else, and the query is not issued when predictions are off.
   const { data: accuracyStats, refetch: refetchAccuracy } = useQuery({
     queryKey: ['game-accuracy'],
     queryFn: getGameAccuracyStats,
     staleTime: 1000 * 60 * 10,
-    enabled: isAuthenticated,
+    enabled: isAuthenticated && PREDICTIONS_ENABLED,
   })
 
   const { data: history, isLoading: historyLoading } = useQuery({
@@ -153,7 +158,7 @@ export default function GamesPage() {
         <div className="flex items-center justify-between gap-3 mb-2">
           <h1 className="text-2xl md:text-3xl font-bold text-text-primary tracking-tight">Games</h1>
           <div className="flex items-center gap-2">
-            {activeTab === 'today' && (
+            {PREDICTIONS_ENABLED && activeTab === 'today' && (
               <button onClick={handlePredict} disabled={isStreaming} className="btn btn-primary text-sm flex-shrink-0">
                 {isStreaming ? (
                   <>
@@ -171,7 +176,11 @@ export default function GamesPage() {
             {/* Auto-grade is now service-key only (cron/Edge Functions) */}
           </div>
         </div>
-        <p className="text-sm text-text-secondary">ML-powered win predictions for NBA matchups</p>
+        <p className="text-sm text-text-secondary">
+          {PREDICTIONS_ENABLED
+            ? 'ML-powered win predictions for NBA matchups'
+            : "Today's NBA schedule and past results"}
+        </p>
       </section>
 
       {/* Tab Toggle */}
@@ -194,7 +203,7 @@ export default function GamesPage() {
       {activeTab === 'today' && (
         <>
           {/* Streaming Progress */}
-          {isStreaming && (
+          {PREDICTIONS_ENABLED && isStreaming && (
             <div className="card p-5 animate-fade-in">
               <div className="flex items-center gap-3 mb-3">
                 <Loader2 className="w-4 h-4 text-accent animate-spin" />
@@ -206,16 +215,21 @@ export default function GamesPage() {
             </div>
           )}
 
-          {/* Accuracy Tracker */}
-          {accuracyStats && accuracyStats.graded_predictions > 0 && (
-            <AccuracyTracker stats={accuracyStats} />
+          {/* Accuracy Tracker — model track record, gated */}
+          {PREDICTIONS_ENABLED && accuracyStats && accuracyStats.graded_predictions > 0 && (
+            <div className="space-y-3">
+              <ModelAccuracyBanner notice={GAME_MODEL_ACCURACY_NOTICE} />
+              <AccuracyTracker stats={accuracyStats} />
+            </div>
           )}
 
           {/* Loading */}
           {isLoading && !isStreaming && (
             <div className="flex items-center justify-center py-16">
               <Loader2 className="w-5 h-5 text-accent animate-spin" />
-              <span className="ml-3 text-sm text-text-secondary">Loading predictions...</span>
+              <span className="ml-3 text-sm text-text-secondary">
+                {PREDICTIONS_ENABLED ? 'Loading predictions...' : 'Loading schedule...'}
+              </span>
             </div>
           )}
 
@@ -233,15 +247,20 @@ export default function GamesPage() {
           {/* Games Grid */}
           {!isLoading && !error && predictions.length > 0 && (
             <section>
-              <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center justify-between mb-4">
                 <h2 className="text-lg font-semibold text-text-primary tracking-tight">Matchups</h2>
                 <span className="text-sm text-text-muted">
                   {predictions.length} game{predictions.length !== 1 ? 's' : ''} today
                 </span>
               </div>
+              {PREDICTIONS_ENABLED && (
+                <ModelAccuracyBanner notice={GAME_MODEL_ACCURACY_NOTICE} className="mb-6" />
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {predictions.map((pred, idx) => (
-                  <GameCard key={idx} prediction={pred} />
+                  PREDICTIONS_ENABLED
+                    ? <GameCard key={idx} prediction={pred} />
+                    : <GameScheduleCard key={idx} prediction={pred} />
                 ))}
               </div>
             </section>
@@ -252,12 +271,15 @@ export default function GamesPage() {
             <div className="card p-12 text-center">
               <h3 className="text-lg font-medium text-text-primary mb-2">No Scheduled Games Found</h3>
               <p className="text-sm text-text-secondary max-md mx-auto leading-relaxed">
-                Check back on game days for ML-powered win predictions.
+                {PREDICTIONS_ENABLED
+                  ? 'Check back on game days for ML-powered win predictions.'
+                  : "Check back on game days for the day's matchups."}
               </p>
             </div>
           )}
 
-          {/* How It Works */}
+          {/* How It Works — describes the model; gated */}
+          {PREDICTIONS_ENABLED && (
           <section className="card p-5 sm:p-8">
             <h2 className="text-lg font-semibold text-text-primary mb-6 sm:mb-8 tracking-tight">How Game Predictions Work</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-5 sm:gap-6">
@@ -279,26 +301,32 @@ export default function GamesPage() {
               ))}
             </div>
           </section>
+          )}
         </>
       )}
 
       {/* ── HISTORY TAB ── */}
       {activeTab === 'history' && (
         <>
-          {/* Accuracy Tracker */}
-          {accuracyStats && accuracyStats.graded_predictions > 0 && (
-            <AccuracyTracker stats={accuracyStats} />
+          {/* Accuracy Tracker — model track record, gated */}
+          {PREDICTIONS_ENABLED && accuracyStats && accuracyStats.graded_predictions > 0 && (
+            <div className="space-y-3">
+              <ModelAccuracyBanner notice={GAME_MODEL_ACCURACY_NOTICE} />
+              <AccuracyTracker stats={accuracyStats} />
+            </div>
           )}
 
           {/* History List */}
           <section className="card overflow-hidden">
             <div className="p-4 sm:p-5 border-b border-border-subtle space-y-3">
               <div className="flex items-center justify-between">
-                <h2 className="text-base font-semibold text-text-primary tracking-tight">Past Predictions</h2>
+                <h2 className="text-base font-semibold text-text-primary tracking-tight">
+                  {PREDICTIONS_ENABLED ? 'Past Predictions' : 'Past Results'}
+                </h2>
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1 bg-bg-secondary rounded-lg p-0.5">
-                  {(['all', 'wins', 'losses'] as ResultFilter[]).map(f => (
+                  {(PREDICTIONS_ENABLED ? (['all', 'wins', 'losses'] as ResultFilter[]) : []).map(f => (
                     <button
                       key={f}
                       onClick={() => handleFilterChange(f)}
@@ -331,7 +359,9 @@ export default function GamesPage() {
             ) : displayedHistory.length === 0 ? (
               <div className="text-center py-16 px-4">
                 <p className="text-sm text-text-secondary">
-                  {resultFilter !== 'all' ? `No ${resultFilter} to show.` : 'No prediction history yet.'}
+                  {resultFilter !== 'all'
+                    ? `No ${resultFilter} to show.`
+                    : PREDICTIONS_ENABLED ? 'No prediction history yet.' : 'No past results yet.'}
                 </p>
               </div>
             ) : (
@@ -343,28 +373,35 @@ export default function GamesPage() {
                   const isGradingThis = gradingId === item.id
 
                   return (
-                    <div key={item.id} className={`p-4 sm:p-5 border-l-2 ${isCorrect ? 'border-l-accent-success' : isIncorrect ? 'border-l-accent-danger' : 'border-l-border-subtle'
+                    <div key={item.id} className={`p-4 sm:p-5 border-l-2 ${
+                      PREDICTIONS_ENABLED && isCorrect ? 'border-l-accent-success'
+                        : PREDICTIONS_ENABLED && isIncorrect ? 'border-l-accent-danger'
+                          : 'border-l-border-subtle'
                       }`}>
                       <div className="flex items-start justify-between gap-3">
                         {/* Left: date + matchup */}
                         <div className="min-w-0">
                           <div className="text-[11px] text-text-muted mb-1">{formatDate(item.game_date)}</div>
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className={`font-mono text-sm font-semibold ${item.predicted_winner === item.away_team ? 'text-accent' : 'text-text-primary'
+                            <span className={`font-mono text-sm font-semibold ${
+                              PREDICTIONS_ENABLED && item.predicted_winner === item.away_team ? 'text-accent' : 'text-text-primary'
                               }`}>
                               {item.away_team}
                             </span>
                             <span className="text-text-muted text-xs">@</span>
-                            <span className={`font-mono text-sm font-semibold ${item.predicted_winner === item.home_team ? 'text-accent' : 'text-text-primary'
+                            <span className={`font-mono text-sm font-semibold ${
+                              PREDICTIONS_ENABLED && item.predicted_winner === item.home_team ? 'text-accent' : 'text-text-primary'
                               }`}>
                               {item.home_team}
                             </span>
                           </div>
                           <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                            <span className="pill pill-neutral text-[10px]">
-                              {item.predicted_winner} WINS
-                            </span>
-                            {item.confidence != null && (
+                            {PREDICTIONS_ENABLED && (
+                              <span className="pill pill-neutral text-[10px]">
+                                {item.predicted_winner} WINS
+                              </span>
+                            )}
+                            {PREDICTIONS_ENABLED && item.confidence != null && (
                               <span className={`text-[11px] font-mono ${item.confidence >= 65 ? 'text-accent-success'
                                   : item.confidence >= 55 ? 'text-accent-warning'
                                     : 'text-text-muted'
@@ -379,11 +416,16 @@ export default function GamesPage() {
                         <div className="flex-shrink-0 text-right">
                           {isGraded ? (
                             <div className="flex flex-col items-end gap-1">
-                              <span className="text-xs text-text-muted">Actual: {item.actual_winner}</span>
-                              <span className={`font-mono font-bold text-base ${isCorrect ? 'text-accent-success' : 'text-accent-danger'
-                                }`}>
-                                {isCorrect ? 'W' : 'L'}
+                              <span className="text-xs text-text-muted">Winner</span>
+                              <span className="font-mono font-bold text-base text-text-primary">
+                                {item.actual_winner}
                               </span>
+                              {PREDICTIONS_ENABLED && (
+                                <span className={`font-mono font-bold text-xs ${isCorrect ? 'text-accent-success' : 'text-accent-danger'
+                                  }`}>
+                                  {isCorrect ? 'W' : 'L'}
+                                </span>
+                              )}
                             </div>
                           ) : isGradingThis ? (
                             <div className="flex items-center gap-1.5">

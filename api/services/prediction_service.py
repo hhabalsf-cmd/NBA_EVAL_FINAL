@@ -19,8 +19,23 @@ import statistics
 # Add parent directory to path to import existing modules
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from fastapi import HTTPException
+
 from sleeper_client import get_headshot_url as get_sleeper_headshot
 from season_utils import get_recent_seasons
+
+from ..config import PICKS_DISABLED_DETAIL, PICKS_DISABLED_STATUS, picks_enabled
+
+
+def _require_picks_enabled() -> None:
+    """Refuse to produce a betting recommendation unless NBA_EVAL_ENABLE_PICKS is on.
+
+    Applies only to code paths whose output *is* a recommendation (a direction,
+    a strength label, a probability the pick wins). Research data — game logs,
+    splits, matchup and opponent context — is never gated by this.
+    """
+    if not picks_enabled():
+        raise HTTPException(status_code=PICKS_DISABLED_STATUS, detail=PICKS_DISABLED_DETAIL)
 
 # Lazy import cache — nba_evaluator (and TensorFlow) only loads on first prediction
 _nba_ev = None
@@ -751,7 +766,12 @@ class PredictionService:
         confidence_info: Optional[Dict] = None,
         predictor=None
     ) -> Dict:
-        """Evaluate a betting line against a prediction."""
+        """Evaluate a betting line against a prediction.
+
+        Gated: the return value is a recommendation (OVER/UNDER + strength +
+        prob_over), which the 2026-08 audit showed carries no information.
+        """
+        _require_picks_enabled()
         return self.evaluator.evaluate(prediction, line, stat, confidence_info, predictor=predictor)
 
 
@@ -765,7 +785,13 @@ class BestBetsService:
         # NOTE: ``min_edge`` is retained for API/CLI compatibility but is no
         # longer used. Phase B2 selection filters on calibrated prob_pick_wins
         # band (70-80) instead. See backtest in docs/backtest_pick_rules.md.
-        """Find the best betting opportunities for today's games."""
+        """Find the best betting opportunities for today's games.
+
+        Gated behind NBA_EVAL_ENABLE_PICKS: every row it returns is a betting
+        recommendation. The selection logic below is intentionally left intact.
+        """
+        _require_picks_enabled()
+
         # Get today's props from BDL odds
         props = _fetch_todays_props()
 

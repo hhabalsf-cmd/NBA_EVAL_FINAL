@@ -42,6 +42,7 @@ from bdl_id_mapper import get_team_mapper, get_player_mapper
 from sleeper_client import get_headshot_url as get_sleeper_headshot
 
 import db
+from api.config import PICKS_DISABLED_DETAIL, PICKS_FLAG_ENV_VAR, picks_enabled
 from season_utils import get_recent_seasons, today_et, today_et_str
 from nba_evaluator import (
     NBADataScraper,
@@ -794,7 +795,20 @@ def run() -> dict:
     """
     Generate picks and persist to Supabase.
     Returns a summary dict for logging / API response.
+
+    Refuses to run unless ``NBA_EVAL_ENABLE_PICKS`` is set to '1' or 'true'.
+    The generation logic below is intact and unchanged — only the entry point
+    is gated, so re-enabling is a single env var once a model clears the exit
+    criteria in docs/NEXT_STEPS_2026-08-23.md.
     """
+    if not picks_enabled():
+        logger.error(PICKS_DISABLED_DETAIL)
+        return {
+            'success': False,
+            'error': f'{PICKS_FLAG_ENV_VAR} is not enabled',
+            'picks_count': 0,
+        }
+
     today_str = today_et_str()
     logger.info(f"Starting Daily Best Picks generation for {today_str}")
 

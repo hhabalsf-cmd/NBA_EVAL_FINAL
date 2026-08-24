@@ -16,6 +16,8 @@ import SplitsTab from './SplitsTab'
 import AnalysisTab from './AnalysisTab'
 import MatchupTab from './MatchupTab'
 import ModelEdgeCard from './ModelEdgeCard'
+import ModelAccuracyBanner from '../../shared/components/ModelAccuracyBanner'
+import { PREDICTIONS_ENABLED } from '../../shared/lib/flags'
 import { TABS, PRIMARY_STATS, SECONDARY_STATS, getStatValue, type Stat, type Tab } from './types'
 
 export default function ResearchPage() {
@@ -255,9 +257,13 @@ export default function ResearchPage() {
         )}
       </div>
 
-      {/* ── ML Edge Card (when line is set) ── */}
-      {parsedLine !== null && PRIMARY_STATS.includes(activeStat) && (
-        <ModelEdgeCard playerName={decoded} stat={activeStat} line={parsedLine} />
+      {/* ── ML Edge Card (when line is set) ── model output, gated by
+           VITE_ENABLE_PREDICTIONS. The six research tabs below are never gated. */}
+      {PREDICTIONS_ENABLED && parsedLine !== null && PRIMARY_STATS.includes(activeStat) && (
+        <div className="space-y-3">
+          <ModelAccuracyBanner />
+          <ModelEdgeCard playerName={decoded} stat={activeStat} line={parsedLine} />
+        </div>
       )}
 
       {/* ── Tabs ── */}

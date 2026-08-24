@@ -4182,6 +4182,32 @@ class MLPredictor:
         sorted_features = sorted(importance.items(), key=lambda x: x[1], reverse=True)
         return sorted_features[:top_n]
     
+    # ── NOT CALIBRATED WIN PROBABILITIES ─────────────────────────────────
+    # These caps are display ceilings on a heuristic confidence score. They are
+    # NOT probabilities that a pick wins, and they are not calibrated against
+    # anything. Read as such they are misleading.
+    #
+    # Measured (2026-08-19 → 08-23 audit, docs/SUMMARY_model_investigation_2026-08-23.md):
+    #   - Median-line AUC = 0.536 — a model separating outcomes barely better
+    #     than a coin flip is displaying an 88% cap.
+    #   - 40-66 (37.7%) on 106 graded picks against real book lines, versus a
+    #     52.4% breakeven at -110.
+    #   - Mean claimed edge 2.73 vs mean absolute error 4.83.
+    #   - Edge magnitude does not sort outcomes (38.5% at edge >= 3 vs 37.3%
+    #     at edge < 3), so the number the selection rule keys off carries no
+    #     information.
+    #   - Sign accuracy 53.3%, below "always bet the over" at 55.1%.
+    #
+    # Root cause is p/n = 1.35 (81 features fitted on ~60 training rows), not
+    # miscalibration — three phases of calibration work fixed three real bugs
+    # and moved the reliability band zero. Do not re-open calibration here.
+    #
+    # The caps are left numerically unchanged on purpose: consumers of this
+    # surface are gated off instead (VITE_ENABLE_PREDICTIONS on the frontend,
+    # NBA_EVAL_ENABLE_PICKS on the backend). Changing the numbers would only
+    # move the misleading value, and any logic change here silently invalidates
+    # every cached pickle without triggering a retrain.
+    #
     # Per-stat confidence caps — prevents overconfidence on harder-to-predict stats
     CONFIDENCE_CAPS = {
         'PTS': 88,

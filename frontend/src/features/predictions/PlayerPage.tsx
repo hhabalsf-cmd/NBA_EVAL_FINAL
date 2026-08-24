@@ -5,10 +5,14 @@ import { useQuery } from '@tanstack/react-query'
 import { motion, AnimatePresence, type Variants } from 'framer-motion'
 import { usePrediction } from './usePrediction'
 import PredictionCard from './PredictionCard'
+import RecentFormCard from './RecentFormCard'
+import { recentForm } from './recentForm'
 import StatChartModal from './StatChartModal'
 import PlayerSearch from '../../shared/components/PlayerSearch'
+import ModelAccuracyBanner from '../../shared/components/ModelAccuracyBanner'
 import { evaluateLine, type LineEvaluation, getPlayerOdds, getTeamInjuries, type TeamInjuryInfo } from './api'
 import { createPick } from '../picks/api'
+import { PREDICTIONS_ENABLED } from '../../shared/lib/flags'
 import { getHeadshotUrl } from '../../shared/utils/nba'
 
 const STATS = ['PTS', 'REB', 'AST', 'PRA'] as const
@@ -175,6 +179,7 @@ export default function PlayerPage() {
 
   const hasOdds = odds?.found
   const hasAnyLine = STATS.some(s => lineInputs[s])
+  const hasGameLog = (result.game_log?.length ?? 0) > 0
 
   return (
     <div className="space-y-8">
@@ -317,9 +322,14 @@ export default function PlayerPage() {
         </motion.section>
       )}
 
-      {/* Predictions Grid */}
+      {/* Predictions Grid — model output, gated by VITE_ENABLE_PREDICTIONS.
+          With the flag off the same slots show descriptive recent-form
+          averages computed from the game log, so L10/season data stays. */}
       <section>
-        <h2 className="text-lg font-semibold text-text-primary mb-5 tracking-tight">ML Predictions</h2>
+        <h2 className="text-lg font-semibold text-text-primary mb-5 tracking-tight">
+          {PREDICTIONS_ENABLED ? 'ML Predictions' : 'Recent Form'}
+        </h2>
+        {PREDICTIONS_ENABLED && <ModelAccuracyBanner className="mb-5" />}
         <motion.div
           className="grid grid-cols-2 sm:grid-cols-4 gap-4"
           variants={cardContainer}
@@ -328,19 +338,28 @@ export default function PlayerPage() {
         >
           {STATS.map(stat => {
             const prediction = result.predictions[stat]
-            if (!prediction) return null
+            const onChartClick = hasGameLog ? () => setChartStat(stat) : undefined
+            if (PREDICTIONS_ENABLED && !prediction) return null
             return (
               <motion.div
                 key={stat}
                 variants={cardItem}
                 transition={{ duration: 0.32, ease: 'easeOut' }}
               >
-                <PredictionCard
-                  stat={stat}
-                  prediction={prediction}
-                  onChartClick={() => setChartStat(stat)}
-                  earlySeason={result.games_this_season != null && result.games_this_season < 10}
-                />
+                {PREDICTIONS_ENABLED && prediction ? (
+                  <PredictionCard
+                    stat={stat}
+                    prediction={prediction}
+                    onChartClick={onChartClick}
+                    earlySeason={result.games_this_season != null && result.games_this_season < 10}
+                  />
+                ) : (
+                  <RecentFormCard
+                    stat={stat}
+                    form={recentForm(result.game_log ?? [], stat)}
+                    onChartClick={onChartClick}
+                  />
+                )}
               </motion.div>
             )
           })}
@@ -356,7 +375,9 @@ export default function PlayerPage() {
         />
       )}
 
-      {/* Line Evaluation */}
+      {/* Line Evaluation — recommendation pills, edge %, P(over) and Save Pick.
+          Entirely gated by VITE_ENABLE_PREDICTIONS. */}
+      {PREDICTIONS_ENABLED && (
       <motion.section
         className="card p-4 sm:p-6"
         variants={sectionFade}
@@ -364,6 +385,7 @@ export default function PlayerPage() {
         animate="show"
         transition={{ duration: 0.35, ease: 'easeOut', delay: 0.28 }}
       >
+        <ModelAccuracyBanner className="mb-5" />
         <div className="flex items-center justify-between mb-5 gap-2">
           <h2 className="text-lg font-semibold text-text-primary tracking-tight">Evaluate Lines</h2>
           {hasOdds && !oddsLoading && (
@@ -448,6 +470,7 @@ export default function PlayerPage() {
           )}
         </AnimatePresence>
       </motion.section>
+      )}
     </div>
   )
 }
