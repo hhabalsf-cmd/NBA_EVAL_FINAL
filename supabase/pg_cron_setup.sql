@@ -61,6 +61,12 @@ SELECT cron.schedule(
 );
 
 -- Daily best picks generation (8:00 AM ET = 1:00 PM UTC)
+-- SUNSET 2026-08-19: this job is DISABLED in the live database
+--   (SELECT cron.alter_job(job_id := 16, active := false)).
+-- Daily best picks are paused while the prop model is under remediation.
+-- Re-running this cron.schedule() call WILL re-enable it — disable it again
+-- afterwards, or leave this block commented out, unless the pause is over.
+-- To re-enable:  SELECT cron.alter_job(job_id := 16, active := true);
 SELECT cron.schedule(
   'daily-best-picks',
   '0 13 * * *',

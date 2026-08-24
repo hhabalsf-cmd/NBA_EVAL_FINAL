@@ -9,6 +9,10 @@ in the `daily_picks` Supabase table for instant frontend reads.
 Line strategy: Uses each player's L10 average as a proxy "line" until
 a new OddsAPI key is added.  The `odds_line` column stays NULL for now.
 
+Selection: picks are chosen and ordered by the calibrated `prob_pick_wins`
+band from nba_evaluator.LineEvaluator (the production rule), never by edge
+magnitude — see the SELECT_PROB_* constants below.
+
 Run manually:
     python scripts/daily_best_picks.py
 
@@ -42,6 +46,7 @@ from season_utils import get_recent_seasons, today_et, today_et_str
 from nba_evaluator import (
     NBADataScraper,
     FeatureEngineer,
+    LineEvaluator,
     MLPredictor,
     MODEL_DIR,
 )
@@ -81,13 +86,29 @@ def _get_best_headshot_url(player_name: str) -> Optional[str]:
     return _get_nba_headshot_url(player_name)
 
 # ── Configuration ───────────────────────────────────────────────
-MIN_EDGE_PCT = 10.0          # Minimum absolute edge to include
-MAX_EDGE_PCT = 30.0          # Maximum absolute edge — edges >30% hit poorly historically
-MIN_CONFIDENCE = 60.0        # Minimum model confidence
+MIN_CONFIDENCE = 60.0        # Minimum model confidence (data-quality guard, not edge)
 MAX_PICKS = 20               # Cap on total picks returned
 MIN_MINUTES_AVG = 20.0       # Minimum average minutes to evaluate
 MIN_GAMES_TO_TRAIN = 15      # Minimum historical games to train a model
 STATS_TO_EVALUATE = ['PTS', 'REB', 'AST', 'PRA']
+
+# ── Selection bands (Phase B2) ──────────────────────────────────
+#
+# Picks are selected and ordered by the calibrated probability that the pick
+# itself wins (`prob_pick_wins`), NEVER by |edge|.  The 106-pick backtest in
+# docs/backtest_pick_rules.md showed edge magnitude is anti-correlated with
+# success: the biggest edges land in the overconfident tail
+# (prob_pick_wins >= 80 → 30.4% WR, -53% ROI) while the 70-80 band won 53.7%
+# (+2.4% ROI).  Thresholds are imported from LineEvaluator — the production
+# rule (nba_evaluator.LineEvaluator.evaluate / api BestBetsService) — so this
+# script can never drift from it.
+SELECT_PROB_MIN = LineEvaluator.PROB_PICK_WINS_TARGET_LO  # 70.0 — below: PASS
+SELECT_PROB_MAX = LineEvaluator.PROB_PICK_WINS_TARGET_HI  # 80.0 — at/above: PASS
+# Only the TARGET band [70, 80) is playable, matching BestBetsService
+# (api/services/prediction_service.py): the LEAN 60-70 band hit ~30% in the
+# backtest and is excluded from automated daily picks.
+SELECT_PROB_SWEET_SPOT = 73.0  # strongest historical zone (70-75 → 64% WR);
+# keep in sync with BestBetsService's sort key in prediction_service.py.
 
 logging.basicConfig(
     level=logging.INFO,
@@ -326,12 +347,83 @@ def _sync_game_logs_for_prop_players(props_lookup: dict, current_season: str) ->
     return synced
 
 
+# ── Pick selection (calibrated bands — never edge magnitude) ────
+
+# Shared, stateless for evaluate(); `history` is only touched by log_prediction.
+_line_evaluator = LineEvaluator()
+
+
+def _build_confidence_info(predictor, df, stat: str, pred_value: float, features_df) -> dict:
+    """
+    Confidence / range / std for one stat, or {} when it cannot be computed.
+
+    Shape matches what LineEvaluator.evaluate expects
+    ({'confidence', 'low', 'high', optional 'std'}); an incomplete dict is
+    dropped so evaluate() never raises on a missing key.
+    """
+    try:
+        info = predictor.get_confidence(df, stat, pred_value, features_df=features_df)
+    except Exception as exc:
+        logger.debug("get_confidence failed for %s: %s", stat, exc)
+        return {}
+
+    if not info or not {'confidence', 'low', 'high'}.issubset(info):
+        return {}
+    return info
+
+
+def _evaluate_candidate(predictor, df, stat: str, pred_value: float, line: float, features_df) -> dict:
+    """
+    Score one candidate through the production LineEvaluator.
+
+    Returns the evaluator's result dict, which carries the calibrated
+    `prob_over` / `prob_pick_wins` used for selection plus the confidence and
+    range fields written to `daily_picks`.
+    """
+    conf_info = _build_confidence_info(predictor, df, stat, pred_value, features_df)
+    return _line_evaluator.evaluate(
+        pred_value,
+        line,
+        stat,
+        confidence_info=conf_info,
+        predictor=predictor,
+    )
+
+
+def _is_selectable(prob_pick_wins: Optional[float]) -> bool:
+    """
+    True when the calibrated win probability sits inside the playable bands.
+
+    Mirrors LineEvaluator.evaluate exactly: the overconfident tail
+    (>= SELECT_PROB_MAX) and the no-signal zone (< SELECT_PROB_MIN) are both
+    PASS.  A missing probability means the pick has no calibrated signal at
+    all, so it is not selectable either.
+    """
+    if prob_pick_wins is None:
+        return False
+    return SELECT_PROB_MIN <= prob_pick_wins < SELECT_PROB_MAX
+
+
+def _rank_candidates(scored: list[tuple[float, dict]], limit: int) -> list[dict]:
+    """
+    Order `(prob_pick_wins, pick)` pairs by distance from the historical
+    sweet spot (closest to 73 first, matching BestBetsService), cap the
+    list, and stamp 1-based ranks onto copies (no mutation of the inputs).
+    """
+    ordered = sorted(scored, key=lambda item: abs(item[0] - SELECT_PROB_SWEET_SPOT))
+    return [
+        {**pick, 'rank': rank}
+        for rank, (_, pick) in enumerate(ordered[:limit], start=1)
+    ]
+
+
 # ── Core pipeline ───────────────────────────────────────────────
 
 def generate_daily_picks() -> list[dict]:
     """
-    Main entry point: evaluate all eligible players and return
-    the top picks sorted by abs(edge) descending.
+    Main entry point: evaluate all eligible players and return the top picks
+    ordered by calibrated `prob_pick_wins` descending (see SELECT_PROB_*).
+    `edge` is still computed and stored, but only as display metadata.
     """
     # Resolve seasons at call time — this runs inside a long-lived API worker,
     # so import-time constants would freeze the pre-rollover season.
@@ -385,12 +477,14 @@ def generate_daily_picks() -> list[dict]:
         logger.info("No eligible players found.")
         return []
 
-    # 5. Evaluate each player
-    all_candidates: list[dict] = []
+    # 5. Evaluate each player — collected as (prob_pick_wins, pick) pairs so
+    #    ranking never has to reach back into the pick payload.
+    scored_candidates: list[tuple[float, dict]] = []
     players_evaluated = 0
     models_trained = 0
     players_skipped = 0
     skipped_missing_lines = 0
+    skipped_out_of_band = 0
 
     for player in eligible_players:
         player_name = player['player_name']
@@ -438,11 +532,25 @@ def generate_daily_picks() -> list[dict]:
             'position': '',
         }
 
+        # Today's game, in the shape create_features/get_player_next_game use.
+        # Supplying it appends the synthetic next-game row so the served vector
+        # describes TODAY's game rather than the last one played.
+        game_info = {
+            'matchup': (
+                f"{team_abbrev} vs. {opponent}" if is_home
+                else f"{team_abbrev} @ {opponent}"
+            ),
+            'game_date': game.get('game_date') or active_date_str,
+            'is_home': 1 if is_home else 0,
+            'opponent': opponent,
+        }
+
         # Create features
         try:
             df = FeatureEngineer.create_features(
                 game_log,
                 player_info=player_info,
+                game_info=game_info,
                 team_stats=team_stats,
             )
         except Exception as e:
@@ -480,14 +588,10 @@ def generate_daily_picks() -> list[dict]:
             except Exception as e:
                 logger.warning(f"Update error for {player_name}: {e}")
 
-        # Calculate actual days rest from game log
-        days_rest = 2
-        if 'GAME_DATE' in df.columns and len(df) > 1:
-            try:
-                last_game = pd.to_datetime(df['GAME_DATE'].iloc[-1])
-                days_rest = min((datetime.now() - last_game).days, 7)
-            except Exception:
-                pass
+        # Days rest before TODAY's game. With the synthetic next-game row
+        # present iloc[-1] is a future date, so read that row's own
+        # schedule-derived DAYS_REST instead of differencing against now().
+        days_rest = FeatureEngineer.serve_days_rest(df, default=2)
 
         # Get full opponent context (enhanced stats)
         opp_ctx = FeatureEngineer.extract_opp_stats(team_stats, opponent)
@@ -505,8 +609,6 @@ def generate_daily_picks() -> list[dict]:
                 df,
                 is_home=1 if is_home else 0,
                 opponent=opponent,
-                injuries_team=injuries_team,
-                injuries_opp=injuries_opp,
                 days_rest=days_rest,
                 vs_stats=vs_stats,
                 player_info=player_info,
@@ -612,52 +714,47 @@ def generate_daily_picks() -> list[dict]:
             if line_used is None or line_used == 0:
                 continue
 
-            # Recompute edge against whichever line is used
+            # Edge is display metadata only — it is NOT a selection criterion.
             edge_pct = round(((pred_value - line_used) / line_used) * 100, 1)
-            abs_edge = abs(edge_pct)
 
-            # Direction
+            # Direction — same rule LineEvaluator uses internally
             direction = 'OVER' if pred_value > line_used else 'UNDER'
 
-            # Get confidence + range
-            conf_data: dict = {}
-            try:
-                conf_data = predictor.get_confidence(df, stat, pred_value, features_df=features_df)
-                confidence = conf_data.get('confidence', 0)
-                range_low = conf_data.get('low', pred_value)
-                range_high = conf_data.get('high', pred_value)
-            except Exception:
-                confidence = 0
-                range_low = pred_value
-                range_high = pred_value
+            # Score through the production evaluator (calibrated prob bands)
+            evaluation = _evaluate_candidate(
+                predictor, df, stat, pred_value, line_used, features_df
+            )
+            prob_pick_wins = evaluation.get('prob_pick_wins')
 
-            # Probability over — use ProbabilityCalculator with std for
-            # proper z-score based calculation (same as LineEvaluator).
-            try:
-                from nba_evaluator import ProbabilityCalculator
-                std = conf_data.get('std')
-                if std is not None and std > 0:
-                    calibrator_data = None
-                    if hasattr(predictor, 'probability_calibrator') and stat in predictor.probability_calibrator:
-                        calibrator_data = predictor.probability_calibrator[stat]
-                    prob_over = ProbabilityCalculator.calculate(
-                        pred_value, line_used, std, calibrator_data
-                    )
-                else:
-                    # No std available — estimate from confidence + direction
-                    prob_over = confidence if direction == 'OVER' else (100 - confidence)
-            except Exception:
-                prob_over = 50.0
-
-            # Apply filters
-            if confidence < MIN_CONFIDENCE:
+            if not _is_selectable(prob_pick_wins):
+                skipped_out_of_band += 1
+                logger.debug(
+                    "Skipping %s %s: prob_pick_wins=%s (%s)",
+                    player_name, stat, prob_pick_wins, evaluation.get('strength'),
+                )
                 continue
-            if abs_edge < MIN_EDGE_PCT or abs_edge > MAX_EDGE_PCT:
+
+            if evaluation.get('high_edge_warning'):
+                # Informational only — the band filter above already refuses
+                # the overconfident tail these usually fall into.
+                logger.debug(
+                    "%s %s carries a >50%% edge vs the line (%.1f%%)",
+                    player_name, stat, edge_pct,
+                )
+
+            confidence = evaluation.get('confidence') or 0
+            range_low = evaluation.get('range_low', pred_value)
+            range_high = evaluation.get('range_high', pred_value)
+            prob_over = evaluation.get('prob_over')
+
+            # Orthogonal quality guard: a model too unsure of itself is not
+            # worth publishing regardless of where its probability lands.
+            if confidence < MIN_CONFIDENCE:
                 continue
 
             matchup = _build_matchup_string(team_abbrev, opponent, is_home)
 
-            all_candidates.append({
+            scored_candidates.append((prob_pick_wins, {
                 'player': player_name,
                 'player_id': player_id,
                 'headshot_url': _get_best_headshot_url(player_name),
@@ -677,24 +774,20 @@ def generate_daily_picks() -> list[dict]:
                 'game_date': active_date_str,
                 'model_type': 'gradient_boost',
                 'prob_over': round(float(prob_over), 1) if prob_over is not None else None,
-            })
+            }))
 
     logger.info(
-        f"Evaluated {players_evaluated} players,"
+        f"Evaluated {players_evaluated} players, "
         f"trained {models_trained} new models, "
-        f"skipped {players_skipped}, "
-        f"found {len(all_candidates)} candidates meeting filters."
+        f"skipped {players_skipped} players, "
+        f"{skipped_missing_lines} stats without a line, "
+        f"{skipped_out_of_band} outside the "
+        f"{SELECT_PROB_MIN:.0f}-{SELECT_PROB_MAX:.0f} prob_pick_wins band, "
+        f"found {len(scored_candidates)} candidates meeting filters."
     )
 
-    # 6. Rank and cap
-    ranked = sorted(all_candidates, key=lambda c: abs(c['edge']), reverse=True)
-    top_picks = ranked[:MAX_PICKS]
-
-    # Assign ranks
-    for i, pick in enumerate(top_picks, start=1):
-        pick['rank'] = i
-
-    return top_picks
+    # 6. Rank by calibrated prob_pick_wins (never by |edge|) and cap
+    return _rank_candidates(scored_candidates, MAX_PICKS)
 
 
 def run() -> dict:

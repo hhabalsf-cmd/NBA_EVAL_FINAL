@@ -65,12 +65,36 @@ def download_game_model(local_path: Path) -> bool:
 
 # ── Listing (migration / diagnostics) ────────────────────────────────────────
 
+_LIST_PAGE_SIZE = 1000
+
+
 def list_player_models() -> list[str]:
-    """Return filenames of all player models stored in the bucket."""
+    """Return filenames of all player models stored in the bucket.
+
+    Paginates explicitly: storage3's ``DEFAULT_SEARCH_OPTIONS`` is
+    ``{"limit": 100, "offset": 0}``, so an unpaginated ``list()`` silently
+    truncates. On 2026-08-19 the bucket held 189 models and this returned 100 —
+    a caller that treats the result as complete (a cleanup, a migration, a
+    "how many models do we have" check) would have been wrong by 89.
+    """
     try:
         supa = _get_storage_client()
-        files = supa.storage.from_(BUCKET_NAME).list(_PLAYER_PREFIX)
-        return [f["name"] for f in files if f.get("name", "").endswith(".pkl")]
+        bucket = supa.storage.from_(BUCKET_NAME)
+        names: list[str] = []
+        offset = 0
+        while True:
+            page = bucket.list(
+                _PLAYER_PREFIX,
+                {"limit": _LIST_PAGE_SIZE, "offset": offset,
+                 "sortBy": {"column": "name", "order": "asc"}},
+            )
+            if not page:
+                break
+            names = names + [f["name"] for f in page if f.get("name", "").endswith(".pkl")]
+            if len(page) < _LIST_PAGE_SIZE:
+                break
+            offset += len(page)
+        return names
     except Exception as exc:
         _logger.error("Failed to list player models in Supabase: %s", exc)
         return []

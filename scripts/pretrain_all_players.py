@@ -55,7 +55,32 @@ def parse_args(argv=None):
                         help="Retrain every player even if a fresh model exists")
     parser.add_argument('--max-age-days', type=int, default=DEFAULT_MAX_AGE_DAYS,
                         help=f"Retrain models older than this many days (default {DEFAULT_MAX_AGE_DAYS})")
+    parser.add_argument('--curated', action='store_true',
+                        help="Only the 58 players the unbiased backtest validates "
+                             "(scripts/backtest_unbiased.DEFAULT_PLAYERS)")
+    parser.add_argument('--players', type=str, default=None,
+                        help="Comma-separated player names to train (overrides --curated)")
+    parser.add_argument('--limit', type=int, default=None,
+                        help="Process at most this many players")
     return parser.parse_args(argv)
+
+
+def select_players(active_list, curated: bool, players: str | None, limit: int | None):
+    """Return the roster to process, newest filter winning, without mutating input.
+
+    ``--players`` and ``--curated`` build their roster from names rather than by
+    filtering ``active_list``, so a named player who is missing from
+    ``get_active_players()`` is still trained instead of silently dropped.
+    """
+    if players:
+        names = [n.strip() for n in players.split(',') if n.strip()]
+        roster = [{'full_name': n} for n in names]
+    elif curated:
+        from backtest_unbiased import DEFAULT_PLAYERS
+        roster = [{'full_name': n} for n, _ in DEFAULT_PLAYERS]
+    else:
+        roster = list(active_list)
+    return roster[:limit] if limit else roster
 
 
 def main(argv=None):
@@ -74,8 +99,14 @@ def main(argv=None):
         print(f"Retraining models older than {args.max_age_days} days.")
     scraper = NBADataScraper()
     pred_svc = PredictionService()
-    active_list = nba_players.get_active_players()
+    active_list = select_players(
+        nba_players.get_active_players(), args.curated, args.players, args.limit
+    )
     total_players = len(active_list)
+    if args.players:
+        print(f"--players: {total_players} named player(s).")
+    elif args.curated:
+        print(f"--curated: {total_players} backtest-validated players.")
     print(f"Found {total_players} active players to process.")
     
     trained_count = 0

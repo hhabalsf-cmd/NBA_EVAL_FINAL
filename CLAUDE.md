@@ -38,7 +38,9 @@ Both servers must run simultaneously. Vite proxies `/api/*` → `localhost:8000`
 ```
 **CRITICAL:** Always use **lowercase** keys (`def_rating`, `pace`, `opp_ast`). Uppercase (`DEF_RATING`) silently returns fallback. Early-season (< 10 games per team): current-season stats blend with prior-season stats regressed 50% to the league mean; total failure falls back to `def_rating: 110, pace: 100`.
 
-**`FeatureEngineer`** — 84 canonical features (`FEATURE_COLS`): rolling avgs (5/10 + EMA for PTS/MIN), efficiency metrics, opponent defensive features (`OPP_DEF_RATING_NORM`, `OPP_PACE_NORM`), enhanced opponent context (off_rating, net_rating, eFG%, OREB%, DREB%), matchup history, home/away splits, B2B/rest, hot/cold streak, rebound splits (OREB/DREB), 3PT shooting features, FT rate, foul trouble, schedule density, travel, Vegas lines, per-season `GAMES_THIS_SEASON`/`SEASON_PHASE` (GAME_NUM restarts each season — logs concatenate 3 seasons). `extract_opp_stats()` helper extracts all opponent context from team_stats dict.
+**`FeatureEngineer`** — 81 canonical features (`FEATURE_COLS`): rolling avgs (5/10 + EMA for PTS/MIN), efficiency metrics, opponent defensive features (`OPP_DEF_RATING_NORM`, `OPP_PACE_NORM`), enhanced opponent context (off_rating, net_rating, eFG%, OREB%, DREB%), matchup history, home/away splits, B2B/rest, hot/cold streak, rebound splits (OREB/DREB), 3PT shooting features, FT rate, foul trouble, schedule density, travel, per-season `GAMES_THIS_SEASON`/`SEASON_PHASE` (GAME_NUM restarts each season — logs concatenate 3 seasons). `extract_opp_stats()` helper extracts all opponent context from team_stats dict. Trade context: `GAMES_WITH_CURRENT_TEAM` / `TEAM_CHANGED_RECENT`, derived from the `MATCHUP` team (trade-correct — BDL stat-level team).
+
+**Lag discipline (CRITICAL):** the five same-game ratios (`AST_TOV_RATIO`, `OREB_RATE`, `FG3_RATE`, `FT_RATE`, `PF_PER_MIN`) are shifted to lag-1 in `create_features`; their unshifted `_<NAME>_CURR` mirrors are private (not in `FEATURE_COLS`) and exist so `get_prediction_features` can serve the last completed game's own ratio. The shift is applied *after* `ROLL_5_AST_TOV` and the `stats_for_rolling` loop — those consume the raw values and shift internally, so moving the shift earlier silently makes them lag-2.
 
 **`OddsAPI`** — Key lookup: function param → `ODDS_API_KEY` env var → `config.json`. Market map: `player_points→PTS`, `player_rebounds→REB`, `player_assists→AST`, `player_points_rebounds_assists→PRA`. **Status: quota exhausted** — replace key in `config.json` to re-enable.
 
@@ -48,10 +50,14 @@ Both servers must run simultaneously. Vite proxies `/api/*` → `localhost:8000`
 
 **`MLPredictor`** — Per-player per-stat models (`ALL_STATS = PTS/REB/AST/PRA`):
 - GradientBoostingRegressor per stat with Optuna HPO (default `gradient_boost`; optional ensemble/neural paths exist but are not the production path)
-- TimeSeriesSplit CV (no lookahead bias); quantile regression for `range_low`/`range_high`; probability calibration (Platt); PRA std floored at the RSS of component stds
+- Purged walk-forward CV (`_purged_splits`, no lookahead bias); quantile regression for `range_low`/`range_high`; probability calibration (Platt); PRA std floored at the RSS of component stds
 - `CONFIDENCE_CAPS`: PTS 88%, REB 82%, AST 78%, PRA 80%
 - PRA formula: 85% × component sum + 15% independent PRA model. `train()`/`update()` default to `ALL_STATS`; PRA has dedicated train/update blocks — generic stat loops must not include it
 - Early-season damping: < 10 current-season games → confidence ×0.75–1.0, std ×1.3–1.0 (linear taper)
+- Trade damping: < 7 games with the current team → same ×0.75–1.0 / ×1.3–1.0 taper. Combined with early-season damping by taking the stronger (`min`/`max`), never multiplied — stacking both would push confidence under the 55 floor
+- Interval→std divisor: `DEFAULT_INTERVAL_TO_STD_DIVISOR = 2.56`. Training also records a coverage-aware `probability_calibrator[stat]['interval_to_std_divisor']`, but it is **not consumed at inference** — `MLPredictor.CONSUME_LEARNED_INTERVAL_DIVISOR` is `False` and `_interval_divisor` returns the constant. The learned value is audit-only until a backtest justifies flipping the gate
+- Probability calibration is fit against the quantity serve consumes: the per-row CQR-corrected quantile std, not the OOF residual std. `_train_probability_calibrator` runs quantile OOF → CQR → Platt **in that order** — reordering silently reverts it. The invariant `(training_metrics[s]['interval_width'] + 2*cqr_correction) / divisor ÷ probability_calibrator[s]['std_estimate'] == 1` is assertable from any pickle and is pinned by `tests/test_probability_calibration.py`
+- CV: `_purged_splits` (`purge_gap = PURGE_GAP = 3`) everywhere OOF is produced; per-fold scalers. OOF-count guards are stated as `threshold - PURGE_GAP` because purging costs at most `PURGE_GAP` rows
 - Persistence: L1 memory → L2 `models/{PlayerName}_model.pkl` → L3 Supabase Storage (`ml-models` bucket, source of truth). Stale local copies (> 7 days) check Supabase for a fresher one on load; `scripts/pretrain_all_players.py --force|--max-age-days` refreshes the fleet
 - `NBA_EVAL_DISABLE_TF=1` skips the optional TensorFlow import (set in tests/conftest.py; TF is not installed in production)
 
@@ -174,7 +180,7 @@ profiles:         auth profiles (username, role, avatar_url, is_public);
 
 - **SSE streaming:** `usePrediction` hook drives progress bar for player + game predictions
 - **Per-player models:** Pass `retrain=True` to force retraining from scratch
-- **Defense via features:** `OPP_DEF_RATING_NORM`/`OPP_PACE_NORM` fed into all models — one signal among 84. VS_OPP history can override season-level defensive signal
+- **Defense via features:** `OPP_DEF_RATING_NORM`/`OPP_PACE_NORM` fed into all models — one signal among 79. VS_OPP history can override season-level defensive signal
 - **Mutation invalidation:** Grading cascades `invalidateQueries` on `['picks']`, `['performance-stats']`, `['cumulative-profit']`
 - **Injury adjustments:** Usage redistribution when teammates out; opponent weakening when key opponents out
 

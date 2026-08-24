@@ -44,7 +44,6 @@ from pra_utils import (
 # ML Libraries
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import cross_val_score, TimeSeriesSplit
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.linear_model import BayesianRidge, LogisticRegression
 from sklearn.isotonic import IsotonicRegression
@@ -587,13 +586,34 @@ class NBADataScraper:
                     continue
 
                 print(f"Fetching {season} game log from BDL...")
+                df = None
                 try:
                     df = self._fetch_bdl_game_log(player_id, bdl_id, season_int, season)
-                    if df is not None and not df.empty:
-                        CacheManager.set('game_log', df, player_id, season)
-                        all_games.append(df)
                 except Exception as e:
-                    print(f"Could not fetch {season}: {e}")
+                    print(f"Could not fetch {season} from BDL: {e}")
+
+                # BDL's current-season endpoint sits behind a paid tier and
+                # returns 401 on this key, which would otherwise drop the whole
+                # current season silently. stats.nba.com is public, carries the
+                # same games, and is the schema the BDL rows are modelled on.
+                if df is None or df.empty:
+                    print(f"BDL unavailable for {season} — falling back to stats.nba.com...")
+                    try:
+                        df = self._fetch_nba_com_game_log(player_id, season_int, season)
+                    except Exception as e:
+                        print(f"Could not fetch {season} from stats.nba.com: {e}")
+
+                # Last resort: a completed season may already be mirrored.
+                if df is None or df.empty:
+                    df = _db.get_game_logs_from_supabase(str(player_id), season)
+                    if df is not None and not df.empty:
+                        print(f"Loaded {season} from Supabase ({len(df)} games)")
+
+                if df is not None and not df.empty:
+                    CacheManager.set('game_log', df, player_id, season)
+                    all_games.append(df)
+                else:
+                    print(f"No {season} game log available from any source")
 
         if all_games:
             combined = pd.concat(all_games, ignore_index=True)
@@ -602,6 +622,85 @@ class NBADataScraper:
             combined = combined.sort_values('_sort_date', ascending=True).drop(columns=['_sort_date']).reset_index(drop=True)
             return combined
         return pd.DataFrame()
+
+    @staticmethod
+    def _resolve_nba_player_id(player_id):
+        """Best-effort map of any player id to a stats.nba.com id, or None.
+
+        Looks the name up in the ``player_game_logs`` mirror (keyed by BDL id),
+        then resolves it against nba_api's static roster. Both steps are
+        credential-free apart from the database, and the whole thing is a
+        fallback — every failure returns None so the caller degrades quietly.
+        """
+        try:
+            import db as _db
+            from nba_api.stats.static import players as _static
+
+            with _db.borrow_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT player_name FROM player_game_logs "
+                        "WHERE player_id = %s LIMIT 1",
+                        (str(player_id),),
+                    )
+                    row = cur.fetchone()
+            if not row or not row.get('player_name'):
+                return None
+
+            matches = _static.find_players_by_full_name(row['player_name'])
+            return matches[0]['id'] if matches else None
+        except Exception as exc:
+            warnings.warn(
+                f"Could not resolve nba.com id for {player_id}: {exc}",
+                RuntimeWarning,
+            )
+            return None
+
+    def _fetch_nba_com_game_log(self, nba_player_id, season_int, season_str):
+        """Fetch a season's game log from stats.nba.com.
+
+        Public, unauthenticated, and already a dependency. Because
+        ``_fetch_bdl_game_log`` reshapes BDL rows into *this* endpoint's schema,
+        the frame needs only the two columns ``playergamelog`` omits (``SEASON``,
+        ``PLAYER_NAME``) plus a ``GAME_DATE`` normalised to the ISO form the rest
+        of the pipeline expects. ``SEASON_ID`` is overwritten with the integer
+        year so the frame matches what the BDL path produced.
+
+        Returns regular-season games only, matching ``playergamelog``'s default.
+        """
+        from nba_api.stats.endpoints import playergamelog
+
+        def _pull(pid):
+            frame = playergamelog.PlayerGameLog(
+                player_id=str(pid), season=season_str
+            ).get_data_frames()[0]
+            return frame if frame is not None and not frame.empty else None
+
+        raw = _pull(nba_player_id)
+
+        # Callers routinely hand us a BDL id (get_player_info returns one), and
+        # BDLPlayerMapper.bdl_to_nba is degenerate — it echoes its input. So on a
+        # miss, resolve the name from the game-log mirror and map it through
+        # nba_api's static roster, which is local and needs no credentials.
+        if raw is None:
+            nba_id = self._resolve_nba_player_id(nba_player_id)
+            if nba_id is not None and str(nba_id) != str(nba_player_id):
+                print(f"Resolved id {nba_player_id} -> nba.com {nba_id}")
+                raw = _pull(nba_id)
+
+        if raw is None:
+            return pd.DataFrame()
+
+        df = raw.copy()
+        df['GAME_DATE'] = (
+            pd.to_datetime(df['GAME_DATE'], format='mixed').dt.strftime('%Y-%m-%d')
+        )
+        df['SEASON'] = season_str
+        df['SEASON_ID'] = season_int
+        if 'PLAYER_NAME' not in df.columns:
+            df['PLAYER_NAME'] = None
+        print(f"Loaded {season_str} from stats.nba.com ({len(df)} games)")
+        return df
 
     def _fetch_bdl_game_log(self, nba_player_id, bdl_id, season_int, season_str):
         """Internal helper: fetch per-game stats from BDL and return a DataFrame
@@ -1175,6 +1274,66 @@ NBA_ARENAS = {
 # Teams at high altitude (>4000 ft) — documented performance advantage
 HIGH_ALTITUDE_TEAMS = {'DEN', 'UTA'}
 
+# Lag-1 defaults for the five same-game ratio features. Used for the row-0 fill
+# in create_features and as the serve-time fallback in get_prediction_features.
+SAME_GAME_RATIO_DEFAULTS = {
+    'AST_TOV_RATIO': 2.0,
+    'OREB_RATE':     0.25,
+    'FG3_RATE':      0.35,
+    'FT_RATE':       0.25,
+    'PF_PER_MIN':    0.08,
+}
+
+# Marks the synthetic next-game row appended by create_features when a
+# game_info is supplied. Everything downstream that summarises COMPLETED games
+# (recent averages, "any new games?", the historical-variance fallback) must
+# drop it first — see drop_upcoming_rows.
+UPCOMING_GAME_FLAG = 'IS_UPCOMING_GAME'
+
+# Minutes placeholder on the synthetic row. Only requirement: > 0, so the row
+# survives the DNP filter (`MIN_NUMERIC > 0`) at the top of create_features.
+# Its value provably cannot reach the served vector — every rolling/EMA/std
+# feature is .shift(1)-ed, so the synthetic row's own box score is never read.
+UPCOMING_ROW_MINUTES = 1.0
+
+
+def drop_upcoming_rows(df):
+    """Return ``df`` without the synthetic next-game row, if one is present.
+
+    Never mutates the input and returns the original object untouched when
+    there is nothing to drop, so this is safe to call unconditionally at the
+    top of any function that summarises completed games.
+    """
+    if df is None:
+        return df
+    columns = getattr(df, 'columns', None)
+    if columns is None or UPCOMING_GAME_FLAG not in columns:
+        return df
+    mask = df[UPCOMING_GAME_FLAG].fillna(False).astype(bool)
+    if not mask.any():
+        return df
+    # .copy() so callers that assign columns onto the result (update() rewrites
+    # GAME_DATE) operate on their own frame instead of a pandas view.
+    return df[~mask].copy()
+
+
+def has_upcoming_row(df):
+    """True when ``df``'s last row is the synthetic next-game row."""
+    if df is None or not len(df):
+        return False
+    columns = getattr(df, 'columns', None)
+    if columns is None or UPCOMING_GAME_FLAG not in columns:
+        return False
+    return bool(df[UPCOMING_GAME_FLAG].iloc[-1])
+
+
+# Team-tenure ceiling: beyond this many games with one team, "how long has he
+# been here" carries no further signal, so the feature saturates.
+TEAM_TENURE_CAP = 25
+# Games after a team change during which role/usage/lineup context is still
+# unlearned by a model whose training mass sits on the previous team.
+TRADE_WINDOW_GAMES = 7
+
 
 def _travel_miles(team_from: str, team_to: str) -> float:
     """Approximate great-circle distance between two NBA arenas in miles."""
@@ -1223,9 +1382,127 @@ class FeatureEngineer:
         }
 
     @staticmethod
-    def create_features(game_log, player_info=None, game_info=None, injuries=None, team_stats=None):
-        """Create comprehensive feature set from game log"""
+    def append_upcoming_game_row(game_log, game_info):
+        """Return ``game_log`` with a synthetic row for the upcoming game appended.
+
+        Every rolling/EMA/std feature in ``create_features`` is ``.shift(1)``-ed,
+        so row *i* summarises games *0..i-1*. Without a row for the game being
+        predicted, ``get_prediction_features``' ``df.iloc[-1]`` reads the last
+        COMPLETED game's row — which summarises everything up to the game
+        BEFORE it. That is the one-game-stale serve bug. Appending a row for
+        the upcoming game makes ``iloc[-1]`` genuinely the next game.
+
+        Only schedule facts are carried onto the row — matchup, date, season.
+        The box score is left NaN and cannot leak: there is not one unshifted
+        ``.rolling(`` call in ``create_features``, so nothing the synthetic row
+        carries in its stat columns is ever read back out of the served vector.
+
+        Returns the input unchanged when ``game_info`` is missing, malformed, or
+        does not describe a game strictly after the last logged one.
+        """
+        if game_log is None or not len(game_log) or not game_info:
+            return game_log
+
+        matchup = str(game_info.get('matchup') or '').strip()
+        raw_date = game_info.get('game_date')
+        if not matchup or raw_date is None:
+            return game_log
+        try:
+            game_date = pd.to_datetime(raw_date)
+        except Exception:
+            return game_log
+        if pd.isna(game_date):
+            return game_log
+
         df = game_log.copy()
+        try:
+            logged_dates = pd.to_datetime(df['GAME_DATE'], format='mixed')
+        except Exception:
+            return game_log
+        last_logged = logged_dates.max()
+        # A game_info that is stale (already played) or older than the log would
+        # sort into the middle of the frame and corrupt every rolling window.
+        if pd.isna(last_logged) or game_date <= last_logged:
+            return game_log
+
+        prev = df.iloc[logged_dates.values.argmax()]
+        row = {col: np.nan for col in df.columns}
+        # Match the log's own GAME_DATE representation. Mixing Timestamps into a
+        # column of date strings makes the sort key in create_features fragile.
+        row['GAME_DATE'] = (
+            game_date if pd.api.types.is_datetime64_any_dtype(df['GAME_DATE'])
+            else game_date.strftime('%Y-%m-%d')
+        )
+        row['MATCHUP'] = matchup
+        row['MIN'] = UPCOMING_ROW_MINUTES
+        if 'MIN_NUMERIC' in df.columns:
+            row['MIN_NUMERIC'] = UPCOMING_ROW_MINUTES
+        # Season keys are what GAME_NUM/GAMES_THIS_SEASON/SEASON_PHASE group on.
+        # A null season forms its own group -> GAMES_THIS_SEASON == 1 -> the
+        # early-season damping trips for every player, every night.
+        for season_col in ('SEASON', 'SEASON_ID'):
+            if season_col in df.columns:
+                row[season_col] = prev[season_col]
+        for carry_col in ('Player_ID', 'PLAYER_ID', 'PLAYER_NAME'):
+            if carry_col in df.columns:
+                row[carry_col] = prev[carry_col]
+        # Game_ID is deliberately left NaN: it is an int64 column on both the
+        # NBA-API and BallDontLie shapes, and a string marker would silently
+        # upcast it. UPCOMING_GAME_FLAG is the marker.
+        row[UPCOMING_GAME_FLAG] = True
+
+        if UPCOMING_GAME_FLAG not in df.columns:
+            df[UPCOMING_GAME_FLAG] = False
+        else:
+            df[UPCOMING_GAME_FLAG] = df[UPCOMING_GAME_FLAG].fillna(False).astype(bool)
+
+        appended = pd.DataFrame([row], columns=df.columns)
+        # Keep the log's own dtypes where possible; the appended row is all-NaN
+        # for the box score so pandas would otherwise upcast every int column.
+        return pd.concat([df, appended], ignore_index=True)
+
+    @staticmethod
+    def serve_days_rest(df, default=2, now=None):
+        """Days of rest before the game ``get_prediction_features`` will serve.
+
+        With a synthetic next-game row present this is the row's own
+        ``DAYS_REST`` — the true gap between the last completed game and the
+        scheduled one, with no dependence on wall-clock time. Without one it
+        falls back to the legacy ``now - last completed game`` formula, which
+        silently assumes the upcoming game is today.
+        """
+        try:
+            if df is None or not len(df) or 'GAME_DATE' not in df.columns:
+                return default
+            if has_upcoming_row(df) and 'DAYS_REST' in df.columns:
+                value = df['DAYS_REST'].iloc[-1]
+                if pd.notna(value):
+                    return int(max(0, min(7, round(float(value)))))
+            completed = drop_upcoming_rows(df)
+            if not len(completed):
+                return default
+            last_game = pd.to_datetime(completed['GAME_DATE'].iloc[-1])
+            reference = now or datetime.now()
+            return int(max(0, min((reference - last_game).days, 7)))
+        except Exception:
+            return default
+
+    @staticmethod
+    def create_features(game_log, player_info=None, game_info=None, injuries=None, team_stats=None):
+        """Create comprehensive feature set from game log.
+
+        When ``game_info`` is supplied (shape: ``get_player_next_game``'s return
+        value), a synthetic row for the upcoming game is appended first so that
+        ``get_prediction_features``' ``df.iloc[-1]`` describes the game being
+        predicted rather than the last one played. See
+        ``append_upcoming_game_row``.
+        """
+        game_log = FeatureEngineer.append_upcoming_game_row(game_log, game_info)
+        df = game_log.copy()
+        if UPCOMING_GAME_FLAG not in df.columns:
+            df[UPCOMING_GAME_FLAG] = False
+        else:
+            df[UPCOMING_GAME_FLAG] = df[UPCOMING_GAME_FLAG].fillna(False).astype(bool)
         df = df.sort_values('GAME_DATE', key=lambda x: pd.to_datetime(x, format='mixed'))
 
         # Parse minutes
@@ -1428,6 +1705,26 @@ class FeatureEngineer:
         df['PLAYER_TEAM'] = df['MATCHUP'].apply(
             lambda x: str(x).split(' ')[0] if pd.notna(x) else ''
         )
+
+        # =====================
+        # TEAM TENURE / TRADE CONTEXT
+        # =====================
+        # The team for a given game is known before tip-off, so keying on the
+        # CURRENT row's team is not leakage; cumcount() is 0-based and therefore
+        # already counts only games played BEFORE this one with this team — no
+        # shift(1) needed and no NaN to fill.
+        _team_block = (df['PLAYER_TEAM'] != df['PLAYER_TEAM'].shift()).cumsum()
+        _tenure = df.groupby(_team_block).cumcount()
+        # The first block is left-censored: the log window opens mid-tenure, so a
+        # low count there means "short log", not "recent trade". Seed it to the cap
+        # so damping never fires on the log's own left edge.
+        if len(df):
+            _tenure = _tenure.where(_team_block != _team_block.iloc[0], TEAM_TENURE_CAP)
+        df['GAMES_WITH_CURRENT_TEAM'] = _tenure.clip(upper=TEAM_TENURE_CAP).astype(float)
+        df['TEAM_CHANGED_RECENT'] = (
+            df['GAMES_WITH_CURRENT_TEAM'] < TRADE_WINDOW_GAMES
+        ).astype(int)
+
         # Where the game is played
         df['GAME_LOCATION'] = df.apply(
             lambda row: row['OPPONENT'] if row['IS_HOME'] == 0 else row['PLAYER_TEAM'], axis=1
@@ -1513,11 +1810,15 @@ class FeatureEngineer:
             )
             df['OPP_EFG_PCT_NORM'] = (df['OPP_EFG_PCT'] - 0.50) / 0.03
 
-            # Opponent turnover rate (transition opportunity indicator)
+            # Opponent turnover rate (transition opportunity indicator).
+            # The normalized form OPP_TOV_PCT_NORM used to be derived here; it
+            # was pruned from FEATURE_COLS in 7ab42e3 for zero importance across
+            # every model and nothing has read it since, so it is no longer
+            # computed. The raw column stays: `extract_opp_stats` plumbs
+            # `opp_tov_pct` through a shared contract used by six call sites.
             df['OPP_TOV_PCT'] = df['OPPONENT'].map(
                 lambda x: team_stats.get(x, {}).get('tov_pct', 14.0)
             )
-            df['OPP_TOV_PCT_NORM'] = (df['OPP_TOV_PCT'] - 14.0) / 2.0
 
             # Opponent offensive rebound rate (second chance pts context)
             df['OPP_OREB_PCT'] = df['OPPONENT'].map(
@@ -1569,15 +1870,40 @@ class FeatureEngineer:
             df['ROLL_5_AST_TOV'] = df['AST_TOV_RATIO'].rolling(5, min_periods=1).mean().shift(1)
 
         # =====================
+        # DE-LEAK SAME-GAME RATIOS
+        # =====================
+        # These five are computed from the CURRENT game's own box score.
+        #
+        # POSITION IS LOAD-BEARING — do not move this block, and do not shift at
+        # the definition sites. Every consumer ABOVE here applies its own
+        # .shift(1) and must see the RAW value: the `stats_for_rolling` loop
+        # (which builds ROLL_*/STD_*/EMA_* for FG3_RATE and FT_RATE) and
+        # `ROLL_5_AST_TOV`. Shifting earlier makes all of those lag-2 — silently,
+        # with no error and no test failure unless something asserts on them.
+        # The only consumer BELOW here is `OREB_RATE_x_OPP_OREB`, which needs the
+        # shifted value. So this block must sit after the former and before the
+        # latter; tests/test_leakage_guards.py::TestRollingSiblingsNotDoubleShifted
+        # pins that invariant.
+        #
+        # The `_*_CURR` mirrors are deliberately NOT in FEATURE_COLS. With a
+        # synthetic next-game row present, serve reads the PUBLIC column on that
+        # row — create_features already shifted it, so it holds the last
+        # completed game's own ratio, which IS the lag-1 input. The mirrors
+        # remain the fallback for frames built with no game_info, where
+        # `iloc[-1]` is the last completed game and its own ratio lives in
+        # `_*_CURR`. See `_lag1_ratio` in get_prediction_features.
+        for _col, _default in SAME_GAME_RATIO_DEFAULTS.items():
+            if _col in df.columns:
+                df[f'_{_col}_CURR'] = df[_col]
+                df[_col] = df[f'_{_col}_CURR'].shift(1).fillna(_default)
+
+        # =====================
         # INTERACTION FEATURES
         # =====================
-        # Back-to-back vs elite defense (< 108 DEF RTG)
-        if 'B2B' in df.columns and 'OPP_DEF_RATING_NORM' in df.columns:
-            df['B2B_VS_ELITE'] = df['B2B'] * (df['OPP_DEF_RATING_NORM'] < -0.4).astype(int)
-
-        # Hot streak vs weak defense (> 116 DEF RTG)
-        if 'IS_HOT' in df.columns and 'OPP_DEF_RATING_NORM' in df.columns:
-            df['HOT_VS_WEAK'] = df['IS_HOT'] * (df['OPP_DEF_RATING_NORM'] > 1.2).astype(int)
+        # B2B_VS_ELITE and HOT_VS_WEAK were computed here until 2026-08-22.
+        # Both were pruned from FEATURE_COLS in 7ab42e3 ("zero importance across
+        # all models") and from get_prediction_features at the same time, but
+        # the computation was left behind — built on every call, read by nothing.
 
         # Rested and at home
         if 'EXTENDED_REST' in df.columns and 'IS_HOME' in df.columns:
@@ -1589,18 +1915,11 @@ class FeatureEngineer:
         if 'OREB_RATE' in df.columns and 'OPP_OREB_PCT_NORM' in df.columns:
             df['OREB_RATE_x_OPP_OREB'] = df['OREB_RATE'] * df['OPP_OREB_PCT_NORM']
 
-        # =====================
-        # PACE BUCKET FLAGS
-        # =====================
-        if 'OPP_PACE' in df.columns:
-            df['HIGH_PACE_GAME'] = (df['OPP_PACE'] > 103).astype(int)
-            df['LOW_PACE_GAME'] = (df['OPP_PACE'] < 97).astype(int)
-
-        # =====================
-        # ELITE OPPONENT FLAG
-        # =====================
-        if 'OPP_NET_RATING' in df.columns:
-            df['ELITE_OPP'] = (df['OPP_NET_RATING'] > 5.0).astype(int)
+        # HIGH_PACE_GAME / LOW_PACE_GAME / ELITE_OPP were bucketed here until
+        # 2026-08-22 — same story as the interaction flags above: pruned from
+        # FEATURE_COLS in 7ab42e3 for zero importance, computation left behind.
+        # OPP_PACE and OPP_NET_RATING are still built; their normalized forms
+        # (OPP_PACE_NORM, OPP_NET_RATING_NORM) are live features.
 
         # =====================
         # POSITION FEATURES
@@ -1647,7 +1966,7 @@ class FeatureEngineer:
         return df
     
     @staticmethod
-    def get_prediction_features(df, is_home, opponent, injuries_team=0, injuries_opp=0,
+    def get_prediction_features(df, is_home, opponent,
                                  opp_def_rating=110, opp_pace=100, opp_ast_allowed=25, days_rest=2, vs_stats=None,
                                  player_info=None,
                                  # Enhanced opponent context (from BDL advanced stats)
@@ -1656,10 +1975,7 @@ class FeatureEngineer:
                                  opp_oreb_pct=0.27, opp_dreb_pct=0.73,
                                  # Schedule density & travel context
                                  games_in_last_7=2, games_in_last_4=1,
-                                 travel_miles=0, timezone_shift=0, is_altitude=0,
-                                 # Vegas lines (market-implied context)
-                                 vegas_game_total=220, vegas_spread=0,
-                                 vegas_implied_team_total=110):
+                                 travel_miles=0, timezone_shift=0, is_altitude=0):
         """Get feature vector for prediction
 
         Args:
@@ -1671,8 +1987,46 @@ class FeatureEngineer:
             opp_tov_pct: Opponent turnover percentage
             opp_oreb_pct: Opponent offensive rebound percentage
             opp_dreb_pct: Opponent defensive rebound percentage
+
+        ``df`` may or may not carry the synthetic next-game row appended by
+        ``create_features(game_info=...)``. When it does, ``latest`` IS the
+        upcoming game and every ``.shift(1)``-ed column on it already holds the
+        lag-1 value; when it does not, ``latest`` is the last COMPLETED game and
+        the two conventions below differ by exactly one game. Both are handled
+        so a caller with no schedule information (``game_info is None``) still
+        serves correct lag-1 values instead of silently sliding to lag-2.
         """
         latest = df.iloc[-1]
+        _serves_upcoming = has_upcoming_row(df)
+        # 0 when `latest` already IS the upcoming game; 1 when it is the last
+        # completed one and the counters have to be advanced by hand.
+        _next_game_step = 0 if _serves_upcoming else 1
+
+        def _lag1_ratio(name):
+            """Lag-1 value of a same-game ratio, whichever frame shape we got.
+
+            With the synthetic row present the PUBLIC (already shifted) column
+            on it equals the last completed game's own ratio — the correct
+            lag-1 input — while the ``_CURR`` mirror is the synthetic row's own
+            garbage. Without it the relationship is the exact inverse.
+            """
+            default = SAME_GAME_RATIO_DEFAULTS[name]
+            key = name if _serves_upcoming else '_{}_CURR'.format(name)
+            value = latest.get(key, default)
+            return default if pd.isna(value) else value
+
+        # Team tenure for the UPCOMING game. player_info carries the roster's
+        # current team; if it disagrees with the last logged game's team the
+        # player was traded since then and tenure resets to 0.
+        _last_team = str(latest.get('PLAYER_TEAM', '') or '').upper()
+        _cur_team = str((player_info or {}).get('team_abbrev', '') or '').upper()
+        if _cur_team and _last_team and _cur_team != _last_team:
+            _tenure_next = 0.0
+        else:
+            _tenure_next = min(
+                float(latest.get('GAMES_WITH_CURRENT_TEAM', TEAM_TENURE_CAP)) + _next_game_step,
+                float(TEAM_TENURE_CAP),
+            )
 
         features = {
             'IS_HOME': is_home,
@@ -1705,15 +2059,8 @@ class FeatureEngineer:
             'GAMES_IN_LAST_7': games_in_last_7,
             'TRAVEL_MILES_NORM': travel_miles / 1000,
             'TIMEZONE_SHIFT': timezone_shift,
-            # Vegas lines (normalized around league averages)
-            'VEGAS_GAME_TOTAL_NORM': (vegas_game_total - 220) / 10,  # avg ~220, std ~10
-            'VEGAS_SPREAD_NORM': vegas_spread / 5,  # spread in 5-point units
-            'VEGAS_IMPLIED_TEAM_TOTAL_NORM': (vegas_implied_team_total - 110) / 5,
             # Team momentum
             'WIN_STREAK': latest.get('WIN_STREAK', 2.5),
-            # Injuries
-            'INJURIES_TEAM': injuries_team,
-            'INJURIES_OPP': injuries_opp,
             # Opponent context (normalized)
             'OPP_DEF_RATING_NORM': (opp_def_rating - 110) / 5,
             'OPP_PACE_NORM': (opp_pace - 100) / 5,
@@ -1725,8 +2072,12 @@ class FeatureEngineer:
             'IS_COLD': latest.get('IS_COLD', 0),
             # Season phase
             'SEASON_PHASE': latest.get('SEASON_PHASE', 2),
-            # The upcoming game is one deeper into the season than the latest log row
-            'GAMES_THIS_SEASON': latest.get('GAMES_THIS_SEASON', 41) + 1,
+            # GAMES_THIS_SEASON counts the row's own game, so the synthetic
+            # next-game row already reports the upcoming game's number; without
+            # one, advance the last completed game's count by hand.
+            'GAMES_THIS_SEASON': latest.get('GAMES_THIS_SEASON', 41) + _next_game_step,
+            'GAMES_WITH_CURRENT_TEAM': _tenure_next,
+            'TEAM_CHANGED_RECENT': 1 if _tenure_next < TRADE_WINDOW_GAMES else 0,
 
             # =====================
             # ADVANCED STATS
@@ -1744,8 +2095,10 @@ class FeatureEngineer:
             'ROLL_5_STOCKS': latest.get('ROLL_5_STOCKS', 1.5),
             'ROLL_5_FANTASY_PTS': latest.get('ROLL_5_FANTASY_PTS', 30),
 
-            # Assist/Turnover trends
-            'AST_TOV_RATIO': latest.get('AST_TOV_RATIO', 2.0),
+            # Assist/Turnover trends — see _lag1_ratio: which column carries
+            # the lag-1 value depends on whether `latest` is the upcoming game
+            # (public, already shifted) or the last completed one (_*_CURR).
+            'AST_TOV_RATIO': _lag1_ratio('AST_TOV_RATIO'),
             'ROLL_5_AST_TOV': latest.get('ROLL_5_AST_TOV', 2.0),
 
             # Per-36-minute normalized stats
@@ -1787,7 +2140,7 @@ class FeatureEngineer:
             # =====================
             # REBOUND SPLIT FEATURES
             # =====================
-            'OREB_RATE': latest.get('OREB_RATE', 0.25),
+            'OREB_RATE': _lag1_ratio('OREB_RATE'),
             'ROLL_5_OREB': latest.get('ROLL_5_OREB', 1.0),
             'ROLL_10_OREB': latest.get('ROLL_10_OREB', 1.0),
             'ROLL_5_DREB': latest.get('ROLL_5_DREB', 3.0),
@@ -1796,7 +2149,7 @@ class FeatureEngineer:
             # =====================
             # THREE-POINT SHOOTING FEATURES
             # =====================
-            'FG3_RATE': latest.get('FG3_RATE', 0.35),
+            'FG3_RATE': _lag1_ratio('FG3_RATE'),
             'ROLL_5_FG3M': latest.get('ROLL_5_FG3M', 1.5),
             'ROLL_10_FG3M': latest.get('ROLL_10_FG3M', 1.5),
             'ROLL_5_FG3A': latest.get('ROLL_5_FG3A', 4.0),
@@ -1806,7 +2159,7 @@ class FeatureEngineer:
             # =====================
             # FREE THROW FEATURES
             # =====================
-            'FT_RATE': latest.get('FT_RATE', 0.25),
+            'FT_RATE': _lag1_ratio('FT_RATE'),
             'ROLL_5_FT_RATE': latest.get('ROLL_5_FT_RATE', 0.25),
             'ROLL_5_FTM': latest.get('ROLL_5_FTM', 2.0),
 
@@ -1814,12 +2167,16 @@ class FeatureEngineer:
             # FOUL TROUBLE / GAME FLOW
             # =====================
             'ROLL_5_PF': latest.get('ROLL_5_PF', 2.5),
-            'PF_PER_MIN': latest.get('PF_PER_MIN', 0.08),
+            'PF_PER_MIN': _lag1_ratio('PF_PER_MIN'),
 
             # =====================
             # ENHANCED INTERACTION FEATURES
             # =====================
-            'OREB_RATE_x_OPP_OREB': latest.get('OREB_RATE', 0.25) * ((opp_oreb_pct - 0.27) / 0.05),
+            # Must go through _lag1_ratio too: pairing a lag-2 player term with
+            # a lag-0 opponent term would fail silently (no exception, no test).
+            'OREB_RATE_x_OPP_OREB': (
+                _lag1_ratio('OREB_RATE') * ((opp_oreb_pct - 0.27) / 0.05)
+            ),
 
             # Per-36 rebound splits
             'ROLL_5_OREB_PER36': latest.get('ROLL_5_OREB_PER36', 0),
@@ -1918,7 +2275,10 @@ class MLPredictor:
         self.feature_names = None
         self.training_history = []
         self.feature_importance = {}
-        self.recent_averages = {}  # Store recent averages for bias correction
+        self.recent_averages = {}  # L10 mean per stat (bias correction + residual model)
+        self.recent_averages_l5 = {}  # L5 mean per stat (residual model column 2)
+        self.recent_stds_l10 = {}     # L10 std per stat (residual model column 4)
+        self.season_averages = {}     # Full-season mean per stat (season-deviation cap)
         self.last_game_date = None  # Track last game date in training data
         self.trained_at = None      # Track when model was actually saved/trained
         self.games_trained_on = 0   # Track how many games model has seen
@@ -1977,12 +2337,10 @@ class MLPredictor:
         # Head-to-head matchup stats
         'VS_OPP_AVG_PTS', 'VS_OPP_AVG_REB', 'VS_OPP_AVG_AST', 'VS_OPP_GAMES',
         'VS_OPP_PTS_DIFF', 'VS_OPP_REB_DIFF', 'VS_OPP_AST_DIFF',
-        # Injury context (0 in training data; non-zero at prediction time via apply_injury_boost)
-        'INJURIES_TEAM', 'INJURIES_OPP',
         # Position features (POSITION_ORD is dead — interactions capture it)
         'POSITION_x_OPP_DEF', 'POSITION_x_OPP_PACE',
 
-        # Enhanced Opponent Context (from team advanced stats; OPP_TOV_PCT_NORM is dead)
+        # Enhanced Opponent Context (from team advanced stats)
         'OPP_OFF_RATING_NORM', 'OPP_NET_RATING_NORM', 'OPP_EFG_PCT_NORM',
         'OPP_OREB_PCT_NORM', 'OPP_DREB_PCT_NORM',
 
@@ -2007,7 +2365,7 @@ class MLPredictor:
         'ROLL_5_PF',
         'PF_PER_MIN',
 
-        # Enhanced Interaction Features (dead: HIGH_PACE_GAME, LOW_PACE_GAME, ELITE_OPP)
+        # Enhanced Interaction Features
         'OREB_RATE_x_OPP_OREB',
 
         # Per-36 Rebound Splits
@@ -2017,8 +2375,8 @@ class MLPredictor:
         'GAMES_IN_LAST_7',
         'TRAVEL_MILES_NORM', 'TIMEZONE_SHIFT',
 
-        # Vegas Lines (Phase 3b) — market-implied context
-        'VEGAS_GAME_TOTAL_NORM', 'VEGAS_SPREAD_NORM', 'VEGAS_IMPLIED_TEAM_TOTAL_NORM',
+        # Team tenure / trade context
+        'GAMES_WITH_CURRENT_TEAM', 'TEAM_CHANGED_RECENT',
     ]
 
     # Per-stat optimized hyperparameters for Gradient Boosting
@@ -2156,13 +2514,15 @@ class MLPredictor:
         }
 
     @staticmethod
-    def _purged_splits(n, n_splits=5, purge_gap=3):
+    def _purged_splits(n, n_splits=5, purge_gap=None):
         """Yield (train_idx, val_idx) purged walk-forward splits.
 
         A ``purge_gap``-sample embargo separates train and validation sets to
         prevent leakage through rolling-window features (L5 rolling avg, etc.).
         Replaces standard TimeSeriesSplit which has no purge gap.
         """
+        if purge_gap is None:
+            purge_gap = MLPredictor.PURGE_GAP
         fold_size = n // (n_splits + 1)
         for i in range(n_splits):
             train_end = fold_size * (i + 1)
@@ -2173,18 +2533,40 @@ class MLPredictor:
             yield np.arange(0, train_end), np.arange(val_start, val_end)
 
     @staticmethod
-    def _weighted_cv_mae(model_or_factory, X, y, weights, tscv):
-        """Purged walk-forward cross-validation with sample_weight support."""
+    def _fold_scaled(X_raw, train_idx, val_idx):
+        """Fit a StandardScaler on fold-TRAIN rows only; return (X_train, X_val).
+
+        Fitting one scaler on every row before splitting leaks the validation
+        rows' means/stds into training and flatters every CV score. The
+        production scaler in ``train()`` is still fit on all rows, because
+        ``update()`` and the predict paths only ever call ``.transform()``.
+        """
+        scaler = StandardScaler()
+        X_tr = scaler.fit_transform(X_raw[train_idx])
+        X_va = scaler.transform(X_raw[val_idx])
+        return X_tr, X_va
+
+    @staticmethod
+    def _weighted_cv_mae(model_or_factory, X_raw, y, weights):
+        """Purged walk-forward cross-validation with sample_weight support.
+
+        ``X_raw`` must be UNSCALED — each fold fits its own scaler (see
+        ``_fold_scaled``).
+        """
         scores = []
-        for train_idx, val_idx in MLPredictor._purged_splits(len(X)):
+        for train_idx, val_idx in MLPredictor._purged_splits(len(X_raw)):
+            X_tr, X_va = MLPredictor._fold_scaled(X_raw, train_idx, val_idx)
             m = sklearn_clone(model_or_factory) if hasattr(model_or_factory, 'get_params') else model_or_factory
-            m.fit(X[train_idx], y[train_idx], sample_weight=weights[train_idx])
-            pred = m.predict(X[val_idx])
+            m.fit(X_tr, y[train_idx], sample_weight=weights[train_idx])
+            pred = m.predict(X_va)
             scores.append(np.mean(np.abs(y[val_idx] - pred)))
         return np.array(scores)
 
-    def _optimize_hyperparameters(self, X, y, weights, stat):
-        """Use Optuna to find optimal hyperparameters for a stat (Improvement #10)."""
+    def _optimize_hyperparameters(self, X_raw, y, weights, stat):
+        """Use Optuna to find optimal hyperparameters for a stat (Improvement #10).
+
+        ``X_raw`` must be UNSCALED: every trial rescales inside each CV fold.
+        """
         if not OPTUNA_AVAILABLE:
             return self.GB_STAT_PARAMS.get(stat, self.GB_STAT_PARAMS['PTS'])
 
@@ -2206,7 +2588,7 @@ class MLPredictor:
             gb_extra = {'alpha': 0.9} if stat_loss == 'huber' else {}
             model = GradientBoostingRegressor(
                 **params, loss=stat_loss, **gb_extra, random_state=42,
-                validation_fraction=0.15, n_iter_no_change=15, tol=1e-4,
+                validation_fraction=0.15, n_iter_no_change=20, tol=1e-4,
             )
             # Combined objective: MAE + calibration penalty
             # The Brier penalty encourages models whose residual distribution
@@ -2216,10 +2598,11 @@ class MLPredictor:
             # no embargo gap and rewarded leaky hyperparameters).
             maes = []
             brier_penalties = []
-            for train_idx, val_idx in self._purged_splits(len(X)):
+            for train_idx, val_idx in self._purged_splits(len(X_raw)):
+                X_tr, X_va = self._fold_scaled(X_raw, train_idx, val_idx)
                 m = sklearn_clone(model)
-                m.fit(X[train_idx], y[train_idx], sample_weight=weights[train_idx])
-                pred = m.predict(X[val_idx])
+                m.fit(X_tr, y[train_idx], sample_weight=weights[train_idx])
+                pred = m.predict(X_va)
                 mae = np.mean(np.abs(y[val_idx] - pred))
                 maes.append(mae)
 
@@ -2235,11 +2618,23 @@ class MLPredictor:
                 # Too few samples for any purged fold — prune this trial
                 raise optuna.TrialPruned()
 
-            # Weight: 80% MAE (last fold), 20% calibration (mean across folds)
-            return 0.8 * maes[-1] + 0.2 * np.mean(brier_penalties) * 10  # scale brier to MAE range
+            # Weight: 80% MAE, 20% calibration — BOTH averaged across folds.
+            # Scoring on maes[-1] alone tuned to a single ~1/6th slice of the
+            # log and made the search wildly high-variance.
+            return 0.8 * np.mean(maes) + 0.2 * np.mean(brier_penalties) * 10  # scale brier to MAE range
 
-        study = optuna.create_study(direction='minimize')
-        study.optimize(objective, n_trials=40, timeout=60, show_progress_bar=False)
+        # Seeded sampler + no wall-clock timeout: without both, two runs of
+        # identical code select different hyperparameters, which showed up as ~3%
+        # run-to-run MAE noise in the 2026-08-19 backtests (a divisor-only change,
+        # which cannot touch predict(), moved PTS MAE 6.70 -> 6.48). That noise
+        # floor exceeded most of the effects we need to measure. Measured cost of
+        # dropping the timeout: 40 trials takes ~15s at n=68, well inside the old
+        # 60s cap, so it was never binding — it only added nondeterminism under load.
+        study = optuna.create_study(
+            direction='minimize',
+            sampler=optuna.samplers.TPESampler(seed=42),
+        )
+        study.optimize(objective, n_trials=40, show_progress_bar=False)
 
         best = study.best_params
         best['validation_fraction'] = 0.15
@@ -2316,8 +2711,64 @@ class MLPredictor:
         selected_names = [feature_names[i] for i in selected_idx]
         return selected_idx, selected_names
 
-    def _train_quantile_models(self, X, y, weights, stat, params):
-        """Train quantile regression models for uncertainty bounds (Improvement #4)."""
+    # Fewest trees a validated quantile model may be cut back to. Below this the
+    # band degenerates towards a constant offset from the mean.
+    MIN_QUANTILE_ESTIMATORS = 20
+
+    @staticmethod
+    def _pinball_loss(y_true, y_pred, alpha):
+        """Quantile (pinball) loss at level ``alpha``; lower is better."""
+        diff = np.asarray(y_true) - np.asarray(y_pred)
+        return float(np.mean(np.maximum(alpha * diff, (alpha - 1) * diff)))
+
+    @staticmethod
+    def _select_quantile_n_estimators(X_raw, y, weights, alpha, q_params):
+        """Choose ``n_estimators`` by purged walk-forward CV on the pinball loss.
+
+        Returns None when ``X_raw`` is unavailable or no purged fold fits, in
+        which case the caller keeps the configured tree count.
+
+        Why this exists: the served (q10, q90) pair used to be fit on every row
+        with no validation set, no early stopping and no held-out check of any
+        kind, so it was free to interpolate the training log. Measured on the
+        2024-25 walk-forward fleet (2026-08-22), OOF coverage of the raw band
+        came in at 0.40-0.75 against its 0.80 target, and the CQR correction
+        then had to roughly double the width to make up the difference — which
+        is exactly the inflation that made the served std 1.4x the scale the
+        probability calibrator was fit against.
+        """
+        if X_raw is None or len(X_raw) == 0:
+            return None
+        max_trees = int(q_params.get('n_estimators', 200))
+        curves = []
+        for train_idx, val_idx in MLPredictor._purged_splits(len(X_raw)):
+            X_tr, X_va = MLPredictor._fold_scaled(X_raw, train_idx, val_idx)
+            fold_model = GradientBoostingRegressor(
+                loss='quantile', alpha=alpha, **q_params
+            )
+            fold_model.fit(X_tr, y[train_idx], sample_weight=weights[train_idx])
+            curves.append(np.array([
+                MLPredictor._pinball_loss(y[val_idx], staged, alpha)
+                for staged in fold_model.staged_predict(X_va)
+            ]))
+        if not curves:
+            return None
+        n_stages = min(len(c) for c in curves)
+        if n_stages == 0:
+            return None
+        mean_curve = np.mean([c[:n_stages] for c in curves], axis=0)
+        best = int(np.argmin(mean_curve)) + 1
+        return int(max(MLPredictor.MIN_QUANTILE_ESTIMATORS, min(best, max_trees)))
+
+    def _train_quantile_models(self, X, y, weights, stat, params, X_raw=None):
+        """Train quantile regression models for uncertainty bounds (Improvement #4).
+
+        ``X`` is the SCALED matrix the production pair is fit on. ``X_raw`` is
+        the same columns unscaled; when supplied, the tree count is selected by
+        purged walk-forward CV on the pinball loss (see
+        ``_select_quantile_n_estimators``) instead of being taken on faith.
+        Passing ``X_raw=None`` restores the pre-2026-08-22 behaviour.
+        """
         q_params = {k: v for k, v in params.items()
                     if k not in ('validation_fraction', 'n_iter_no_change', 'tol', 'loss')}
         q_params['n_estimators'] = max(100, q_params.get('n_estimators', 200) // 2)
@@ -2325,9 +2776,45 @@ class MLPredictor:
         q_params['random_state'] = 42
 
         for alpha, label in [(0.1, 'q10'), (0.9, 'q90')]:
-            qmodel = GradientBoostingRegressor(loss='quantile', alpha=alpha, **q_params)
+            fit_params = dict(q_params)
+            n_selected = self._select_quantile_n_estimators(
+                X_raw, y, weights, alpha, q_params
+            )
+            if n_selected is not None:
+                if n_selected != fit_params['n_estimators']:
+                    print(
+                        f"    {stat}_{label}: n_estimators "
+                        f"{fit_params['n_estimators']} -> {n_selected} "
+                        f"(purged CV pinball loss)"
+                    )
+                fit_params['n_estimators'] = n_selected
+            else:
+                warnings.warn(
+                    f"{stat}_{label} quantile model fit with NO validation "
+                    f"(no purged fold available at n={len(y)}) — the band will "
+                    f"be tight in-sample and CQR will have to widen it",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            qmodel = GradientBoostingRegressor(loss='quantile', alpha=alpha, **fit_params)
             qmodel.fit(X, y, sample_weight=weights)
             self.quantile_models[f'{stat}_{label}'] = qmodel
+
+        # Mean IN-SAMPLE width of the pair that will actually be served, so the
+        # gap against the OOF width (training_metrics['interval_width']) is
+        # auditable from the pickle. A served band much tighter than the OOF one
+        # means the CQR correction, learned OOF, is being applied to intervals
+        # that were never that wide. Transient scratch like `_calib_oof`: reset
+        # by train(), folded into training_metrics by
+        # _train_probability_calibrator, never persisted on its own.
+        if not hasattr(self, '_quantile_insample_width'):
+            self._quantile_insample_width = {}
+        try:
+            in_lo = self.quantile_models[f'{stat}_q10'].predict(X)
+            in_hi = self.quantile_models[f'{stat}_q90'].predict(X)
+            self._quantile_insample_width[stat] = float(np.mean(np.abs(in_hi - in_lo)))
+        except Exception:
+            self._quantile_insample_width.pop(stat, None)
 
     @staticmethod
     def _compute_oof_metrics(y, oof_preds, q10_preds=None, q90_preds=None):
@@ -2357,16 +2844,20 @@ class MLPredictor:
                 out['interval_width'] = float(np.mean(q90_preds[q_valid] - q10_preds[q_valid]))
         return out
 
-    def _train_residual_model(self, X, y, weights, stat, tscv):
-        """Train a residual correction model from OOF predictions (Improvement #6)."""
+    def _train_residual_model(self, X_raw, y, weights, stat):
+        """Train a residual correction model from OOF predictions (Improvement #6).
+
+        ``X_raw`` must be UNSCALED — each fold fits its own scaler.
+        """
         oof_preds = np.full(len(y), np.nan)
-        for train_idx, val_idx in tscv.split(X):
+        for train_idx, val_idx in self._purged_splits(len(X_raw)):
+            X_tr, X_va = self._fold_scaled(X_raw, train_idx, val_idx)
             fold_model = sklearn_clone(self.models[stat])
-            fold_model.fit(X[train_idx], y[train_idx], sample_weight=weights[train_idx])
-            oof_preds[val_idx] = fold_model.predict(X[val_idx])
+            fold_model.fit(X_tr, y[train_idx], sample_weight=weights[train_idx])
+            oof_preds[val_idx] = fold_model.predict(X_va)
 
         valid_mask = ~np.isnan(oof_preds)
-        if valid_mask.sum() < 15:
+        if valid_mask.sum() < 15 - self.PURGE_GAP:
             return
 
         residuals = y[valid_mask] - oof_preds[valid_mask]
@@ -2389,18 +2880,82 @@ class MLPredictor:
         residual_model.fit(residual_X, residuals)
         self.residual_models[stat] = residual_model
 
-    def _train_probability_calibrator(self, X, y, weights, stat, tscv):
+    # Target miscoverage for the conformal (CQR) band: 0.1 -> 90% target.
+    CQR_ALPHA = 0.1
+
+    @staticmethod
+    def _conformal_correction(conformity, alpha):
+        """Split-conformal correction: the (1-alpha) quantile of conformity scores.
+
+        The finite-sample bump ``(1 + 1/n)`` is what makes the split-conformal
+        coverage guarantee hold at ``1 - alpha``.
+        """
+        conformity = np.asarray(conformity)
+        n = len(conformity)
+        if n == 0:
+            return 0.0
+        q_level = min((1 - alpha) * (1 + 1 / n), 1.0)
+        return max(0.0, float(np.quantile(conformity, q_level)))
+
+    @classmethod
+    def _holdout_cqr_coverage(cls, q10, q90, y, alpha):
+        """Cross-conformal coverage over CONTIGUOUS blocks — the honest number.
+
+        Each block is scored against a correction computed from the other
+        blocks only, so no row influences the threshold it is measured by.
+        Blocks are contiguous rather than interleaved deliberately: an
+        interleaved (or leave-one-out) split makes every calibration set a
+        near-copy of the full one, which reproduces the in-sample answer almost
+        exactly and is therefore no more able to notice that the correction has
+        stopped fitting. Contiguous blocks put most of each block's correction
+        in a different stretch of the season, so drift shows up.
+
+        Returns None when there are too few rows to split.
+        """
+        q10, q90, y = np.asarray(q10), np.asarray(q90), np.asarray(y)
+        n = len(y)
+        if n < 12:
+            return None
+        n_folds = 4 if n >= 40 else 2
+        conformity = np.maximum(q10 - y, y - q90)
+        bounds = np.linspace(0, n, n_folds + 1).astype(int)
+        hits = 0
+        scored = 0
+        for lo, hi in zip(bounds[:-1], bounds[1:]):
+            if hi <= lo:
+                continue
+            block = np.arange(lo, hi)
+            others = np.delete(np.arange(n), block)
+            if len(others) < 5:
+                continue
+            correction = cls._conformal_correction(conformity[others], alpha)
+            in_band = (
+                (y[block] >= q10[block] - correction)
+                & (y[block] <= q90[block] + correction)
+            )
+            hits += int(in_band.sum())
+            scored += len(block)
+        if scored == 0:
+            return None
+        return float(hits) / scored
+
+    def _train_probability_calibrator(self, X_raw, y, weights, stat):
         """Train Platt scaling (logistic regression) for probability calibration.
 
         Replaces isotonic regression which overfits on small per-player samples
         (50-80 games). Platt scaling has only 2 parameters (slope + intercept),
         making it robust against overfitting. Output clipped to [15%, 85%].
+
+        Runs quantile OOF -> CQR -> Platt, in that order, because the Platt fit
+        consumes the per-row CQR-corrected quantile std that the CQR block
+        produces. Reordering these three steps silently reverts the fix.
         """
         oof_preds = np.full(len(y), np.nan)
-        for train_idx, val_idx in tscv.split(X):
+        for train_idx, val_idx in self._purged_splits(len(X_raw)):
+            X_tr, X_va = self._fold_scaled(X_raw, train_idx, val_idx)
             fold_model = sklearn_clone(self.models[stat])
-            fold_model.fit(X[train_idx], y[train_idx], sample_weight=weights[train_idx])
-            oof_preds[val_idx] = fold_model.predict(X[val_idx])
+            fold_model.fit(X_tr, y[train_idx], sample_weight=weights[train_idx])
+            oof_preds[val_idx] = fold_model.predict(X_va)
 
         # Calibrate PRA against what is actually served: the 85/15 blend of
         # component predictions and the independent PRA model. Calibrating on
@@ -2421,21 +2976,160 @@ class MLPredictor:
             self._calib_oof[stat] = oof_preds
 
         valid_mask = ~np.isnan(oof_for_calib) & ~np.isnan(oof_preds)
-        if valid_mask.sum() < 30:
+        min_calib_rows = 30 - self.PURGE_GAP
+        if valid_mask.sum() < min_calib_rows:
+            # Bailing here also skips the training_metrics persistence at the
+            # bottom of this method, whose only symptom used to be a silently
+            # missing dict key. Say so out loud.
+            print(
+                f"    {stat} calibrator SKIPPED: {int(valid_mask.sum())} OOF rows "
+                f"< {min_calib_rows} required — no probability calibration, no CQR, "
+                f"and no training_metrics entry for {stat}"
+            )
             return
 
         preds = oof_for_calib[valid_mask]
         actuals = y[valid_mask]
-        std_estimate = np.std(actuals - preds) or 1.0
+        residual_std = float(np.std(actuals - preds) or 1.0)
 
-        # Generate calibration data across hypothetical lines
+        # --- CQR FIRST: the Platt fit below needs the per-row served std ------
+        # This block used to run AFTER the Platt fit, which is why the
+        # calibrator could only ever be fit against `residual_std`. Order is
+        # now quantile OOF -> CQR -> Platt. Nothing between here and the Platt
+        # fit may read `self.probability_calibrator[stat]['calibrator']`.
+        self.probability_calibrator[stat] = {}
+        q10_preds_full = None
+        q90_preds_full = None
+        cqr_correction = 0.0
+        q10_key, q90_key = f'{stat}_q10', f'{stat}_q90'
+        if q10_key in self.quantile_models and q90_key in self.quantile_models:
+            try:
+                q10_preds = np.full(len(y), np.nan)
+                q90_preds = np.full(len(y), np.nan)
+                for train_idx, val_idx in self._purged_splits(len(X_raw)):
+                    X_tr, X_va = self._fold_scaled(X_raw, train_idx, val_idx)
+                    q10_fold = sklearn_clone(self.quantile_models[q10_key])
+                    q90_fold = sklearn_clone(self.quantile_models[q90_key])
+                    q10_fold.fit(X_tr, y[train_idx], sample_weight=weights[train_idx])
+                    q90_fold.fit(X_tr, y[train_idx], sample_weight=weights[train_idx])
+                    q10_preds[val_idx] = q10_fold.predict(X_va)
+                    q90_preds[val_idx] = q90_fold.predict(X_va)
+
+                q10_preds_full = q10_preds
+                q90_preds_full = q90_preds
+
+                cqr_mask = ~np.isnan(q10_preds) & ~np.isnan(q90_preds)
+                if cqr_mask.sum() >= 20 - self.PURGE_GAP:
+                    q10_cal = q10_preds[cqr_mask]
+                    q90_cal = q90_preds[cqr_mask]
+                    y_cal = y[cqr_mask]
+                    # Conformity score: how far outside the interval did actuals fall?
+                    conformity = np.maximum(q10_cal - y_cal, y_cal - q90_cal)
+                    cqr_correction = self._conformal_correction(
+                        conformity, self.CQR_ALPHA
+                    )
+                    self.probability_calibrator[stat]['cqr_correction'] = cqr_correction
+
+                    # Coverage, measured OUT OF SAMPLE. The old number applied
+                    # the correction to the very rows that chose it, so it
+                    # returned ceil((1-alpha)(n+1))/n for every player and every
+                    # stat by construction — 0.911 across the entire fleet,
+                    # 2026-08-22 — and structurally could not detect its own
+                    # failure. `_holdout_cqr_coverage` scores each contiguous
+                    # block of rows against a correction computed from the other
+                    # blocks. The in-sample number is kept alongside it purely
+                    # so the two can be compared.
+                    cqr_cov = self._holdout_cqr_coverage(
+                        q10_cal, q90_cal, y_cal, self.CQR_ALPHA
+                    )
+                    in_band_cqr = (
+                        (y_cal >= q10_cal - cqr_correction)
+                        & (y_cal <= q90_cal + cqr_correction)
+                    )
+                    self.probability_calibrator[stat]['cqr_coverage_insample'] = float(
+                        np.mean(in_band_cqr)
+                    )
+                    if cqr_cov is not None:
+                        self.probability_calibrator[stat]['cqr_coverage'] = cqr_cov
+                        # 2*z((1+coverage)/2) — the (q90-q10) -> std divisor
+                        # implied by that coverage. NOT consumed at inference:
+                        # MLPredictor._interval_divisor is hard-gated off by
+                        # CONSUME_LEARNED_INTERVAL_DIVISOR (default False) and
+                        # returns DEFAULT_INTERVAL_TO_STD_DIVISOR instead. It is
+                        # persisted for audit, and so the gate can be flipped in
+                        # one line once a backtest justifies it.
+                        if 0.50 < cqr_cov < 0.999:
+                            z_half = float(scipy_stats.norm.ppf((1 + cqr_cov) / 2))
+                            self.probability_calibrator[stat]['interval_to_std_divisor'] = (
+                                2 * z_half
+                            )
+            except Exception as exc:
+                # CQR is optional, but losing it silently changes probability
+                # semantics: without a correction the served band is the raw
+                # (q10, q90) pair, which measures ~0.55 coverage against 0.80.
+                warnings.warn(
+                    f"{stat} CQR correction FAILED ({type(exc).__name__}: {exc}) — "
+                    f"serving the uncorrected quantile band; prob_over will be "
+                    f"computed from a materially narrower std",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+
+        # --- The std the Platt fit sees must be the std serve consumes -------
+        # `_quantile_band` hands ProbabilityCalculator.calculate
+        #   max(|(q90 + c) - (q10 - c)| / divisor, MIN_QUANTILE_STD)
+        # per game. Reproduce that here, per OOF row, from the same quantities.
+        # Reading the divisor through `_interval_divisor` (after the CQR keys
+        # are already in place) keeps train and serve on the same value whether
+        # or not CONSUME_LEARNED_INTERVAL_DIVISOR is flipped.
+        divisor = self._interval_divisor(stat)
+        sigma_rows = None
+        if q10_preds_full is not None and q90_preds_full is not None:
+            q10_v = q10_preds_full[valid_mask]
+            q90_v = q90_preds_full[valid_mask]
+            ok = ~np.isnan(q10_v) & ~np.isnan(q90_v)
+            if ok.sum() >= max(5, int(0.5 * len(ok))):
+                width = np.abs((q90_v + cqr_correction) - (q10_v - cqr_correction))
+                band_std = np.maximum(width / divisor, self.MIN_QUANTILE_STD)
+                fill = float(np.median(band_std[ok]))
+                sigma_rows = np.where(ok, band_std, fill)
+
+        if sigma_rows is None:
+            # No quantile band for this stat, so serve will fall through to the
+            # historical-variance branch of get_confidence. residual_std is the
+            # closest stand-in available, and this is the pre-2026-08-22
+            # behaviour — say so rather than letting it pass as the fix.
+            sigma_rows = np.full(len(preds), residual_std)
+            std_source = 'residual_oof'
+            warnings.warn(
+                f"{stat} calibrator falling back to the OOF residual std — no "
+                f"usable OOF quantile band, so Platt is again being fit on a "
+                f"quantity serve does not consume",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        else:
+            std_source = 'cqr_quantile_band'
+
+        # Generate calibration data across hypothetical lines.
+        #
+        # Offsets stay in units of the OOF residual std: that is the scale a
+        # real line sits at relative to a prediction, so the (raw_prob, outcome)
+        # pairs cover the range serve actually exercises. The z DENOMINATOR is
+        # the per-row served std — the fix. Using the same sigma for both (what
+        # this did before) made sigma cancel outright: raw_probs collapsed to a
+        # fixed 9-point lattice ~{0.024 .. 0.976}, identical for every player
+        # and every stat, while serve — dividing by a std ~1.4x larger — only
+        # ever produced values inside ~[0.09, 0.91]. Platt was anchored on
+        # points serve could not reach.
         raw_probs = []
         outcomes = []
+        offsets = np.linspace(-2 * residual_std, 2 * residual_std, 9)
         for i in range(len(preds)):
-            for offset in np.linspace(-2 * std_estimate, 2 * std_estimate, 9):
+            sigma_i = sigma_rows[i] + 0.1
+            for offset in offsets:
                 hypothetical_line = preds[i] + offset
-                z = (hypothetical_line - preds[i]) / (std_estimate + 0.1)
-                raw_prob = 1 - scipy_stats.norm.cdf(z)
+                raw_prob = 1 - scipy_stats.norm.cdf(offset / sigma_i)
                 went_over = 1 if actuals[i] > hypothetical_line else 0
                 raw_probs.append(raw_prob)
                 outcomes.append(went_over)
@@ -2447,79 +3141,50 @@ class MLPredictor:
         platt = LogisticRegression(C=1.0, solver='lbfgs', max_iter=1000)
         platt.fit(raw_probs, outcomes)
 
-        self.probability_calibrator[stat] = {
+        # `std_estimate` is the mean of the stds Platt was actually fit against.
+        # It is read by nothing at inference; its job is to make the train/serve
+        # scale mismatch assertable from a persisted pickle alone:
+        #   (interval_width + 2*cqr_correction) / divisor / std_estimate ~= 1
+        # measured 1.40 (range 1.21-1.53) before this change.
+        self.probability_calibrator[stat].update({
             'calibrator': platt,
-            'std_estimate': std_estimate,
+            'std_estimate': float(np.mean(sigma_rows)),
+            'residual_std': residual_std,
+            'calibrator_std_source': std_source,
             'method': 'platt',
-        }
-
-        # --- CQR: compute conformity scores for quantile interval correction ---
-        q10_preds_full = None
-        q90_preds_full = None
-        q10_key, q90_key = f'{stat}_q10', f'{stat}_q90'
-        if q10_key in self.quantile_models and q90_key in self.quantile_models:
-            try:
-                q10_preds = np.full(len(y), np.nan)
-                q90_preds = np.full(len(y), np.nan)
-                for train_idx, val_idx in tscv.split(X):
-                    q10_fold = sklearn_clone(self.quantile_models[q10_key])
-                    q90_fold = sklearn_clone(self.quantile_models[q90_key])
-                    q10_fold.fit(X[train_idx], y[train_idx], sample_weight=weights[train_idx])
-                    q90_fold.fit(X[train_idx], y[train_idx], sample_weight=weights[train_idx])
-                    q10_preds[val_idx] = q10_fold.predict(X[val_idx])
-                    q90_preds[val_idx] = q90_fold.predict(X[val_idx])
-
-                q10_preds_full = q10_preds
-                q90_preds_full = q90_preds
-
-                cqr_mask = ~np.isnan(q10_preds) & ~np.isnan(q90_preds)
-                if cqr_mask.sum() >= 20:
-                    q10_cal = q10_preds[cqr_mask]
-                    q90_cal = q90_preds[cqr_mask]
-                    y_cal = y[cqr_mask]
-                    # Conformity score: how far outside the interval did actuals fall?
-                    conformity = np.maximum(q10_cal - y_cal, y_cal - q90_cal)
-                    # 90% quantile of conformity scores = CQR correction
-                    alpha = 0.1  # target 90% coverage
-                    q_level = min((1 - alpha) * (1 + 1 / len(conformity)), 1.0)
-                    cqr_correction = float(np.quantile(conformity, q_level))
-                    self.probability_calibrator[stat]['cqr_correction'] = max(0.0, cqr_correction)
-
-                    # Empirically achieved coverage with CQR applied to OOF preds.
-                    # Persisted as Phase B2 input — not yet consumed at inference.
-                    # The implied z-range 2*z((1+c)/2) is what a coverage-aware
-                    # divisor would use in get_confidence(); the current divisor
-                    # is still hardcoded to 2.56 (see comment in get_confidence).
-                    in_band_cqr = (
-                        (y_cal >= q10_cal - cqr_correction)
-                        & (y_cal <= q90_cal + cqr_correction)
-                    )
-                    cqr_cov = float(np.mean(in_band_cqr))
-                    self.probability_calibrator[stat]['cqr_coverage'] = cqr_cov
-                    if 0.50 < cqr_cov < 0.999:
-                        z_half = float(scipy_stats.norm.ppf((1 + cqr_cov) / 2))
-                        self.probability_calibrator[stat]['interval_to_std_divisor'] = (
-                            2 * z_half
-                        )
-            except Exception:
-                pass  # CQR is optional; fall through if quantile clone fails
+        })
 
         # --- Persist OOF metrics for this stat (Phase B1 instrumentation) ---
         # These travel with the pickle so future audits can read them without retraining.
         metrics = self._compute_oof_metrics(y, oof_preds, q10_preds_full, q90_preds_full)
-        metrics['std_estimate'] = float(std_estimate)
+        calib_state = self.probability_calibrator.get(stat, {})
+        metrics['std_estimate'] = float(calib_state.get('std_estimate', residual_std))
+        metrics['residual_std'] = residual_std
+        metrics['served_std_mean'] = float(np.mean(sigma_rows))
+        metrics['interval_divisor'] = float(divisor)
+        metrics['cqr_correction'] = float(cqr_correction)
+        insample_width = getattr(self, '_quantile_insample_width', {}).get(stat)
+        if insample_width is not None:
+            metrics['interval_width_insample'] = insample_width
         # Echo CQR-adjusted coverage into training_metrics for ergonomics.
-        cqr_cov = self.probability_calibrator.get(stat, {}).get('cqr_coverage')
+        cqr_cov = calib_state.get('cqr_coverage')
         if cqr_cov is not None:
             metrics['coverage_cqr'] = float(cqr_cov)
         self.training_metrics[stat] = metrics
         cov = metrics.get('coverage_80')
         cov_str = f", coverage_80(raw)={cov:.2%}" if cov is not None else ""
-        cqr_str = f", coverage(cqr)={cqr_cov:.2%}" if cqr_cov is not None else ""
+        cqr_str = f", coverage(cqr,heldout)={cqr_cov:.2%}" if cqr_cov is not None else ""
+        # The train/serve scale ratio, printed every fit so a regression is
+        # visible without unpickling anything. 1.00 means Platt was fit on the
+        # same std ProbabilityCalculator will be handed.
+        ratio = metrics['served_std_mean'] / metrics['std_estimate'] if metrics['std_estimate'] else float('nan')
         print(
             f"    {stat} OOF metrics: n={metrics['n']}, "
             f"MAE={metrics.get('mae', float('nan')):.2f}, "
             f"bias={metrics.get('bias', float('nan')):+.2f}{cov_str}{cqr_str}"
+            f", served_std={metrics['served_std_mean']:.2f} "
+            f"(residual {metrics['residual_std']:.2f}, calib scale ratio {ratio:.3f}, "
+            f"source={self.probability_calibrator.get(stat, {}).get('calibrator_std_source')})"
         )
 
     def train(self, df, stats=None):
@@ -2532,6 +3197,10 @@ class MLPredictor:
         if stats is None:
             stats = ALL_STATS
         stats = [s for s in stats if s != 'PRA']
+        # The synthetic next-game row carries no target, so dropna would remove
+        # it anyway -- but drop it up front so min_minutes_threshold and every
+        # count below are computed over completed games only.
+        df = drop_upcoming_rows(df)
         feature_cols = self.FEATURE_COLS
 
         # Filter to available features
@@ -2543,6 +3212,15 @@ class MLPredictor:
         # Reset per-stat OOF stash so a retrain never blends PRA calibration
         # against a previous training run's component predictions.
         self._calib_oof = {}
+        # Same, for the in-sample quantile widths folded into training_metrics.
+        self._quantile_insample_width = {}
+        # Reset cached Optuna params. _optimize_hyperparameters returns early on a
+        # cache hit, and optimized_params is restored from the pickle, so without
+        # this a warm load() -> update() -> train() would silently reuse
+        # hyperparameters chosen by an older search (unpurged folds, last-fold-only
+        # objective, unseeded sampler) and the tuned search would never run.
+        # Caching still holds within a single train() call, which is all it is for.
+        self.optimized_params = {}
 
         # Prepare data - filter out low-minute games (likely injury/rest games)
         df_clean = df.dropna(subset=available_features + stats)
@@ -2552,6 +3230,9 @@ class MLPredictor:
             avg_min = df_clean['MIN_NUMERIC'].mean()
             min_threshold = max(15, avg_min * 0.5)  # At least 50% of average or 15 min
             df_clean = df_clean[df_clean['MIN_NUMERIC'] >= min_threshold]
+            # Persist it so _update_recent_averages can reproduce the same
+            # population at serve time (see the note there).
+            self.min_minutes_threshold = float(min_threshold)
 
         if len(df_clean) < 20:
             print("Insufficient data for training (need at least 20 games)")
@@ -2568,26 +3249,28 @@ class MLPredictor:
         recency_weights = np.exp(np.linspace(exponent_span, 0, n_games))
         recency_weights = recency_weights / recency_weights.sum() * n_games
 
+        # X stays RAW. Every cross-validated estimate below rescales inside its
+        # own fold (see _fold_scaled) so validation-row statistics never leak
+        # into a fold's training set. X_scaled — fit on all rows — is used only
+        # for the FINAL production fits, and self.scalers['features'] must end
+        # up fit on the full data because update() and every predict path only
+        # ever call .transform() on it.
         X = df_clean[available_features].values
 
-        # Scale features
+        # Scale features (production scaler — full data, final models only)
         self.scalers['features'] = StandardScaler()
         X_scaled = self.scalers['features'].fit_transform(X)
 
         print(f"\n Training {self.model_type} models on {len(df_clean)} games with {len(available_features)} features...")
 
-        # Store recent averages for bias correction fallback
+        # Store recent averages for bias correction fallback + residual model.
+        # Goes through the same helper update() uses so both paths populate the
+        # L5 mean and L10 std that predict() feeds the residual model.
         self.recent_averages = {}
-        for stat in stats + ['PRA']:
-            if stat == 'PRA':
-                recent_vals = (df_clean['PTS'] + df_clean['REB'] + df_clean['AST']).tail(10)
-            elif stat in df_clean.columns:
-                recent_vals = df_clean[stat].tail(10)
-            else:
-                continue
-            self.recent_averages[stat] = recent_vals.mean()
-
-        tscv = TimeSeriesSplit(n_splits=5)
+        self.recent_averages_l5 = {}
+        self.recent_stds_l10 = {}
+        self.season_averages = {}
+        self._update_recent_averages(df_clean, stats)
 
         for stat in stats:
             y = df_clean[stat].values
@@ -2595,7 +3278,7 @@ class MLPredictor:
             # --- Optuna HPO (Improvement #10) ---
             if self.model_type == 'gradient_boost' and OPTUNA_AVAILABLE and n_games >= 40:
                 print(f"  {stat}: Running hyperparameter optimization...")
-                best_params = self._optimize_hyperparameters(X_scaled, y, recency_weights, stat)
+                best_params = self._optimize_hyperparameters(X, y, recency_weights, stat)
                 stat_loss = self.GB_STAT_PARAMS.get(stat, {}).get('loss', 'huber')
                 gb_extra = {'alpha': 0.9} if stat_loss == 'huber' else {}
                 model = GradientBoostingRegressor(
@@ -2613,30 +3296,51 @@ class MLPredictor:
                          validation_split=0.2, callbacks=[early_stop],
                          sample_weight=recency_weights)
             else:
-                # Sklearn model training with weighted CV
-                scores = self._weighted_cv_mae(model, X_scaled, y, recency_weights, tscv)
+                # Sklearn model training with weighted CV (raw X — folds rescale)
+                scores = self._weighted_cv_mae(model, X, y, recency_weights)
                 print(f"  {stat}: CV MAE = {scores.mean():.2f} (±{scores.std():.2f})")
                 model.fit(X_scaled, y, sample_weight=recency_weights)
 
                 # --- Feature Selection (Improvement #1) ---
+                # Rank importances with a model fit on the first 80% of the log
+                # only. Ranking off the full-data model let sel_idx be chosen
+                # with knowledge of the same rows the CV below scores on.
                 if hasattr(model, 'feature_importances_') and len(available_features) > 20:
-                    sel_idx, sel_names = self._select_features(model, X_scaled, available_features, stat=stat)
+                    n_imp = max(20, int(len(X) * 0.8))
+                    if n_imp < len(X):
+                        imp_scaler = StandardScaler()
+                        imp_model = sklearn_clone(model)
+                        imp_model.fit(
+                            imp_scaler.fit_transform(X[:n_imp]), y[:n_imp],
+                            sample_weight=recency_weights[:n_imp],
+                        )
+                    else:
+                        # Too short to hold anything back — fall back to the
+                        # full-data model and accept the bias.
+                        imp_model = model
+                    sel_idx, sel_names = self._select_features(imp_model, X_scaled, available_features, stat=stat)
                     if len(sel_names) < len(available_features):
                         X_sel = X_scaled[:, sel_idx]
                         # Retrain on selected features
                         model_sel = sklearn_clone(model)
                         model_sel.fit(X_sel, y, sample_weight=recency_weights)
-                        scores_sel = self._weighted_cv_mae(model_sel, X_sel, y, recency_weights, tscv)
+                        scores_sel = self._weighted_cv_mae(model_sel, X[:, sel_idx], y, recency_weights)
                         new_mae = scores_sel.mean()
                         old_mae = scores.mean()
+                        # NOTE: old_mae and new_mae share folds with the rows the
+                        # importance model saw, so this delta is a selection-biased
+                        # comparison — it is a guardrail against catastrophic
+                        # pruning, NOT an out-of-sample improvement estimate.
                         if new_mae <= old_mae * 1.02:  # Accept if not worse by >2%
                             model = model_sel
-                            print(f"    Feature selection: {len(available_features)} → {len(sel_names)} features (MAE {old_mae:.2f} → {new_mae:.2f})")
+                            print(f"    Feature selection: {len(available_features)} → {len(sel_names)} features "
+                                  f"(selection-biased CV MAE {old_mae:.2f} → {new_mae:.2f}, not out-of-sample)")
                             if self.selected_features is None:
                                 self.selected_features = {}
                             self.selected_features[stat] = sel_idx
                         else:
-                            print(f"    Feature selection skipped (would increase MAE: {old_mae:.2f} → {new_mae:.2f})")
+                            print(f"    Feature selection skipped (selection-biased CV MAE would rise "
+                                  f"{old_mae:.2f} → {new_mae:.2f})")
 
                 # Store feature importance for tree-based models
                 if hasattr(model, 'feature_importances_'):
@@ -2669,23 +3373,29 @@ class MLPredictor:
             if self.model_type in ('gradient_boost',) and self.model_type != 'neural':
                 params = self.optimized_params.get(stat, self.GB_STAT_PARAMS.get(stat, self.GB_STAT_PARAMS['PTS']))
                 X_for_quantile = X_scaled
+                X_raw_for_quantile = X
                 if self.selected_features and stat in self.selected_features:
                     X_for_quantile = X_scaled[:, self.selected_features[stat]]
-                self._train_quantile_models(X_for_quantile, y, recency_weights, stat, params)
+                    X_raw_for_quantile = X[:, self.selected_features[stat]]
+                self._train_quantile_models(
+                    X_for_quantile, y, recency_weights, stat, params,
+                    X_raw=X_raw_for_quantile,
+                )
 
             # --- Residual Correction Model (Improvement #6) ---
+            # Raw X: the OOF loop inside rescales per fold.
             if self.model_type != 'neural':
-                X_for_residual = X_scaled
+                X_for_residual = X
                 if self.selected_features and stat in self.selected_features:
-                    X_for_residual = X_scaled[:, self.selected_features[stat]]
-                self._train_residual_model(X_for_residual, y, recency_weights, stat, tscv)
+                    X_for_residual = X[:, self.selected_features[stat]]
+                self._train_residual_model(X_for_residual, y, recency_weights, stat)
 
             # --- Probability Calibration (Improvement #5) ---
             if self.model_type != 'neural':
-                X_for_calib = X_scaled
+                X_for_calib = X
                 if self.selected_features and stat in self.selected_features:
-                    X_for_calib = X_scaled[:, self.selected_features[stat]]
-                self._train_probability_calibrator(X_for_calib, y, recency_weights, stat, tscv)
+                    X_for_calib = X[:, self.selected_features[stat]]
+                self._train_probability_calibrator(X_for_calib, y, recency_weights, stat)
 
             # Train ensemble with learned meta-learner (replaces fixed 50/50 weighting)
             if self.use_ensemble and self.model_type != 'neural':
@@ -2696,20 +3406,22 @@ class MLPredictor:
                 all_oof = {}
                 for name, ens_model in self.ensemble_models[stat].items():
                     oof = np.full(len(y), np.nan)
-                    for train_idx, val_idx in tscv.split(X_scaled):
+                    for train_idx, val_idx in self._purged_splits(len(X)):
+                        X_tr, X_va = self._fold_scaled(X, train_idx, val_idx)
                         fold_m = sklearn_clone(ens_model)
-                        fold_m.fit(X_scaled[train_idx], y[train_idx],
+                        fold_m.fit(X_tr, y[train_idx],
                                    sample_weight=recency_weights[train_idx])
-                        oof[val_idx] = fold_m.predict(X_scaled[val_idx])
+                        oof[val_idx] = fold_m.predict(X_va)
                     all_oof[name] = oof
 
                 # Also get main model OOF
                 main_oof = np.full(len(y), np.nan)
-                for train_idx, val_idx in tscv.split(X_scaled):
+                for train_idx, val_idx in self._purged_splits(len(X)):
+                    X_tr, X_va = self._fold_scaled(X, train_idx, val_idx)
                     fold_main = sklearn_clone(model)
-                    fold_main.fit(X_scaled[train_idx], y[train_idx],
+                    fold_main.fit(X_tr, y[train_idx],
                                   sample_weight=recency_weights[train_idx])
-                    main_oof[val_idx] = fold_main.predict(X_scaled[val_idx])
+                    main_oof[val_idx] = fold_main.predict(X_va)
                 all_oof['main'] = main_oof
 
                 # Train Ridge meta-learner on OOF predictions (non-negative weights)
@@ -2717,7 +3429,7 @@ class MLPredictor:
                 for v in all_oof.values():
                     valid &= ~np.isnan(v)
 
-                if valid.sum() >= 20:
+                if valid.sum() >= 20 - self.PURGE_GAP:
                     meta_X = np.column_stack([all_oof[k][valid] for k in all_oof])
                     meta_y = y[valid]
                     from sklearn.linear_model import Ridge
@@ -2766,7 +3478,7 @@ class MLPredictor:
 
             if self.model_type == 'gradient_boost' and OPTUNA_AVAILABLE and n_games >= 40:
                 print(f"  PRA: Running hyperparameter optimization...")
-                best_params = self._optimize_hyperparameters(X_scaled, y_pra, recency_weights, 'PRA')
+                best_params = self._optimize_hyperparameters(X, y_pra, recency_weights, 'PRA')
                 model_pra = GradientBoostingRegressor(
                     **best_params, loss='huber', alpha=0.9, random_state=42,
                 )
@@ -2777,7 +3489,7 @@ class MLPredictor:
                 model_pra.fit(X_scaled, y_pra, epochs=100, batch_size=16, verbose=0,
                              sample_weight=recency_weights)
             else:
-                scores = self._weighted_cv_mae(model_pra, X_scaled, y_pra, recency_weights, tscv)
+                scores = self._weighted_cv_mae(model_pra, X, y_pra, recency_weights)
                 print(f"  PRA: CV MAE = {scores.mean():.2f} (±{scores.std():.2f})")
                 model_pra.fit(X_scaled, y_pra, sample_weight=recency_weights)
             self.models['PRA'] = model_pra
@@ -2785,9 +3497,11 @@ class MLPredictor:
             # Quantile + residual + calibration for PRA
             if self.model_type in ('gradient_boost',) and self.model_type != 'neural':
                 pra_params = self.optimized_params.get('PRA', self.GB_STAT_PARAMS.get('PRA', self.GB_STAT_PARAMS['PTS']))
-                self._train_quantile_models(X_scaled, y_pra, recency_weights, 'PRA', pra_params)
-                self._train_residual_model(X_scaled, y_pra, recency_weights, 'PRA', tscv)
-                self._train_probability_calibrator(X_scaled, y_pra, recency_weights, 'PRA', tscv)
+                self._train_quantile_models(
+                    X_scaled, y_pra, recency_weights, 'PRA', pra_params, X_raw=X,
+                )
+                self._train_residual_model(X, y_pra, recency_weights, 'PRA')
+                self._train_probability_calibrator(X, y_pra, recency_weights, 'PRA')
 
             if self.use_ensemble and self.model_type != 'neural':
                 self.ensemble_models['PRA'] = self._create_ensemble_models('PRA')
@@ -2799,6 +3513,13 @@ class MLPredictor:
         self.games_trained_on = len(df_clean)
 
         return True
+
+    # Samples embargoed between train and validation in _purged_splits.
+    # Purging shifts the OOF window forward by exactly this many rows, so every
+    # OOF-count guard below is stated as (pre-purge threshold - PURGE_GAP).
+    # Proof: with f = n // 6 and r = n % 6, purged coverage = 5f - max(0, 3 - r)
+    # and TimeSeriesSplit(5) coverage = 5f, so purged >= TSS - PURGE_GAP always.
+    PURGE_GAP = 3
 
     # Maximum estimator growth before forcing a full retrain
     MAX_ESTIMATOR_GROWTH = 80  # After 4 warm-start updates, retrain from scratch
@@ -2826,8 +3547,11 @@ class MLPredictor:
 
         # Check feature set mismatch — only retrain if features the model was
         # trained on have been REMOVED from FEATURE_COLS. Features in FEATURE_COLS
-        # but absent from training data (e.g. INJURIES_TEAM/OPP, VS_OPP_* before
-        # backfill) are expected and not a mismatch.
+        # but absent from a particular player's training data (e.g. VS_OPP_*
+        # before backfill) are expected and not a mismatch.
+        # Every name in FEATURE_COLS is now emitted by get_prediction_features —
+        # the 3 VEGAS_* and 2 INJURIES_* entries that never were (declared 86,
+        # trained 81) were removed 2026-08-22.
         if self.feature_names:
             saved_set = set(self.feature_names)
             declared_set = set(self.FEATURE_COLS)
@@ -2848,6 +3572,11 @@ class MLPredictor:
         if stats is None:
             stats = ALL_STATS  # A partial default here silently dropped PRA on every self-heal retrain
         stats = [s for s in stats if s != 'PRA']  # PRA has its own update block below
+        # A future-dated synthetic next-game row is not a new game. Left in, it
+        # makes `new_games` non-empty on EVERY serve call, so the model
+        # warm-starts +20 estimators each time and trips _needs_full_retrain
+        # within a handful of predictions.
+        df = drop_upcoming_rows(df)
         if not self.models or not self.last_game_date:
             print("No existing model to update, training from scratch...")
             return self.train(df, stats)
@@ -2984,25 +3713,69 @@ class MLPredictor:
         return True
 
     def _update_recent_averages(self, df, stats=None):
-        """Update recent averages (L10) and full-season averages from latest data."""
+        """Update L5/L10 means, L10 std and full-season averages from latest data.
+
+        The L5 mean and L10 std exist so ``predict()`` can hand the residual
+        model the same four columns ``_train_residual_model`` was fit on
+        (``[pred, roll_5, roll_10, roll_std]``) instead of duplicating the L10
+        mean and hardcoding a std of 3.0.
+        """
         if stats is None:
             stats = COMPONENT_STATS
-        if not hasattr(self, 'season_averages'):
-            self.season_averages = {}
+        # tail(10)/tail(5) below: a synthetic next-game row carries NaN stats, so
+        # leaving it in would silently make these L9 / L4.
+        df = drop_upcoming_rows(df)
+        for attr in ('season_averages', 'recent_averages_l5', 'recent_stds_l10'):
+            if not hasattr(self, attr):
+                setattr(self, attr, {})
+
+        # Match the training population. train() fits the residual model on rows
+        # filtered to MIN_NUMERIC >= max(15, 0.5 * avg), but the serve callers
+        # (prediction_service, daily_best_picks) pass the unfiltered
+        # create_features output, which only drops MIN_NUMERIC <= 0. Without this
+        # a starter with three 12-minute games in his last five hands the
+        # BayesianRidge an L5 mean drawn from a population it never saw -- exactly
+        # the train/serve skew the residual parity work set out to close.
+        threshold = getattr(self, 'min_minutes_threshold', None)
+        if threshold and 'MIN_NUMERIC' in df.columns:
+            filtered = df[df['MIN_NUMERIC'] >= threshold]
+            if len(filtered) >= 5:  # keep the raw frame if filtering leaves too little
+                df = filtered
         for stat in dict.fromkeys(list(stats) + ['PRA']):
             if stat == 'PRA':
-                if all(s in df.columns for s in ['PTS', 'REB', 'AST']):
-                    pra_series = df['PTS'] + df['REB'] + df['AST']
-                    self.recent_averages[stat] = pra_series.tail(10).mean()
-                    self.season_averages[stat] = pra_series.mean()
-                else:
+                if not all(s in df.columns for s in ['PTS', 'REB', 'AST']):
                     continue
+                series = df['PTS'] + df['REB'] + df['AST']
             elif stat in df.columns:
-                self.recent_averages[stat] = df[stat].tail(10).mean()
-                self.season_averages[stat] = df[stat].mean()
+                series = df[stat]
             else:
                 continue
+            self.recent_averages[stat] = series.tail(10).mean()
+            self.season_averages[stat] = series.mean()
+            self.recent_averages_l5[stat] = series.tail(5).mean()
+            # min_periods=3 mirrors the roll_std built in _train_residual_model.
+            # Below that, leave it NaN — predict() then skips the residual
+            # correction rather than fabricating a std.
+            self.recent_stds_l10[stat] = (
+                series.tail(10).std() if len(series) >= 3 else float('nan')
+            )
     
+    def _residual_serve_inputs(self, stat):
+        """(L5 mean, L10 mean, L10 std) for the residual model, or None.
+
+        Mirrors the feature columns ``_train_residual_model`` was fit on. Returns
+        None when any piece is missing — old pickle, or a stat that was never
+        averaged — so the caller skips the correction instead of fabricating
+        values that a linear BayesianRidge would happily extrapolate from.
+        """
+        roll_10 = getattr(self, 'recent_averages', {}).get(stat)
+        roll_5 = getattr(self, 'recent_averages_l5', {}).get(stat)
+        roll_std = getattr(self, 'recent_stds_l10', {}).get(stat)
+        values = (roll_5, roll_10, roll_std)
+        if any(v is None or not np.isfinite(v) for v in values):
+            return None
+        return float(roll_5), float(roll_10), float(roll_std)
+
     # Per-stat bias correction weights — lower = trust the ML model more
     # Increased from original values to combat systematic over-prediction bias
     # (OVER picks hitting 47.1% vs UNDER 62.2%)
@@ -3110,14 +3883,14 @@ class MLPredictor:
                 pred = pred * minutes_ratio
 
             # --- Learned Residual Correction (Improvement #6) ---
-            if stat in self.residual_models and hasattr(self, 'recent_averages') and stat in self.recent_averages:
-                recent_avg = self.recent_averages[stat]
-                residual_X = np.array([[
-                    pred,
-                    recent_avg,
-                    recent_avg,  # 10g proxy (same as recent avg if we only have it)
-                    3.0,  # std proxy fallback
-                ]])
+            # Columns MUST match _train_residual_model: [pred, L5 mean, L10 mean,
+            # L10 std]. This used to pass the L10 mean twice plus a hardcoded 3.0
+            # std — and BayesianRidge being linear, the duplicated column received
+            # the SUM of two independently-fit coefficients.
+            residual_inputs = self._residual_serve_inputs(stat)
+            if stat in self.residual_models and residual_inputs is not None:
+                roll_5, roll_10, roll_std = residual_inputs
+                residual_X = np.array([[pred, roll_5, roll_10, roll_std]])
                 predicted_residual = self.residual_models[stat].predict(residual_X)[0]
                 # Clip residual correction to avoid wild swings
                 max_correction = abs(pred) * 0.15
@@ -3441,6 +4214,74 @@ class MLPredictor:
             # Linear interpolation: 30 games → 0.80, 75 games → 0.95
             return max(0.80, 0.80 + 0.15 * (n - 30) / 45)
 
+    # (q90 - q10) → implied std under the nominal 80%-interval assumption:
+    # q90 - q10 = 2 * z(0.90) * std ≈ 2.56 * std. Kept as a NAMED constant so a
+    # backtest can send us straight back to it if the learned divisor regresses.
+    DEFAULT_INTERVAL_TO_STD_DIVISOR = 2.56
+
+    # Absolute floor on the quantile-implied std. Guards against a degenerate
+    # or crossed band producing a zero/negative std downstream.
+    MIN_QUANTILE_STD = 0.1
+
+    # Whether to consume the coverage-aware divisor learned at training time.
+    #
+    # STILL FALSE AFTER PHASE 2 (2026-08-22), deliberately. Phase 2 removed the
+    # reason it was unsafe to *reason* about — training now reads this same
+    # `_interval_divisor` when it fits the probability calibrator, so flipping
+    # the gate would move train and serve together instead of desynchronising
+    # them. What it did NOT do is make flipping a good idea. The learned divisor
+    # is 2*z((1 + cqr_coverage)/2); with the held-out coverage now measuring
+    # ~0.88, that is ~3.20 against this 2.56, so consuming it would SHRINK the
+    # served std by ~20% and push every probability further from 50%. Phase 2
+    # already moved probabilities that way (mass in the 10-20% and 80-90%
+    # buckets rose 632->799 and 1141->1351) and the 70-80% reliability gap got
+    # WORSE, +10.3 -> +11.2. Flipping this pushes harder in the direction that
+    # just cost accuracy. Do not flip it without a backtest that shows the
+    # 60-80% band flattening.
+    #
+    # MEASURED 2026-08-19 (58-player unbiased walk-forward, docs/backtest_unbiased_*):
+    # consuming it moved overall Brier by 0.0001 (0.2388 consumed vs 0.2389 pinned)
+    # — no measurable effect, because ProbabilityCalculator applies Platt scaling
+    # on top of the raw CDF and absorbs the difference. It DOES still flow into
+    # the displayed `confidence` (100 - std * scale) and the reported range: the
+    # learned value measures ~3.3 against this 2.56, which shrinks std and pushes
+    # confidence UP. The same backtest shows the model is already overconfident
+    # (70-80% band predicts ~75%, realizes ~55%), so raising confidence further
+    # buys nothing and costs safety. Pinned to the conservative constant until
+    # calibration is genuinely fixed; flip to True to re-enable in one line.
+    CONSUME_LEARNED_INTERVAL_DIVISOR = False
+
+    def _interval_divisor(self, stat):
+        """Effective (q90 - q10) → std divisor for ``stat``.
+
+        Training persists a coverage-aware divisor as
+        ``probability_calibrator[stat]['interval_to_std_divisor']`` — it is
+        ``2 * z((1 + cqr_coverage) / 2)``, and is only written when
+        0.50 < coverage < 0.999, which bounds it to roughly [1.35, 6.6]. Pickles
+        trained before that key existed fall back to the nominal constant.
+
+        Since 2026-08-22 ``cqr_coverage`` is the leave-one-out (held-out)
+        estimate rather than the in-sample one, so the learned divisor is
+        materially smaller than the values recorded by older pickles — do not
+        compare the two.
+
+        Gated on ``CONSUME_LEARNED_INTERVAL_DIVISOR`` — see the note there for the
+        measurement behind the current default. While that gate is False this
+        returns the constant and the learned value is audit-only.
+        """
+        if not self.CONSUME_LEARNED_INTERVAL_DIVISOR:
+            return self.DEFAULT_INTERVAL_TO_STD_DIVISOR
+        try:
+            calib = (getattr(self, 'probability_calibrator', None) or {}).get(stat) or {}
+            divisor = float(calib.get('interval_to_std_divisor',
+                                      self.DEFAULT_INTERVAL_TO_STD_DIVISOR))
+        except (AttributeError, TypeError, ValueError):
+            return self.DEFAULT_INTERVAL_TO_STD_DIVISOR
+        # A corrupt pickle must not produce a zero/negative implied std.
+        if not np.isfinite(divisor) or divisor <= 0:
+            return self.DEFAULT_INTERVAL_TO_STD_DIVISOR
+        return divisor
+
     def _quantile_band(self, stat, features_df):
         """Predict the CQR-adjusted (q10, q90) band and implied std for a stat.
 
@@ -3478,14 +4319,24 @@ class MLPredictor:
         q10_adj = q10 - cqr_adj
         q90_adj = q90 + cqr_adj
 
-        # Note: dividing by 2.56 here treats the post-CQR band as if it
-        # were a true 80% interval. After CQR the OOF coverage is closer
-        # to ~85-92% (see probability_calibrator[stat]['cqr_coverage']),
-        # so the implied std is overstated → confidence is dampened.
-        # The conservative direction matches production goals (we are
-        # overconfident, not underconfident); a principled recalibration
-        # belongs to Phase B2 along with CONFIDENCE_STD_SCALE retuning.
-        quantile_std = (q90_adj - q10_adj) / 2.56
+        # q10 and q90 come from two independently-fit quantile models; on small
+        # per-player samples nothing forces q90 >= q10, and the CQR correction
+        # widens symmetrically so it cannot repair a crossing. A crossed band
+        # yields a negative std, which flips the sign of z in
+        # ProbabilityCalculator and inverts prob_over -- an UNDER would score as
+        # a high-probability OVER. Order them, then floor the width so std can
+        # never be zero (std == -0.1 exactly would divide by zero downstream).
+        if q90_adj < q10_adj:
+            q10_adj, q90_adj = q90_adj, q10_adj
+
+        # Width -> std. `_interval_divisor` is hard-gated off by
+        # CONSUME_LEARNED_INTERVAL_DIVISOR (default False), so in production
+        # this is the constant DEFAULT_INTERVAL_TO_STD_DIVISOR = 2.56, NOT the
+        # per-stat divisor training measured. Training still records the learned
+        # value for audit. Whatever this returns, the probability calibrator is
+        # fit against the same call, so the two stay on one scale.
+        quantile_std = (q90_adj - q10_adj) / self._interval_divisor(stat)
+        quantile_std = max(quantile_std, self.MIN_QUANTILE_STD)
         return q10_adj, q90_adj, quantile_std
 
     def _component_band_std(self, stat, features_df):
@@ -3501,7 +4352,12 @@ class MLPredictor:
 
     @staticmethod
     def _current_season_games(df):
-        """Games the player has logged in the current season, or None if unknown."""
+        """Games the player has LOGGED in the current season, or None if unknown.
+
+        The upcoming game has not been played, so the synthetic next-game row
+        must not count toward the early-season damping taper.
+        """
+        df = drop_upcoming_rows(df)
         try:
             cur = get_current_season()
             if 'SEASON' in df.columns:
@@ -3528,6 +4384,53 @@ class MLPredictor:
         g = max(0, games_this_season)
         return 0.75 + 0.25 * g / 10, 1 + 0.3 * (10 - g) / 10
 
+    @staticmethod
+    def _current_team_games(df, features_df=None):
+        """Games with the team the player suits up for NEXT, or None if unknown.
+
+        Prefers the served feature row. ``get_prediction_features`` applies the
+        roster-team override (player_info's team vs the last logged game's team),
+        so on the debut game after a trade it correctly reports 0 -- while the log
+        alone still shows an unbroken tenure with the OLD team and would report a
+        fully-established 26. Reading the log first left damping neutral on exactly
+        the game the feature exists to flag.
+        """
+        try:
+            if (features_df is not None and len(features_df)
+                    and 'GAMES_WITH_CURRENT_TEAM' in features_df.columns):
+                # Already next-game semantics -- no +1.
+                return int(features_df['GAMES_WITH_CURRENT_TEAM'].iloc[0])
+        except Exception:
+            pass
+        try:
+            if 'GAMES_WITH_CURRENT_TEAM' in df.columns and len(df):
+                # The column counts games strictly before each row. If the last
+                # row IS the upcoming game (synthetic next-game row) it already
+                # reports next-game tenure; otherwise it is the last completed
+                # game's and the predicted game is one further along.
+                step = 0 if has_upcoming_row(df) else 1
+                return int(df['GAMES_WITH_CURRENT_TEAM'].iloc[-1]) + step
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _trade_damping(games_with_current_team):
+        """(confidence_mult, std_mult) softening outputs right after a team change.
+
+        A traded player's role, usage and lineup context are largely unlearned by a
+        model whose training mass sits on his previous team, so confidence is
+        discounted up to 25% and uncertainty inflated up to 30%, tapering linearly
+        to neutral at TRADE_WINDOW_GAMES. Mirrors _early_season_damping; the two
+        are combined by taking the stronger, not by multiplying (see get_confidence).
+        """
+        if (games_with_current_team is None
+                or games_with_current_team >= TRADE_WINDOW_GAMES):
+            return 1.0, 1.0
+        g = max(0, games_with_current_team)
+        return (0.75 + 0.25 * g / TRADE_WINDOW_GAMES,
+                1 + 0.3 * (TRADE_WINDOW_GAMES - g) / TRADE_WINDOW_GAMES)
+
     def get_confidence(self, df, stat, prediction, features_df=None):
         """Calculate confidence interval using quantile regression when available,
         falling back to historical variance with per-stat calibration.
@@ -3535,16 +4438,35 @@ class MLPredictor:
         Applies a sample-size penalty for players with limited training data
         and an early-season damping while current-season games < 10."""
 
+        # Every statistic below summarises COMPLETED games; the synthetic
+        # next-game row would drag the historical-variance fallback's std down
+        # to a 9-game window and inflate the season-games count by one.
+        df = drop_upcoming_rows(df)
         sample_penalty = self._sample_size_penalty()
         early_conf_mult, early_std_mult = self._early_season_damping(
             self._current_season_games(df)
         )
+        trade_conf_mult, trade_std_mult = self._trade_damping(
+            self._current_team_games(df, features_df)
+        )
+        # Take the stronger single damping rather than multiplying. An OFFSEASON
+        # team change makes both fire on the same games, and 0.75 * 0.75 = 0.5625
+        # would drag a capped-88% PTS confidence to 49%. The `max(55, ...)` floor
+        # in both branches below is applied BEFORE these multipliers, so it cannot
+        # rescue that. min/max keeps the worst case at the calibrated 25% / +30%,
+        # which is also what the band-widening algebra below assumes (it is only
+        # consistent while the std multiplier stays <= 1.3).
+        early_conf_mult = min(early_conf_mult, trade_conf_mult)
+        early_std_mult = max(early_std_mult, trade_std_mult)
 
         # --- Quantile Regression bounds (Improvement #4) ---
         q10_key, q90_key = f'{stat}_q10', f'{stat}_q90'
         if q10_key in self.quantile_models and q90_key in self.quantile_models and features_df is not None:
             try:
                 q10_adj, q90_adj, quantile_std = self._quantile_band(stat, features_df)
+                # Same divisor _quantile_band used, so every band widening below
+                # stays the exact inverse of the width → std conversion.
+                interval_divisor = self._interval_divisor(stat)
 
                 # PRA errors compound PTS+REB+AST (positively correlated via
                 # minutes), so its std can never be below the RSS of the
@@ -3559,7 +4481,7 @@ class MLPredictor:
                     floored_std = pra_std_floor(quantile_std, comp_stds)
                     if floored_std > quantile_std:
                         # Widen the band symmetrically to match the floored std
-                        widen = (floored_std - quantile_std) * 2.56 / 2
+                        widen = (floored_std - quantile_std) * interval_divisor / 2
                         q10_adj -= widen
                         q90_adj += widen
                         quantile_std = floored_std
@@ -3572,7 +4494,7 @@ class MLPredictor:
                 confidence = confidence * early_conf_mult
 
                 if early_std_mult > 1.0:
-                    widen = quantile_std * (early_std_mult - 1) * 1.28
+                    widen = quantile_std * (early_std_mult - 1) * (interval_divisor / 2)
                     q10_adj -= widen
                     q90_adj += widen
                     quantile_std = quantile_std * early_std_mult
@@ -3583,8 +4505,19 @@ class MLPredictor:
                     'confidence': round(confidence, 0),
                     'std': round(quantile_std, 2),
                 }
-            except Exception:
-                pass  # Fall through to historical variance fallback
+            except Exception as exc:
+                # Falling through here swaps the quantile band for a
+                # historical-variance std computed from raw game-to-game
+                # scatter. That is a materially different (usually wider)
+                # uncertainty, and it also bypasses the CQR correction the
+                # probability calibrator was fit against.
+                warnings.warn(
+                    f"{stat} quantile band unavailable "
+                    f"({type(exc).__name__}: {exc}) — falling back to historical "
+                    f"variance; std and prob_over change scale",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
 
         # Fallback: historical variance
         if stat in df.columns:
@@ -3703,6 +4636,13 @@ class MLPredictor:
             'training_history': self.training_history,
             'feature_importance': self.feature_importance,
             'recent_averages': getattr(self, 'recent_averages', {}),
+            'min_minutes_threshold': getattr(self, 'min_minutes_threshold', None),
+            # Persisted alongside recent_averages: without these the residual
+            # model's serve inputs (and the season-deviation cap) silently go
+            # missing on every loaded model.
+            'recent_averages_l5': getattr(self, 'recent_averages_l5', {}),
+            'recent_stds_l10': getattr(self, 'recent_stds_l10', {}),
+            'season_averages': getattr(self, 'season_averages', {}),
             'last_game_date': getattr(self, 'last_game_date', None),
             'trained_at': today_et_str(),
             'games_trained_on': getattr(self, 'games_trained_on', 0),
@@ -3744,6 +4684,10 @@ class MLPredictor:
         self.training_history = data.get('training_history', [])
         self.feature_importance = data.get('feature_importance', {})
         self.recent_averages = data.get('recent_averages', {})
+        self.recent_averages_l5 = data.get('recent_averages_l5', {})
+        self.recent_stds_l10 = data.get('recent_stds_l10', {})
+        self.season_averages = data.get('season_averages', {})
+        self.min_minutes_threshold = data.get('min_minutes_threshold', None)
         self.last_game_date = data.get('last_game_date', None)
         self.trained_at = data.get('trained_at', None)
         self.games_trained_on = data.get('games_trained_on', 0)
@@ -3890,7 +4834,13 @@ class ProbabilityCalculator:
             std: Standard deviation / uncertainty estimate
             calibrator_data: Optional dict with 'calibrator' and 'std_estimate'.
                              Supports both Platt scaling (method='platt') and
-                             legacy isotonic regression.
+                             legacy isotonic regression. Only 'calibrator' and
+                             'method' are read here — 'std_estimate' records
+                             the scale the calibrator was FIT on (see
+                             _train_probability_calibrator) so a train/serve
+                             mismatch is auditable; the std actually used is the
+                             `std` argument, which callers take from
+                             get_confidence.
         Returns:
             Probability of going over (0-100), clipped to [PROB_FLOOR, PROB_CEIL]
         """
@@ -3910,8 +4860,15 @@ class ProbabilityCalculator:
                 prob = round(calibrated * 100, 1)
                 return max(ProbabilityCalculator.PROB_FLOOR,
                            min(ProbabilityCalculator.PROB_CEIL, prob))
-            except Exception:
-                pass
+            except Exception as exc:
+                # Dropping to the raw CDF removes the entire calibration layer.
+                # It is a legitimate fallback but never a silent one.
+                warnings.warn(
+                    "probability calibrator failed ({}: {}) — returning the "
+                    "UNCALIBRATED normal CDF".format(type(exc).__name__, exc),
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
 
         # Raw CDF fallback — still clip to safe bounds
         prob = round(raw_prob_over * 100, 1)
@@ -3965,6 +4922,16 @@ class LineEvaluator:
                     prediction, line, std, calibrator_data
                 )
             elif confidence_info['high'] != confidence_info['low']:
+                # No std: linear position inside the band. This is NOT a
+                # calibrated probability — it is uniform over the interval, has
+                # no Platt correction, and is not clipped by PROB_FLOOR /
+                # PROB_CEIL, so it can return 0 or 100.
+                warnings.warn(
+                    f"{stat}: no std in confidence_info — prob_over is a LINEAR "
+                    f"band position, not a calibrated probability",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
                 range_size = confidence_info['high'] - confidence_info['low']
                 position = (line - confidence_info['low']) / range_size
                 prob_over = max(0.0, min(100.0, (1 - position) * 100))
@@ -4308,9 +5275,10 @@ def find_best_bets(min_edge=5.0, max_edge=55.0, max_results=20, select_games=Fal
             # Get opponent stats
             opp_ctx = FeatureEngineer.extract_opp_stats(team_stats, opponent)
 
-            # Calculate days rest
-            last_game = pd.to_datetime(df['GAME_DATE'].iloc[-1])
-            days_rest = min((datetime.now() - last_game).days, 7)
+            # Days rest before the UPCOMING game. With a synthetic next-game
+            # row present this is that row's own DAYS_REST (schedule-derived);
+            # iloc[-1] would otherwise read the future date and go negative.
+            days_rest = FeatureEngineer.serve_days_rest(df)
 
             # Get injury counts
             injuries_team = injuries.get(team_abbrev, {}).get('out', 0)
@@ -4322,7 +5290,6 @@ def find_best_bets(min_edge=5.0, max_edge=55.0, max_results=20, select_games=Fal
             # Generate features for prediction
             features_df = FeatureEngineer.get_prediction_features(
                 df, is_home, opponent,
-                injuries_team=injuries_team, injuries_opp=injuries_opp,
                 days_rest=days_rest, vs_stats=vs_stats,
                 **opp_ctx,
             )
@@ -4979,8 +5946,12 @@ def interactive_mode():
             print("No game data available for this player.")
             continue
 
-        # Feature engineering with opponent context
-        df = FeatureEngineer.create_features(game_log, player_info=player_info, team_stats=team_stats)
+        # Feature engineering with opponent context. game_info appends the
+        # synthetic next-game row so the served vector describes the UPCOMING
+        # game rather than the last one played.
+        df = FeatureEngineer.create_features(
+            game_log, player_info=player_info, game_info=game_info, team_stats=team_stats
+        )
 
         # Get vs team stats
         vs_stats = None
@@ -5035,16 +6006,11 @@ def interactive_mode():
         injuries_opp = injuries.get(opponent, {}).get('out', 0)
 
         # Calculate days rest before prediction features
-        days_rest_val = 2  # default
-        if 'GAME_DATE' in df.columns and len(df) > 1:
-            last_game = pd.to_datetime(df['GAME_DATE'].iloc[-1])
-            days_rest_val = min((datetime.now() - last_game).days, 7)
+        days_rest_val = FeatureEngineer.serve_days_rest(df, default=2)
 
         # Make predictions with full context
         features_df = FeatureEngineer.get_prediction_features(
             df, is_home, opponent,
-            injuries_team=injuries_team,
-            injuries_opp=injuries_opp,
             days_rest=days_rest_val,
             vs_stats=vs_stats,
             **opp_ctx,
@@ -5336,8 +6302,11 @@ Examples:
         print("No game data available.")
         sys.exit(1)
 
-    # Feature engineering with team stats
-    df = FeatureEngineer.create_features(game_log, player_info=player_info, team_stats=team_stats)
+    # Feature engineering with team stats. game_info appends the synthetic
+    # next-game row so the served vector describes the UPCOMING game.
+    df = FeatureEngineer.create_features(
+        game_log, player_info=player_info, game_info=game_info, team_stats=team_stats
+    )
 
     # Get vs team stats
     vs_stats = None
@@ -5388,16 +6357,11 @@ Examples:
     injuries_opp = injuries.get(opponent, {}).get('out', 0)
 
     # Calculate days rest before prediction features
-    days_rest_cli = 2
-    if 'GAME_DATE' in df.columns and len(df) > 1:
-        last_game = pd.to_datetime(df['GAME_DATE'].iloc[-1])
-        days_rest_cli = min((datetime.now() - last_game).days, 7)
+    days_rest_cli = FeatureEngineer.serve_days_rest(df, default=2)
 
     # Make predictions with full context
     features_df = FeatureEngineer.get_prediction_features(
         df, is_home, opponent,
-        injuries_team=injuries_team,
-        injuries_opp=injuries_opp,
         days_rest=days_rest_cli,
         vs_stats=vs_stats,
         **opp_ctx,

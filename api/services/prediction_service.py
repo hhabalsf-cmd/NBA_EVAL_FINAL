@@ -458,6 +458,13 @@ class PredictionService:
             )
         )
 
+        # df_features ends in a synthetic row for the UPCOMING game (create_features
+        # was given game_info), which is what makes the served vector describe the
+        # next game instead of the last one played. Everything that SUMMARISES
+        # completed games — L10 averages, the game-log table, minutes — must use
+        # this frame instead, or it silently picks up a stat-less future row.
+        completed_features = ev.drop_upcoming_rows(df_features)
+
         # Stage 3: Training/loading model
         yield {
             "stage": "training_model",
@@ -525,12 +532,11 @@ class PredictionService:
         # Get vs stats
         vs_stats = self.scraper.get_vs_team_stats(player_info['player_id'], opponent) if opponent else None
 
-        # Calculate actual days rest from last game date
-        try:
-            last_game = pd.to_datetime(df_features['GAME_DATE'].iloc[-1])
-            days_rest = min((datetime.now() - last_game).days, 7)
-        except Exception:
-            days_rest = 2  # Fallback if date parsing fails
+        # Days rest before the UPCOMING game. df_features carries the synthetic
+        # next-game row (create_features was given game_info), so iloc[-1] is a
+        # future date -- serve_days_rest reads that row's own schedule-derived
+        # DAYS_REST and only falls back to the wall-clock formula without one.
+        days_rest = ev.FeatureEngineer.serve_days_rest(df_features, default=2)
 
         # Check if the player themselves is DTD/questionable
         player_injury_status = self.scraper.get_player_injury_status(
@@ -544,16 +550,21 @@ class PredictionService:
         # Compute schedule density & travel context for Phase 3 features
         schedule_ctx = {}
         try:
-            game_dates = pd.to_datetime(df_features['GAME_DATE'])
+            # Schedule density and the travel origin are both properties of games
+            # already PLAYED, so the synthetic next-game row must be excluded --
+            # otherwise the upcoming game counts itself in games_in_last_7 and
+            # the travel origin becomes the destination.
+            completed = completed_features
+            game_dates = pd.to_datetime(completed['GAME_DATE'])
             now = datetime.now()
             recent_7 = game_dates[game_dates >= (now - timedelta(days=7))]
             recent_4 = game_dates[game_dates >= (now - timedelta(days=4))]
             schedule_ctx['games_in_last_7'] = len(recent_7)
             schedule_ctx['games_in_last_4'] = len(recent_4)
 
-            # Travel: last game location → next game location
+            # Travel: last COMPLETED game location → next game location
             team_abbrev = player_info.get('team_abbrev', '')
-            last_opp = df_features['MATCHUP'].iloc[-1]
+            last_opp = completed['MATCHUP'].iloc[-1]
             last_is_home = 'vs.' in str(last_opp)
             last_loc = team_abbrev if last_is_home else str(last_opp).split(' ')[-1]
             next_loc = team_abbrev if is_home else opponent
@@ -563,42 +574,11 @@ class PredictionService:
         except Exception:
             pass  # Defaults in get_prediction_features handle missing values
 
-        # Fetch Vegas lines for this game (BDL odds endpoint)
-        vegas_ctx = {}
-        try:
-            game_date_str = game_info.get('game_date', '')
-            if game_date_str:
-                bdl = ev.get_bdl_client()
-                odds_data = bdl.get_odds(dates=[game_date_str])
-                team_abbrev = player_info.get('team_abbrev', '')
-                for odds_game in odds_data:
-                    game_teams = odds_game.get('game', {})
-                    home_abbrev = game_teams.get('home_team', {}).get('abbreviation', '')
-                    away_abbrev = game_teams.get('visitor_team', {}).get('abbreviation', '')
-                    if team_abbrev in (home_abbrev, away_abbrev):
-                        # Extract consensus spread and total from first available book
-                        for book in odds_game.get('books', []):
-                            lines = book.get('lines', [])
-                            for line in lines:
-                                if line.get('type') == 'total' and 'total' in line:
-                                    vegas_ctx['vegas_game_total'] = float(line['total'])
-                                if line.get('type') == 'spread':
-                                    # Spread from home team perspective
-                                    spread_val = float(line.get('spread', 0))
-                                    if team_abbrev == home_abbrev:
-                                        vegas_ctx['vegas_spread'] = spread_val
-                                    else:
-                                        vegas_ctx['vegas_spread'] = -spread_val
-                            if vegas_ctx:
-                                break
-                        # Compute implied team total
-                        if 'vegas_game_total' in vegas_ctx and 'vegas_spread' in vegas_ctx:
-                            gt = vegas_ctx['vegas_game_total']
-                            sp = vegas_ctx['vegas_spread']
-                            vegas_ctx['vegas_implied_team_total'] = (gt - sp) / 2
-                        break
-        except Exception:
-            pass  # Vegas features optional — defaults in get_prediction_features
+        # The BDL odds fetch that used to live here fed VEGAS_GAME_TOTAL_NORM /
+        # VEGAS_SPREAD_NORM / VEGAS_IMPLIED_TEAM_TOTAL_NORM. Those three were
+        # declared in FEATURE_COLS but never built by create_features, so no
+        # model was ever trained on them and predict() zero-filled them anyway.
+        # They were removed 2026-08-22 along with this request.
 
         # Offload prediction to thread pool (matrix operations)
         def _run_prediction():
@@ -606,14 +586,11 @@ class PredictionService:
                 df_features,
                 is_home=is_home,
                 opponent=opponent,
-                injuries_team=injuries_team,
-                injuries_opp=injuries_opp,
                 days_rest=days_rest,
                 vs_stats=vs_stats,
                 player_info=player_info,
                 **opp_ctx,
                 **schedule_ctx,
-                **vegas_ctx,
             )
             estimated_minutes = ev.FeatureEngineer.estimate_minutes(
                 df_features, is_home, days_rest, injuries_team,
@@ -655,7 +632,7 @@ class PredictionService:
         }
 
         # Pre-compute L10 averages once instead of per-stat
-        l10 = df_features.tail(10)
+        l10 = completed_features.tail(10)
         l10_avgs = {col: round(l10[col].mean(), 1) for col in ['PTS', 'REB', 'AST'] if col in l10.columns}
         if all(c in l10.columns for c in ['PTS', 'REB', 'AST']):
             l10_avgs['PRA'] = round((l10['PTS'] + l10['REB'] + l10['AST']).mean(), 1)
@@ -663,7 +640,13 @@ class PredictionService:
         # Build response
         stat_predictions = {}
         for stat, pred in predictions.items():
-            confidence_info = predictor.get_confidence(df_features, stat, pred)
+            # Pass the serve-time feature row so get_confidence can reach the
+            # quantile/CQR band. Without it the `features_df is not None` guard
+            # fails and every API prediction silently falls back to historical
+            # variance, bypassing the calibrated interval entirely.
+            confidence_info = predictor.get_confidence(
+                df_features, stat, pred, pred_features
+            )
             uncertainty = predictor.get_prediction_uncertainty(pred_features, stat)
 
             stat_predictions[stat] = {
@@ -715,7 +698,9 @@ class PredictionService:
         game_log_data = None
         avg_min_l10 = None
         try:
-            log_df = df_features[['GAME_DATE', 'MATCHUP', 'MIN_NUMERIC', 'PTS', 'REB', 'AST']].tail(20).copy()
+            log_df = completed_features[
+                ['GAME_DATE', 'MATCHUP', 'MIN_NUMERIC', 'PTS', 'REB', 'AST']
+            ].tail(20).copy()
             game_log_data = []
             for _, row in log_df.iterrows():
                 matchup = str(row['MATCHUP'])
@@ -729,7 +714,7 @@ class PredictionService:
                     "reb": round(float(row['REB']), 1),
                     "ast": round(float(row['AST']), 1),
                 })
-            avg_min_l10 = round(float(df_features['MIN_NUMERIC'].tail(10).mean()), 1)
+            avg_min_l10 = round(float(completed_features['MIN_NUMERIC'].tail(10).mean()), 1)
         except Exception:
             pass  # Non-critical — omit if any issue
 
