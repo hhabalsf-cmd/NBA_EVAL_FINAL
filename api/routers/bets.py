@@ -7,11 +7,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 import db
+import line_snapshots
+from line_snapshots import MigrationRequiredError
 from season_utils import today_et_str
 from ..limiter import limiter
 from ..schemas.prediction import (
     DailyPick,
     DailyPicksResponse,
+    LineSnapshotCapture,
+    LineSnapshotSummary,
+    LineSnapshotsResponse,
     ManualLine,
     ManualLinesResponse,
     ManualLinesUpsert,
@@ -134,6 +139,98 @@ async def delete_manual_line(
     if not db.delete_manual_line(line_id):
         raise HTTPException(status_code=404, detail="Line not found")
     return {"deleted": line_id}
+
+
+# ── Line observations (closing-line value) ───────────────────────────
+#
+# manual_lines holds one mutable row per (game_date, player, stat), so an admin
+# who enters a line once and never returns produces exactly one observation --
+# and CLV stays permanently NULL, because a snapshot only counts as *closing*
+# when it was captured strictly after the pick. These endpoints exist so a
+# second, real observation near tip-off is a one-click action.
+
+
+def _snapshot_response(date_str: str) -> LineSnapshotsResponse:
+    """Read the current observation summary for a date."""
+    try:
+        summary = line_snapshots.get_snapshot_summary(date_str)
+    except MigrationRequiredError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return LineSnapshotsResponse(
+        snapshots=[LineSnapshotSummary(**row) for row in summary],
+        date=date_str,
+    )
+
+
+def _unrecorded_detail(missing: list) -> str:
+    """Explain exactly which captures did not reach the snapshot log."""
+    names = ", ".join(f"{r.get('player')} {r.get('stat')}" for r in missing)
+    return (
+        f"Line saved, but the snapshot log did not record: {names}. "
+        "CLV cannot be computed for these captures — check the server log for "
+        "the line_snapshots write failure."
+    )
+
+
+@router.get("/lines/snapshots", response_model=LineSnapshotsResponse)
+@limiter.limit("60/minute")
+async def get_line_snapshots(
+    request: Request,
+    date: str = Query(default=None, description="YYYY-MM-DD (defaults to today)"),
+    current_user: dict = Depends(require_admin),
+):
+    """Observation count and timestamps for each line on a date.
+
+    Admin-gated like the write endpoints: line_snapshots is service-role-only
+    measurement infrastructure, not user-facing data.
+    """
+    return _snapshot_response(date or today_et_str())
+
+
+@router.post("/lines/snapshots", response_model=LineSnapshotsResponse)
+@limiter.limit("30/minute")
+async def capture_line_snapshots(
+    request: Request,
+    payload: LineSnapshotCapture,
+    current_user: dict = Depends(require_admin),
+):
+    """Append a fresh observation of one or more lines.
+
+    Append-only with respect to the snapshot log: the earlier observation is
+    never overwritten, and capturing an unmoved line is valid and useful —
+    it records that the line held.
+
+    ``db.upsert_manual_lines`` also refreshes the live fallback line, and
+    appends the snapshot on a best-effort path that logs failures without
+    failing the request. That silence is unacceptable here, so the write is
+    verified against the log and an unrecorded capture is a loud 500 rather
+    than a success the admin has no reason to doubt.
+    """
+    date_str = payload.game_date or today_et_str()
+    rows = [line.model_dump() for line in payload.lines]
+
+    try:
+        line_snapshots.require_snapshot_support()
+        before = line_snapshots.get_snapshot_summary(date_str)
+        db.upsert_manual_lines(rows, date_str)
+        after = line_snapshots.get_snapshot_summary(date_str)
+    except MigrationRequiredError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    missing = line_snapshots.keys_missing_new_observation(before, after, rows, date_str)
+    if missing:
+        logger.error("Snapshot capture by %s did not reach line_snapshots: %s",
+                     current_user.get('id'), missing)
+        raise HTTPException(status_code=500, detail=_unrecorded_detail(missing))
+
+    logger.info("Line observations captured by %s: %d lines for %s",
+                current_user.get('id'), len(rows), date_str)
+    return LineSnapshotsResponse(
+        snapshots=[LineSnapshotSummary(**row) for row in after],
+        date=date_str,
+    )
 
 
 def _row_to_daily_pick(row: dict) -> dict:

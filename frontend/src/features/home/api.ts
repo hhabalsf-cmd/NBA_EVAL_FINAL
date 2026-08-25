@@ -2,6 +2,7 @@ import { supabase } from '../../shared/lib/supabase'
 import { apiFetch, API_BASE, throwResponseError } from '../../api/client'
 import { createPick } from '../picks/api'
 import type { BestBet, DailyPick, Pick } from '../../api/types'
+import type { LineSnapshotSummary } from './lineObservations'
 
 export type { BestBet, DailyPick } from '../../api/types'
 
@@ -15,6 +16,8 @@ export interface ManualLine {
   line: number
   home_team?: string | null
   away_team?: string | null
+  /** When the line was first entered. Fallback when the snapshot log is unavailable. */
+  created_at?: string | null
 }
 
 export interface ManualLineInput {
@@ -47,6 +50,42 @@ export async function upsertManualLines(lines: ManualLineInput[], gameDate?: str
 export async function deleteManualLine(id: number): Promise<void> {
   const res = await apiFetch(`${API_BASE}/bets/lines/${id}`, { method: 'DELETE' })
   if (!res.ok) await throwResponseError(res, 'Failed to delete line')
+}
+
+// ── Line observations (closing-line value) ────────────────────────────
+
+/**
+ * Observation counts and timestamps for each line on a date.
+ *
+ * Admin-only: `line_snapshots` is service-role measurement infrastructure.
+ */
+export async function getLineSnapshots(date?: string): Promise<LineSnapshotSummary[]> {
+  const qs = date ? `?date=${encodeURIComponent(date)}` : ''
+  const res = await apiFetch(`${API_BASE}/bets/lines/snapshots${qs}`)
+  if (!res.ok) await throwResponseError(res, 'Failed to load line observations')
+  const body = (await res.json()) as { snapshots: LineSnapshotSummary[] }
+  return body.snapshots
+}
+
+/**
+ * Append a fresh observation of lines already on the board.
+ *
+ * The earlier observation is never overwritten — that path is what closing
+ * line value is derived from. Capturing an unmoved line is valid: it records
+ * that the line held, which is a real measurement.
+ */
+export async function captureLineSnapshots(
+  lines: ManualLineInput[],
+  gameDate?: string,
+): Promise<LineSnapshotSummary[]> {
+  const res = await apiFetch(`${API_BASE}/bets/lines/snapshots`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ lines, game_date: gameDate }),
+  })
+  if (!res.ok) await throwResponseError(res, 'Failed to capture line observation')
+  const body = (await res.json()) as { snapshots: LineSnapshotSummary[] }
+  return body.snapshots
 }
 
 /** Convert a DailyPick to a BestBet so existing BetCard works unchanged. */

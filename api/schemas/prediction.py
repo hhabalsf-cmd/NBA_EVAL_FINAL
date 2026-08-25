@@ -562,3 +562,36 @@ class ManualLine(BaseModel):
 class ManualLinesResponse(BaseModel):
     lines: List[ManualLine]
     date: str
+
+
+# ── Line observations (closing-line value) ───────────────────────────
+
+
+class LineSnapshotCapture(ManualLinesUpsert):
+    """Record a fresh observation of a line that is already on the board.
+
+    Same shape as an upsert on purpose: capturing near tip-off both appends an
+    observation and updates the live fallback line, and the admin should not
+    have to perform two actions to express one intent.
+    """
+
+
+class LineSnapshotSummary(BaseModel):
+    """One line's observation history, collapsed.
+
+    ``observations == 1`` is the state that makes CLV impossible: a closing
+    line only exists once a second observation lands after the pick.
+    """
+    game_date: str
+    player: str
+    stat: str
+    observations: int = Field(..., ge=1)
+    first_line: float
+    last_line: float
+    first_captured_at: datetime
+    last_captured_at: datetime
+
+
+class LineSnapshotsResponse(BaseModel):
+    snapshots: List[LineSnapshotSummary]
+    date: str

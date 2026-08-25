@@ -35,7 +35,8 @@ export default function AdminLinesSection() {
         </button>
       </div>
       <p className="text-xs text-text-muted mb-4">
-        Admin only. Log today's book lines so closing lines are on record.
+        Admin only. Log today&apos;s book lines, then capture each one again near tip-off —
+        closing line value needs the same line observed twice.
       </p>
       {showLinesPanel && <ManualLinesPanel />}
     </div>

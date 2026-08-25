@@ -91,6 +91,90 @@ def get_line_snapshots(date_str: str | None = None,
                 )
             return [dict(r) for r in cur.fetchall()]
 
+def require_snapshot_support() -> None:
+    """Raise ``MigrationRequiredError`` unless the snapshot table exists.
+
+    Callers at a system boundary (the API) need to fail loudly and specifically
+    rather than let an opaque ``UndefinedTable`` surface, so this is exposed as
+    a named check instead of inlining the probe.
+    """
+    ts.require(ts.has_line_snapshot_support(), "line_snapshots table")
+
+# ── Observation summaries ────────────────────────────────────────────────────
+
+def summarize_snapshot_rows(rows: list) -> list:
+    """Collapse raw snapshot rows into one observation summary per line.
+
+    Pure: takes rows, returns a new list, never mutates its input and never
+    touches the database.
+
+    The count is the whole point. One observation means the line was seen once
+    and CLV is impossible for any pick on it, because a closing line only
+    exists once a *second* observation lands after the pick. Two or more means
+    it can be computed. An unmoved line still counts as two observations --
+    "the line held" is a real, useful measurement, not a non-event.
+
+    ``captured_at`` values are returned exactly as given, timezone intact: the
+    admin UI renders staleness ("entered 4h ago") from them, and a naive UTC
+    value would be read as local time and report the wrong age.
+    """
+    grouped: dict = {}
+    for row in rows:
+        # Raises on an unparseable timestamp rather than dropping the row --
+        # a silently discarded observation is an invisible hole in the log.
+        captured = ts.to_utc_naive(row.get("captured_at"))
+        grouped.setdefault(ts.snapshot_key(row), []).append((captured, row))
+
+    summaries = []
+    for key, entries in grouped.items():
+        ordered = sorted(entries, key=lambda pair: pair[0])
+        first, last = ordered[0][1], ordered[-1][1]
+        summaries.append({
+            "game_date": key[0],
+            # Newest spelling wins: it is the one the admin most recently typed.
+            "player": " ".join(str(last.get("player") or "").split()),
+            "stat": key[2],
+            "observations": len(ordered),
+            "first_line": float(first["line"]),
+            "last_line": float(last["line"]),
+            "first_captured_at": first.get("captured_at"),
+            "last_captured_at": last.get("captured_at"),
+        })
+
+    return sorted(summaries, key=lambda s: (ts.norm_player(s["player"]), s["stat"]))
+
+
+def get_snapshot_summary(date_str: str | None = None,
+                         lookback_days: int = 1) -> list:
+    """Observation summary per line for a date, or a trailing window."""
+    return summarize_snapshot_rows(get_line_snapshots(date_str, lookback_days))
+
+
+def _observation_counts(summaries: list) -> dict:
+    """Map each snapshot key to its observation count."""
+    return {ts.snapshot_key(s): int(s.get("observations") or 0) for s in summaries}
+
+
+def keys_missing_new_observation(before: list, after: list, requested: list,
+                                 game_date: str | None = None) -> list:
+    """Requested rows whose observation count did not increase.
+
+    Pure. ``before``/``after`` are summary lists taken either side of a write;
+    ``requested`` is what the caller asked to record. Returns *copies* of the
+    rows the snapshot log did not accept, so the caller can raise instead of
+    reporting a capture that never happened. A best-effort snapshot write that
+    fails silently is exactly what left ``closing_line`` NULL on all 114 picks.
+    """
+    counts_before = _observation_counts(before)
+    counts_after = _observation_counts(after)
+
+    missing = []
+    for row in requested:
+        key = ts.snapshot_key({**row, "game_date": row.get("game_date") or game_date})
+        if counts_after.get(key, 0) <= counts_before.get(key, 0):
+            missing.append(dict(row))
+    return missing
+
 # ── Closing-line capture ─────────────────────────────────────────────────────
 
 def _fetch_picks_awaiting_closing_line(date_str: str | None,
