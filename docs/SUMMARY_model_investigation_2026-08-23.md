@@ -24,8 +24,19 @@ outside the diagnostic agent, matching to three decimals.**
 |---|---:|---:|---:|---:|---:|
 | PTS | **6.517** | 6.159 | 6.121 | 6.088 | **6.065** |
 | REB | **2.546** | 2.483 | 2.439 | **2.427** | 2.459 |
-| AST | **1.885** | 1.813 | 1.812 | 1.806 | **1.775** |
+| AST | **1.885** | 1.813 | 1.812 | 1.806 | 1.801 |
 | PRA | **7.637** | 7.335 | 7.422 | 7.394 | **7.267** |
+
+> **Correction (2026-08-25):** the AST/EWMA5 cell above read **1.775** until this
+> date. That is **L20's** figure, not EWMA5's — AST EWMA5 is **1.801**. When this
+> table was condensed from `diagnosis_resolution_failure_2026-08-23.md` §3 the L20
+> column was dropped and its bolded value carried into the EWMA5 slot. PTS, REB and
+> PRA transcribe correctly; AST was the only affected cell. The diagnosis §3 table
+> was right all along. This matters because Track B's exit criterion is stated
+> against EWMA5 / L10 / season median, and the wrong number made the pooled model
+> look like it failed that criterion on AST when it passes it (1.792 vs 1.801). The
+> pooled model does still lose to **L20** on AST — see
+> `docs/pooled_model_2026-08-25.md` §1.
 
 The model loses on all four. Paired bootstrap: **15 of 20 comparisons are
 statistically distinguishable losses, 5 ties, 0 wins.** Per player, the model beats
