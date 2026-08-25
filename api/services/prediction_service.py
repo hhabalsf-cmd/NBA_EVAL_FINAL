@@ -24,7 +24,12 @@ from fastapi import HTTPException
 from sleeper_client import get_headshot_url as get_sleeper_headshot
 from season_utils import get_recent_seasons
 
-from ..config import PICKS_DISABLED_DETAIL, PICKS_DISABLED_STATUS, picks_enabled
+from ..config import (
+    PICKS_DISABLED_DETAIL,
+    PICKS_DISABLED_STATUS,
+    picks_enabled,
+    pooled_model_enabled,
+)
 
 
 def _require_picks_enabled() -> None:
@@ -36,6 +41,33 @@ def _require_picks_enabled() -> None:
     """
     if not picks_enabled():
         raise HTTPException(status_code=PICKS_DISABLED_STATUS, detail=PICKS_DISABLED_DETAIL)
+
+def _build_predictor(ev, model_type: str, use_ensemble: bool):
+    """The predictor behind every prediction request.
+
+    ``NBA_EVAL_POOLED_MODEL`` selects the pooled cross-player model, which
+    implements the same interface (see ``pooled_predictor.PooledPredictor``) so
+    nothing downstream of this call changes. Default OFF: the legacy per-player
+    ``MLPredictor`` is what the flag falls back to, unchanged.
+
+    A missing or unreadable league artifact is surfaced, never swallowed — the
+    caller gets a 503 rather than a silent downgrade to a model that measured
+    40-66 against real lines.
+    """
+    if not pooled_model_enabled():
+        return ev.MLPredictor(model_type=model_type, use_ensemble=use_ensemble)
+    try:
+        from pooled_predictor import PooledPredictor
+        return PooledPredictor()
+    except (FileNotFoundError, ValueError) as exc:
+        logger.error("pooled model enabled but unavailable: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Pooled model is enabled but its league artifact is "
+                   "unavailable. Run scripts/train_pooled_model.py, or unset "
+                   "NBA_EVAL_POOLED_MODEL to fall back to the per-player model.",
+        ) from exc
+
 
 # Lazy import cache — nba_evaluator (and TensorFlow) only loads on first prediction
 _nba_ev = None
@@ -487,7 +519,7 @@ class PredictionService:
             "message": "Loading or training model..."
         }
 
-        predictor = ev.MLPredictor(model_type=model_type, use_ensemble=use_ensemble)
+        predictor = _build_predictor(ev, model_type, use_ensemble)
 
         # Enforce once-per-night retrain policy
         retrain_skipped = False

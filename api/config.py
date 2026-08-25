@@ -27,6 +27,12 @@ PICKS_DISABLED_DETAIL = (
 #: HTTP status returned when a recommendation endpoint is called with picks off.
 PICKS_DISABLED_STATUS = 503
 
+#: Gates the pooled cross-player prop model. OFF serves the legacy per-player
+#: `MLPredictor`; ON serves `pooled_predictor.PooledPredictor` behind the same
+#: interface. Requires the league artifact built by
+#: `scripts/train_pooled_model.py`. See docs/pooled_model_2026-08-25.md.
+POOLED_MODEL_FLAG_ENV_VAR = "NBA_EVAL_POOLED_MODEL"
+
 
 def parse_flag(raw: Optional[str]) -> bool:
     """Parse a raw env value into a boolean flag. Absent/empty/unknown -> False."""
@@ -42,3 +48,13 @@ def picks_enabled(env: Optional[dict] = None) -> bool:
     """
     source = os.environ if env is None else env
     return parse_flag(source.get(PICKS_FLAG_ENV_VAR))
+
+
+def pooled_model_enabled(env: Optional[dict] = None) -> bool:
+    """True when the pooled cross-player model has been explicitly enabled.
+
+    Independent of `picks_enabled`: the pooled model can be exercised through
+    the prediction endpoints while pick generation stays off.
+    """
+    source = os.environ if env is None else env
+    return parse_flag(source.get(POOLED_MODEL_FLAG_ENV_VAR))
