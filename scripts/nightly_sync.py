@@ -102,6 +102,10 @@ def sync_player_game_logs(player_list, season, max_players=None):
     print(f"\n Syncing game logs for {total} players...")
 
     scraper = NBADataScraper()
+    sync_time = now_et()
+    completed_slate_date = sync_time.date()
+    if sync_time.hour < 12:
+        completed_slate_date -= timedelta(days=1)
 
     for i, player in enumerate(player_list):
         player_id = player['id']
@@ -112,8 +116,9 @@ def sync_player_game_logs(player_list, season, max_players=None):
             existing = db.get_game_logs_from_supabase(str(player_id), season)
             if existing is not None and len(existing) > 0:
                 latest_date = pd.to_datetime(existing['GAME_DATE']).max()
-                days_old = (datetime.now() - latest_date).days
-                if days_old <= 1:
+                # At 02:00 ET, a log from two nights ago is still less than
+                # 48 hours old but can omit the second game of a back-to-back.
+                if latest_date.date() >= completed_slate_date:
                     skipped += 1
                     continue
 

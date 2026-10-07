@@ -3,6 +3,7 @@ import sys
 import os
 from pathlib import Path
 from unittest.mock import patch, MagicMock
+from contextlib import nullcontext
 import pandas as pd
 import pytest
 
@@ -44,21 +45,21 @@ def make_mock_conn(rows):
 class TestGetGameLogsFromSupabase:
     def test_returns_dataframe_when_rows_exist(self):
         mock_conn, mock_cursor = make_mock_conn(SAMPLE_ROWS)
-        with patch("db.get_connection", return_value=mock_conn):
+        with patch("db.borrow_conn", return_value=nullcontext(mock_conn)):
             result = db.get_game_logs_from_supabase("203999", "2024-25")
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 1
 
     def test_returns_none_when_no_rows(self):
         mock_conn, mock_cursor = make_mock_conn([])
-        with patch("db.get_connection", return_value=mock_conn):
+        with patch("db.borrow_conn", return_value=nullcontext(mock_conn)):
             result = db.get_game_logs_from_supabase("203999", "2024-25")
         assert result is None
 
     def test_column_names_match_nba_api_format(self):
         """Returned DataFrame must use uppercase column names matching NBA API."""
         mock_conn, mock_cursor = make_mock_conn(SAMPLE_ROWS)
-        with patch("db.get_connection", return_value=mock_conn):
+        with patch("db.borrow_conn", return_value=nullcontext(mock_conn)):
             result = db.get_game_logs_from_supabase("203999", "2024-25")
         assert "GAME_DATE" in result.columns
         assert "PTS" in result.columns
@@ -69,7 +70,7 @@ class TestGetGameLogsFromSupabase:
 
     def test_queries_correct_player_and_season(self):
         mock_conn, mock_cursor = make_mock_conn(SAMPLE_ROWS)
-        with patch("db.get_connection", return_value=mock_conn):
+        with patch("db.borrow_conn", return_value=nullcontext(mock_conn)):
             db.get_game_logs_from_supabase("203999", "2024-25")
         call_args = mock_cursor.execute.call_args
         sql, params = call_args[0]
@@ -97,14 +98,14 @@ class TestInsertGameLogsToSupabase:
     def test_executes_insert(self):
         mock_conn, mock_cursor = make_mock_conn([])
         df = self._make_sample_df()
-        with patch("db.get_connection", return_value=mock_conn):
+        with patch("db.borrow_conn", return_value=nullcontext(mock_conn)):
             db.insert_game_logs_to_supabase(df, "203999", "2024-25")
         assert mock_cursor.executemany.called
 
     def test_uses_on_conflict_do_nothing(self):
         mock_conn, mock_cursor = make_mock_conn([])
         df = self._make_sample_df()
-        with patch("db.get_connection", return_value=mock_conn):
+        with patch("db.borrow_conn", return_value=nullcontext(mock_conn)):
             db.insert_game_logs_to_supabase(df, "203999", "2024-25")
         call_sql = mock_cursor.executemany.call_args[0][0]
         assert "ON CONFLICT" in call_sql.upper()
@@ -113,13 +114,13 @@ class TestInsertGameLogsToSupabase:
     def test_commits(self):
         mock_conn, _ = make_mock_conn([])
         df = self._make_sample_df()
-        with patch("db.get_connection", return_value=mock_conn):
+        with patch("db.borrow_conn", return_value=nullcontext(mock_conn)):
             db.insert_game_logs_to_supabase(df, "203999", "2024-25")
         mock_conn.commit.assert_called_once()
 
     def test_empty_df_is_noop(self):
         mock_conn, mock_cursor = make_mock_conn([])
-        with patch("db.get_connection", return_value=mock_conn):
+        with patch("db.borrow_conn", return_value=nullcontext(mock_conn)):
             db.insert_game_logs_to_supabase(pd.DataFrame(), "203999", "2024-25")
         mock_cursor.executemany.assert_not_called()
 
@@ -132,6 +133,14 @@ from nba_evaluator import NBADataScraper
 
 class TestGetPlayerGameLogWithCache:
     """Tests that get_player_game_log() uses Supabase for historical seasons."""
+
+    @pytest.fixture(autouse=True)
+    def stable_provider_context(self):
+        with patch('nba_evaluator.get_current_season', return_value='2025-26'), \
+             patch('nba_evaluator.get_recent_seasons', return_value=['2023-24','2024-25','2025-26']), \
+             patch('nba_evaluator.get_player_mapper') as mapper:
+            mapper.return_value.nba_to_bdl.return_value = 203999
+            yield
 
     def _make_fake_api_df(self, season):
         return pd.DataFrame([{
@@ -152,7 +161,7 @@ class TestGetPlayerGameLogWithCache:
 
         scraper = NBADataScraper()
         with patch("db.get_game_logs_from_supabase", return_value=fake_df) as mock_get, \
-             patch("nba_api.stats.endpoints.playergamelog.PlayerGameLog") as mock_api:
+             patch.object(NBADataScraper, "_fetch_bdl_game_log") as mock_api:
             result = scraper.get_player_game_log("203999", seasons=["2024-25"])
 
         mock_get.assert_called_once_with("203999", "2024-25")
@@ -168,7 +177,7 @@ class TestGetPlayerGameLogWithCache:
         scraper = NBADataScraper()
         with patch("db.get_game_logs_from_supabase", return_value=None), \
              patch("db.insert_game_logs_to_supabase") as mock_insert, \
-             patch("nba_api.stats.endpoints.playergamelog.PlayerGameLog", return_value=mock_log), \
+             patch.object(NBADataScraper, "_fetch_bdl_game_log", return_value=fake_df), \
              patch("time.sleep"):
             result = scraper.get_player_game_log("203999", seasons=["2024-25"])
 
@@ -183,7 +192,7 @@ class TestGetPlayerGameLogWithCache:
 
         scraper = NBADataScraper()
         with patch("db.get_game_logs_from_supabase") as mock_get, \
-             patch("nba_api.stats.endpoints.playergamelog.PlayerGameLog", return_value=mock_log), \
+             patch.object(NBADataScraper, "_fetch_bdl_game_log", return_value=fake_df), \
              patch("time.sleep"), \
              patch("nba_evaluator.CacheManager.get", return_value=None), \
              patch("nba_evaluator.CacheManager.set"):
@@ -203,7 +212,7 @@ class TestGetPlayerGameLogWithCache:
 
         scraper = NBADataScraper()
         with patch("db.get_game_logs_from_supabase", return_value=fake_historical_df), \
-             patch("nba_api.stats.endpoints.playergamelog.PlayerGameLog", return_value=mock_log), \
+             patch.object(NBADataScraper, "_fetch_bdl_game_log", return_value=fake_current_df), \
              patch("time.sleep"), \
              patch("nba_evaluator.CacheManager.get", return_value=None), \
              patch("nba_evaluator.CacheManager.set"):

@@ -20,7 +20,15 @@ import pandas as pd
 @pytest.fixture
 def client():
     from api.main import app
-    return TestClient(app)
+    from api.routers.auth import get_current_user
+    from api.routers.players import _scenarios_cache
+    _scenarios_cache.clear()
+    app.dependency_overrides[get_current_user] = lambda: {'id': 'scenario-test-user'}
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        _scenarios_cache.clear()
 
 
 def _make_game_log_df(game_ids, matchups):

@@ -1,0 +1,30 @@
+# Verified local runtime: Windows, Python 3.12, 2026-10-01.
+# Recreate with: python -m pip install -r personal/requirements.lock.txt
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+certifi==2026.7.22
+charset-normalizer==3.5.1
+click==8.5.0
+cloudpickle==3.1.2
+fastapi==0.141.1
+h11==0.16.0
+idna==3.20
+joblib==1.6.0
+numpy==2.5.3
+pandas==2.3.3
+pydantic==2.13.5
+pydantic-core==2.46.5
+python-dateutil==2.9.0.post0
+pytz==2026.3.post1
+requests==2.34.2
+scikit-learn==1.6.1
+scipy==1.18.1
+six==1.17.0
+starlette==1.6.0
+threadpoolctl==3.7.0
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+tzdata==2026.4
+urllib3==2.8.0
+uvicorn==0.53.0

@@ -7,6 +7,7 @@ tests live in test_supabase_auth.py.
 import io
 import sys
 import os
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -41,6 +42,16 @@ def _auth_headers() -> dict:
     return {"Authorization": "Bearer fake-token"}
 
 
+@contextmanager
+def authenticated():
+    from api.routers.auth import get_current_user
+    app.dependency_overrides[get_current_user] = lambda: FAKE_USER
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
 # ── Unauthenticated rejection tests ─────────────────────────────────────────
 
 def test_avatar_upload_requires_auth():
@@ -67,7 +78,7 @@ def test_change_password_requires_auth():
 # ── Avatar upload validation tests ──────────────────────────────────────────
 
 def test_avatar_upload_rejects_non_image():
-    with patch("api.routers.auth.get_current_user", return_value=FAKE_USER):
+    with authenticated():
         r = client.post(
             "/api/auth/avatar",
             headers=_auth_headers(),
@@ -78,7 +89,7 @@ def test_avatar_upload_rejects_non_image():
 
 def test_avatar_upload_rejects_oversized_file():
     big = io.BytesIO(b"\xff\xd8\xff" + b"\x00" * (6 * 1024 * 1024))
-    with patch("api.routers.auth.get_current_user", return_value=FAKE_USER):
+    with authenticated():
         r = client.post(
             "/api/auth/avatar",
             headers=_auth_headers(),
@@ -91,7 +102,7 @@ def test_avatar_upload_rejects_spoofed_content_type():
     """File claims to be JPEG but magic bytes are PNG — should be rejected."""
     # PNG magic bytes with jpeg content-type header
     png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
-    with patch("api.routers.auth.get_current_user", return_value=FAKE_USER):
+    with authenticated():
         r = client.post(
             "/api/auth/avatar",
             headers=_auth_headers(),

@@ -1,5 +1,6 @@
 """Service layer wrapping existing ML prediction classes."""
-import fcntl
+import hashlib
+from filelock import FileLock
 import json
 import logging
 import sys
@@ -54,11 +55,9 @@ def _build_predictor(ev, model_type: str, use_ensemble: bool):
     caller gets a 503 rather than a silent downgrade to a model that measured
     40-66 against real lines.
     """
-    if not pooled_model_enabled():
-        return ev.MLPredictor(model_type=model_type, use_ensemble=use_ensemble)
     try:
-        from pooled_predictor import PooledPredictor
-        return PooledPredictor()
+        from predictor_factory import build_predictor
+        return build_predictor(ev, model_type, use_ensemble)
     except (FileNotFoundError, ValueError) as exc:
         logger.error("pooled model enabled but unavailable: %s", exc)
         raise HTTPException(
@@ -110,29 +109,34 @@ def _fetch_todays_props() -> list:
 
     return fetch_todays_props()
 
-def _prediction_cache_path(player_name: str) -> Path:
+PREDICTION_CACHE_TTL = 15 * 60
+PRED_CACHE_DIR = Path(__file__).resolve().parents[2] / "cache" / "predictions"
+
+
+def _prediction_cache_path(player_name: str, model_type="gradient_boost", use_ensemble=False) -> Path:
     from zoneinfo import ZoneInfo
-    key = player_name.replace(" ", "_")
+    identity = ["v2", player_name, model_type, bool(use_ensemble), pooled_model_enabled()]
+    key = hashlib.sha256(json.dumps(identity).encode("utf-8")).hexdigest()
     date_str = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
     return PRED_CACHE_DIR / f"{key}_{date_str}.json"
 
 
-def _load_prediction_cache(player_name: str) -> Optional[Dict]:
-    """Return today's cached prediction data, or None if absent/stale."""
-    path = _prediction_cache_path(player_name)
-    if not path.exists():
-        return None
+def _load_prediction_cache(player_name: str, model_type="gradient_boost", use_ensemble=False) -> Optional[Dict]:
+    """Reuse a recent prediction only for the same model configuration."""
+    path = _prediction_cache_path(player_name, model_type, use_ensemble)
     try:
+        if time.time() - path.stat().st_mtime >= PREDICTION_CACHE_TTL:
+            return None
         with open(path) as f:
             return json.load(f)
     except Exception:
         return None
 
 
-def _save_prediction_cache(player_name: str, data: Dict) -> None:
+def _save_prediction_cache(player_name: str, data: Dict, model_type="gradient_boost", use_ensemble=False) -> None:
     """Write prediction data to today's cache file."""
     PRED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path = _prediction_cache_path(player_name)
+    path = _prediction_cache_path(player_name, model_type, use_ensemble)
     try:
         with open(path, "w") as f:
             json.dump(data, f)
@@ -146,12 +150,8 @@ def _player_model_lock(player_name: str):
     ev = _load_nba_evaluator()
     ev.MODEL_DIR.mkdir(parents=True, exist_ok=True)
     lock_path = ev.MODEL_DIR / f"{player_name.replace(' ', '_')}.lock"
-    with open(lock_path, "w") as lf:
-        fcntl.flock(lf, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lf, fcntl.LOCK_UN)
+    with FileLock(str(lock_path), timeout=300):
+        yield
 
 
 class PredictionService:
@@ -446,7 +446,7 @@ class PredictionService:
         # Check prediction cache — skip on explicit retrain
         canonical_name = player_info['player_name']
         if not retrain:
-            cached = _load_prediction_cache(canonical_name)
+            cached = _load_prediction_cache(canonical_name, model_type, use_ensemble)
             if cached is not None:
                 yield {
                     "stage": "fetching_data",
@@ -775,13 +775,13 @@ class PredictionService:
             "game_info": game_info_response,
             "opponent_context": opponent_context,
             "vs_stats": vs_stats_response,
-            "model_type": model_type,
+            "model_type": predictor.model_type,
             "games_trained_on": predictor.games_trained_on,
             "game_log": game_log_data,
             "avg_min_l10": avg_min_l10,
             "games_this_season": predictor._current_season_games(df_features),
         }
-        _save_prediction_cache(canonical_name, result_data)
+        _save_prediction_cache(canonical_name, result_data, model_type, use_ensemble)
 
         yield {
             "stage": "complete",

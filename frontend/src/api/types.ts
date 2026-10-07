@@ -144,8 +144,8 @@ export interface Pick {
   confidence?: number
   opponent?: string
   is_home?: boolean
-  actual_result?: number
-  won?: boolean
+  actual_result?: number | null
+  won?: boolean | null
   model_type?: string
   game_date?: string
   voided?: boolean

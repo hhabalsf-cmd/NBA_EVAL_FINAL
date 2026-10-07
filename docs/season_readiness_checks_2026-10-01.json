@@ -1,0 +1,160 @@
+{
+  "checked_at": "2026-10-01T20:21:23.641092+00:00",
+  "checks": {
+    "model": {
+      "version": "forecast-1",
+      "trained_through": "2025-12-31",
+      "calibrated_through": "2026-04-12",
+      "artifact_sha256": "c4f4251aaf0d49daba6c1d65a612a0c8de6879c32d7fd91bd3f8a9dacbab1ed1",
+      "betting_validated": false
+    },
+    "database": "ok",
+    "saved_forecasts": 7,
+    "frontend_built": true,
+    "teams": 30,
+    "roster_players": 605,
+    "schedules_checked": 30,
+    "upcoming_events": 1197,
+    "first_tipoff": "2026-10-20T19:00:00+00:00"
+  },
+  "errors": [],
+  "warnings": [
+    "Priced betting profitability is unvalidated. Predictions remain research output."
+  ],
+  "samples": [
+    {
+      "player_id": "4433134",
+      "player_name": "Scottie Barnes",
+      "quality": {
+        "source": "ESPN final box scores",
+        "player_id_namespace": "espn",
+        "checked_at": "2026-10-01T20:21:23.641092+00:00",
+        "oldest_fetch": 1790886112.8799384,
+        "newest_fetch": 1790886142.4148948,
+        "verified_games": 56,
+        "corrections_this_refresh": 0,
+        "excluded_zero_minute_rows": 0,
+        "quarantined_games": [
+          {
+            "event_id": "401810857",
+            "date": "2026-03-19T00:00:00.000+00:00",
+            "reason": "Player points do not add up to the final team score."
+          }
+        ],
+        "excluded_non_regular_games": [
+          "401838140",
+          "401838141",
+          "401838143"
+        ],
+        "excluded_dnp_games": []
+      },
+      "rows": 56,
+      "status": "passed",
+      "event": {
+        "id": "401909837",
+        "name": "Chicago Bulls at Toronto Raptors",
+        "starts_at": "2026-10-21T23:30Z",
+        "home": true,
+        "team": "TOR",
+        "opponent": "CHI"
+      }
+    },
+    {
+      "player_id": "3945274",
+      "player_name": "Luka Doncic",
+      "quality": {
+        "source": "ESPN final box scores",
+        "player_id_namespace": "espn",
+        "checked_at": "2026-10-01T20:21:23.641092+00:00",
+        "oldest_fetch": 1790886122.9242349,
+        "newest_fetch": 1790886170.951285,
+        "verified_games": 58,
+        "corrections_this_refresh": 0,
+        "excluded_zero_minute_rows": 0,
+        "quarantined_games": [
+          {
+            "event_id": "401810815",
+            "date": "2026-03-13T02:30:00.000+00:00",
+            "reason": "Player points do not add up to the final team score."
+          }
+        ],
+        "excluded_non_regular_games": [
+          "401838140"
+        ],
+        "excluded_dnp_games": []
+      },
+      "rows": 58,
+      "status": "passed",
+      "event": {
+        "id": "401909092",
+        "name": "Golden State Warriors at Los Angeles Lakers",
+        "starts_at": "2026-10-22T02:00Z",
+        "home": true,
+        "team": "LAL",
+        "opponent": "GSW"
+      }
+    },
+    {
+      "player_id": "3975",
+      "player_name": "Stephen Curry",
+      "quality": {
+        "source": "ESPN final box scores",
+        "player_id_namespace": "espn",
+        "checked_at": "2026-10-01T20:21:23.641092+00:00",
+        "oldest_fetch": 1790886118.2753723,
+        "newest_fetch": 1790886200.511629,
+        "verified_games": 57,
+        "corrections_this_refresh": 0,
+        "excluded_zero_minute_rows": 0,
+        "quarantined_games": [],
+        "excluded_non_regular_games": [
+          "401766459",
+          "401866756",
+          "401866759"
+        ],
+        "excluded_dnp_games": []
+      },
+      "rows": 57,
+      "status": "passed",
+      "event": {
+        "id": "401909092",
+        "name": "Golden State Warriors at Los Angeles Lakers",
+        "starts_at": "2026-10-22T02:00Z",
+        "home": false,
+        "team": "GSW",
+        "opponent": "LAL"
+      }
+    },
+    {
+      "player_id": "3112335",
+      "player_name": "Nikola Jokic",
+      "quality": {
+        "source": "ESPN final box scores",
+        "player_id_namespace": "espn",
+        "checked_at": "2026-10-01T20:21:23.641092+00:00",
+        "oldest_fetch": 1790886129.0387177,
+        "newest_fetch": 1790886227.735467,
+        "verified_games": 59,
+        "corrections_this_refresh": 0,
+        "excluded_zero_minute_rows": 0,
+        "quarantined_games": [],
+        "excluded_non_regular_games": [
+          "401838140"
+        ],
+        "excluded_dnp_games": []
+      },
+      "rows": 59,
+      "status": "passed",
+      "event": {
+        "id": "401909094",
+        "name": "Denver Nuggets at Oklahoma City Thunder",
+        "starts_at": "2026-10-23T01:30Z",
+        "home": false,
+        "team": "DEN",
+        "opponent": "OKC"
+      }
+    }
+  ],
+  "ready_for_research": true,
+  "ready_for_betting": false
+}

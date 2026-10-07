@@ -2,23 +2,28 @@ const FASTAPI_URL = Deno.env.get('FASTAPI_URL')!
 const FASTAPI_SERVICE_KEY = Deno.env.get('FASTAPI_SERVICE_KEY')!
 
 function isAfterGradeWindow(): boolean {
-  const now = new Date()
-  const etTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }))
-  return etTime.getHours() >= 23
+  return Number(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour: '2-digit', hourCycle: 'h23',
+  }).format(new Date())) >= 23
 }
 
 function getTodayET(): string {
-  const now = new Date()
-  return new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }))
-    .toISOString()
-    .slice(0, 10)
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date())
+  const value = (type: string) => parts.find(p => p.type === type)!.value
+  return `${value('year')}-${value('month')}-${value('day')}`
 }
 
 Deno.serve(async (req) => {
   // Verify inbound authorization
   const authHeader = req.headers.get('Authorization')
   const expectedKey = Deno.env.get('WEBHOOK_SECRET')
-  if (expectedKey && (!authHeader || authHeader !== `Bearer ${expectedKey}`)) {
+  // WARNING: a missing webhook secret must never disable authorization.
+  if (!expectedKey) {
+    return new Response('Webhook authentication is not configured', { status: 503 })
+  }
+  if (!authHeader || authHeader !== `Bearer ${expectedKey}`) {
     return new Response('Unauthorized', { status: 401 })
   }
 
@@ -47,11 +52,14 @@ Deno.serve(async (req) => {
     console.log(`auto-grade picks response: ${res.status} ${text}`)
 
     // Also grade game predictions
-    await fetch(`${FASTAPI_URL}/api/games/auto-grade`, {
+    const gamesRes = await fetch(`${FASTAPI_URL}/api/games/auto-grade`, {
       method: 'POST',
       headers: { 'X-Service-Key': FASTAPI_SERVICE_KEY },
     })
 
+    if (!res.ok || !gamesRes.ok) {
+      return new Response('Upstream grading failed', { status: 502 })
+    }
     return new Response('graded', { status: 200 })
   } catch (err) {
     console.error('grade-picks error:', err)

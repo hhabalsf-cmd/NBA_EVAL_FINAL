@@ -183,7 +183,10 @@ export default function PicksPage() {
       const previous = queryClient.getQueryData<Pick[]>(['picks', false])
       queryClient.setQueryData<Pick[]>(['picks', false], old =>
         old?.map(p =>
-          p.id === pickId ? { ...p, actual_result: result, won: result > p.line } : p,
+          p.id === pickId ? {
+            ...p, actual_result: result,
+            won: result === p.line ? null : p.direction === 'OVER' ? result > p.line : result < p.line,
+          } : p,
         ),
       )
       setGradePickId(null)
@@ -803,7 +806,7 @@ export default function PicksPage() {
                               <div className="flex items-center gap-2">
                                 <span className="text-sm text-text-primary">{pick.actual_result}</span>
                                 <span className={`text-sm font-semibold ${pick.won ? 'text-accent-success' : 'text-accent-danger'}`}>
-                                  {pick.won ? 'W' : 'L'}
+                                  {pick.won == null ? 'PUSH' : pick.won ? 'W' : 'L'}
                                 </span>
                               </div>
                             ) : gradePickId === pick.id ? (
@@ -889,7 +892,7 @@ export default function PicksPage() {
                               </span>
                             ) : pick.actual_result !== null && pick.actual_result !== undefined ? (
                               <span className={`font-mono text-sm font-semibold ${pick.won ? 'text-accent-success' : 'text-accent-danger'}`}>
-                                {pick.actual_result} {pick.won ? 'W' : 'L'}
+                                {pick.actual_result} {pick.won == null ? 'PUSH' : pick.won ? 'W' : 'L'}
                               </span>
                             ) : gradePickId === pick.id ? (
                               <div className="flex items-center gap-1.5">

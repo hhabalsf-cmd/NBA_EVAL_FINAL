@@ -184,7 +184,8 @@ def build_report(min_n: int = clv.MIN_CONCLUSIVE_N) -> dict:
     picks = get_paper_picks()
     wins = sum(1 for p in picks if p.get("won") == 1)
     losses = sum(1 for p in picks if p.get("won") == 0)
-    pending = sum(1 for p in picks if p.get("won") is None)
+    pending = sum(1 for p in picks if p.get("won") is None and p.get("actual_result") is None)
+    pushes = sum(1 for p in picks if p.get("won") is None and p.get("actual_result") is not None)
 
     clv_values, missing_close = [], 0
     for pick in picks:
@@ -206,6 +207,7 @@ def build_report(min_n: int = clv.MIN_CONCLUSIVE_N) -> dict:
         "ready": True,
         "record": clv.summarize_record(wins, losses, min_n=min_n),
         "pending": pending,
+        "pushes": pushes,
         "total_recorded": len(picks),
         "clv": {**clv.summarize_clv(clv_values),
                 "picks_without_closing_line": missing_close},

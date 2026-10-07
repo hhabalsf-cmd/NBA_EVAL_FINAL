@@ -102,7 +102,10 @@ class TestEarlySeasonDamping:
 
 @pytest.mark.slow
 class TestAllStatsTrained:
-    def test_train_and_update_keep_all_four_models(self, features_df):
+    def test_train_and_update_keep_all_four_models(self, features_df, monkeypatch):
+        # Exercise real fitting/update and quantile artifacts, not a 40-trial
+        # hyperparameter search. Optimizer reset behavior has separate coverage.
+        monkeypatch.setattr('nba_evaluator.OPTUNA_AVAILABLE', False)
         predictor = MLPredictor(model_type="gradient_boost")
         assert predictor.train(features_df) is True
         for stat in ALL_STATS:

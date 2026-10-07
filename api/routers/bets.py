@@ -11,6 +11,7 @@ import line_snapshots
 from line_snapshots import MigrationRequiredError
 from season_utils import today_et_str
 from ..limiter import limiter
+from ..config import picks_enabled, PICKS_DISABLED_STATUS, PICKS_DISABLED_DETAIL
 from ..schemas.prediction import (
     DailyPick,
     DailyPicksResponse,
@@ -58,6 +59,8 @@ async def trigger_generate_daily_picks(request: Request):
     pg_cron/pg_net don't time out waiting for the full generation.
     """
     verify_service_key(request)
+    if not picks_enabled():
+        raise HTTPException(status_code=PICKS_DISABLED_STATUS, detail=PICKS_DISABLED_DETAIL)
 
     async def _run_in_background():
         from scripts.daily_best_picks import run as run_generation

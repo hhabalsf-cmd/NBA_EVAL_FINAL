@@ -25,6 +25,7 @@ _is_prod = bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_I
 
 from .limiter import limiter
 from .routers import players_router, bets_router, picks_router, games_router, auth_router, parlays_router, sync_router, live_router, social_router
+from .routers.forecasts import router as forecasts_router
 
 _logger = logging.getLogger(__name__)
 
@@ -171,6 +172,7 @@ app.include_router(parlays_router)
 app.include_router(sync_router)
 app.include_router(live_router)
 app.include_router(social_router)
+app.include_router(forecasts_router)
 
 
 @app.get("/api/health")

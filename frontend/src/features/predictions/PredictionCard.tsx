@@ -30,9 +30,11 @@ interface PredictionCardProps {
   onChartClick?: () => void
   /** Render the early-season badge (player has < 10 games this season) */
   earlySeason?: boolean
+  /** Calibrated outcome coverage, not a claim about the probability a bet wins. */
+  intervalLevel?: number
 }
 
-export default function PredictionCard({ stat, prediction, onChartClick, earlySeason }: PredictionCardProps) {
+export default function PredictionCard({ stat, prediction, onChartClick, earlySeason, intervalLevel }: PredictionCardProps) {
   const animatedPrediction = useCountUp(prediction.prediction)
   const tilt = useTilt({ maxTilt: 8, scale: 1.03 })
 
@@ -79,7 +81,7 @@ export default function PredictionCard({ stat, prediction, onChartClick, earlySe
       onMouseEnter={tilt.onMouseEnter}
       onMouseLeave={tilt.onMouseLeave}
       style={tilt.style}
-      className={`card card-3d ${getConfidenceClass()} p-5 h-full ${onChartClick ? 'cursor-pointer group' : ''}`}
+      className={`card card-3d ${intervalLevel != null ? 'card-accent' : getConfidenceClass()} p-5 h-full ${onChartClick ? 'cursor-pointer group' : ''}`}
       whileTap={onChartClick ? { scale: 0.97 } : {}}
     >
       <div className="tilt-glare" />
@@ -126,13 +128,13 @@ export default function PredictionCard({ stat, prediction, onChartClick, earlySe
 
       <div className="mt-auto">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-[11px] text-text-muted">Confidence</span>
-          <span className="text-xs font-mono font-semibold" style={getConfidenceTextStyle()}>
-            {prediction.confidence.toFixed(0)}%
+          <span className="text-[11px] text-text-muted">{intervalLevel != null ? 'Outcome interval' : 'Confidence'}</span>
+          <span className="text-xs font-mono font-semibold" style={intervalLevel != null ? { color: 'var(--accent)' } : getConfidenceTextStyle()}>
+            {(intervalLevel != null ? intervalLevel * 100 : prediction.confidence).toFixed(0)}%
           </span>
         </div>
         <div className="confidence-meter">
-          <div className={`confidence-fill ${getConfidenceBarClass()}`} style={{ width: `${prediction.confidence}%` }} />
+          <div className={`confidence-fill ${intervalLevel != null ? 'bg-accent' : getConfidenceBarClass()}`} style={{ width: `${intervalLevel != null ? intervalLevel * 100 : prediction.confidence}%` }} />
         </div>
       </div>
 

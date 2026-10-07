@@ -88,6 +88,8 @@ class RequestBodyLimitMiddleware(BaseHTTPMiddleware):
     MAX_BODY_SIZE = 2 * 1024 * 1024  # 2 MB
 
     async def dispatch(self, request: Request, call_next):
+        # WARNING: Content-Length alone does not bound streamed/chunked bodies.
+        # Enforce a byte limit while receiving the body and validate the header.
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > self.MAX_BODY_SIZE:
             return JSONResponse(

@@ -42,6 +42,8 @@ from bdl_id_mapper import get_team_mapper, get_player_mapper
 from sleeper_client import get_headshot_url as get_sleeper_headshot
 
 import db
+import nba_evaluator as ev
+from predictor_factory import build_predictor
 from api.config import PICKS_DISABLED_DETAIL, PICKS_FLAG_ENV_VAR, picks_enabled
 from season_utils import get_recent_seasons, today_et, today_et_str
 from nba_evaluator import (
@@ -125,24 +127,13 @@ def _get_teams_playing_today() -> list[dict]:
     """
     Fetch today's schedule via BallDontLie API and return game dicts:
     [{'home_abbrev': str, 'away_abbrev': str, 'game_date': str, 'bdl_game_id': int}, ...]
-    If no games are found for today, falls back to checking tomorrow.
+    An empty slate remains empty: today's lines cannot price tomorrow's games.
     """
     logger.info("Fetching today's NBA schedule...")
-    from datetime import timedelta
-
     target_date = today_et()
     today_str = target_date.strftime('%Y-%m-%d')
     bdl = get_bdl_client()
     raw_games = bdl.get_games(dates=[today_str])
-
-    # Fallback to tomorrow if no games today
-    if not raw_games:
-        tomorrow_date = target_date + timedelta(days=1)
-        tomorrow_str = tomorrow_date.strftime('%Y-%m-%d')
-        logger.info(f"No games found for today ({today_str}). Falling back to tomorrow ({tomorrow_str}).")
-        target_date = tomorrow_date
-        today_str = tomorrow_str
-        raw_games = bdl.get_games(dates=[today_str])
 
     if not raw_games:
         logger.warning(f"No games on schedule for {today_str} either.")
@@ -563,7 +554,7 @@ def generate_daily_picks() -> list[dict]:
             continue
 
         # Load or train model
-        predictor = MLPredictor(model_type='gradient_boost')
+        predictor = build_predictor(ev, model_type='gradient_boost')
         model_loaded = predictor.load(player_name)
 
         if not model_loaded:
@@ -773,7 +764,7 @@ def generate_daily_picks() -> list[dict]:
                 'is_home': is_home,
                 'matchup': matchup,
                 'game_date': active_date_str,
-                'model_type': 'gradient_boost',
+                'model_type': predictor.model_type,
                 'prob_over': round(float(prob_over), 1) if prob_over is not None else None,
             }))
 

@@ -11,6 +11,7 @@ frontend/.env.local
 frontend/.env.*.local
 node_modules/
 frontend/dist/
+frontend/dist-personal/
 
 # Binary artifacts
 *.zip
@@ -36,6 +37,7 @@ config.json
 # ML model binaries — never commit (executable code risk + large files)
 models/**/*.pkl
 models/**/*.lock
+models/**/*.json
 *.pkl
 
 # Data and report files — runtime artifacts, not source code
@@ -61,3 +63,6 @@ history/predictions.json
 .idea/
 .vscode/
 .pytest_cache/
+.venv/
+audit-*.txt
+audit-*.json

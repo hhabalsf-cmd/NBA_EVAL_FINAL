@@ -1,0 +1,9 @@
+# Standalone local runtime. No BDL, Supabase, Node, or paid services required.
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+requests>=2.32,<3
+numpy>=2.0,<3
+pandas>=2.2,<3
+# Must match the saved forecast artifact.
+scikit-learn==1.6.1
+tzdata>=2024.1

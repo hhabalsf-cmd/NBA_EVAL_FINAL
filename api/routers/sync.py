@@ -19,7 +19,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 @router.post("/nightly")
 @limiter.limit("2/minute")
-async def run_nightly_sync(request: Request):
+def run_nightly_sync(request: Request):
     """
     Trigger nightly player game-log sync from BallDontLie into Supabase.
     Protected by X-Service-Key header — called by Supabase pg_cron via pg_net.

@@ -11,3 +11,6 @@ openpyxl>=3.1.0
 
 # Testing
 pytest>=8.0.0
+
+# Historical game-log datasets and reproducible offline evaluations
+pyarrow>=17.0.0

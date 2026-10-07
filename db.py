@@ -883,19 +883,7 @@ def save_pick(pick_data: dict) -> int:
         pick_id = cursor.fetchone()['id']
         conn.commit()
 
-        # Enforce 100-pick cap per user — delete oldest picks beyond the limit
-        user_id = pick_data.get('user_id')
-        if user_id:
-            cursor.execute("""
-                DELETE FROM picks
-                WHERE user_id = %s AND id NOT IN (
-                    SELECT id FROM picks
-                    WHERE user_id = %s
-                    ORDER BY timestamp DESC
-                    LIMIT 100
-                )
-            """, (user_id, user_id))
-            conn.commit()
+        # Retain the audit trail; limit reads rather than deleting settled bets.
 
         return pick_id
 
@@ -1015,7 +1003,7 @@ def update_pick_result(pick_id: int, actual_result: float, line: float, directio
 
         cursor.execute("""
             UPDATE picks
-            SET actual_result = %s, won = %s
+            SET actual_result = %s, won = %s, graded_at = NOW()
             WHERE id = %s
         """, (actual_result, won, pick_id))
 
@@ -1173,7 +1161,7 @@ def get_performance_stats(user_id: str = None) -> dict:
                 COUNT(*) FILTER (WHERE ABS(edge) >= 12 AND won IN (0, 1))                    AS e12_total,
                 COUNT(*) FILTER (WHERE ABS(edge) >= 12 AND won = 1)                          AS e12_wins
             FROM picks
-            WHERE won IS NOT NULL AND (voided IS NULL OR voided = 0)
+            WHERE actual_result IS NOT NULL AND (voided IS NULL OR voided = 0)
                   {real_only} {uid_filter}
         """, params)
         row = cursor.fetchone()
@@ -1491,18 +1479,13 @@ def get_cumulative_profit(user_id: str = None) -> list:
     with borrow_conn() as conn:
         cursor = conn.cursor()
 
-        if user_id:
-            cursor.execute("""
-                SELECT timestamp, won FROM picks
-                WHERE won IS NOT NULL AND user_id = %s
-                ORDER BY timestamp ASC
-            """, (user_id,))
-        else:
-            cursor.execute("""
-                SELECT timestamp, won FROM picks
-                WHERE won IS NOT NULL
-                ORDER BY timestamp ASC
-            """)
+        uid_filter = "AND user_id = %s" if user_id else ""
+        cursor.execute(f"""
+            SELECT timestamp, game_date, won FROM picks
+            WHERE actual_result IS NOT NULL AND (voided IS NULL OR voided = 0)
+                  {_real_picks_clause()} {uid_filter}
+            ORDER BY game_date ASC, timestamp ASC, id ASC
+        """, (user_id,) if user_id else ())
 
         rows = cursor.fetchall()
 
@@ -1519,7 +1502,7 @@ def get_cumulative_profit(user_id: str = None) -> list:
 
         cumulative += profit
         results.append({
-            'date': row['timestamp'][:10],  # Just the date part
+            'date': str(row.get('game_date') or row['timestamp'])[:10],
             'profit': profit,
             'cumulative_profit': round(cumulative, 2)
         })
@@ -1535,13 +1518,13 @@ def get_pending_picks(user_id: str = None) -> List[Dict]:
         if user_id:
             cursor.execute("""
                 SELECT * FROM picks
-                WHERE won IS NULL AND (voided IS NULL OR voided = 0) AND user_id = %s
+                WHERE won IS NULL AND actual_result IS NULL AND (voided IS NULL OR voided = 0) AND user_id = %s
                 ORDER BY timestamp DESC
             """, (user_id,))
         else:
             cursor.execute("""
                 SELECT * FROM picks
-                WHERE won IS NULL AND (voided IS NULL OR voided = 0)
+                WHERE won IS NULL AND actual_result IS NULL AND (voided IS NULL OR voided = 0)
                 ORDER BY timestamp DESC
             """)
 
@@ -1599,6 +1582,8 @@ def _check_team_played(team_abbrev: str, game_date, scraper=None) -> bool:
 
         teams_that_played = set()
         for g in (raw_games or []):
+            if not str(g.get('status') or '').lower().startswith('final'):
+                continue
             home = g.get('home_team') or {}
             visitor = g.get('visitor_team') or {}
             h_abbrev = str(home.get('abbreviation') or '').upper()
@@ -1620,34 +1605,9 @@ def _check_team_played(team_abbrev: str, game_date, scraper=None) -> bool:
 
 
 def auto_void_stale_picks(days_threshold: int = 3) -> int:
-    """
-    Auto-void picks that are stuck in pending for too long (safety net).
-
-    Args:
-        days_threshold: Number of days after which a pending pick is considered stale
-
-    Returns:
-        Number of picks voided
-    """
-    cutoff_date = (datetime.now() - timedelta(days=days_threshold)).strftime('%Y-%m-%d')
-
-    with borrow_conn() as conn:
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT id, player, stat, game_date FROM picks
-            WHERE won IS NULL AND (voided IS NULL OR voided = 0)
-            AND game_date IS NOT NULL AND game_date < %s
-        """, (cutoff_date,))
-
-        stale_picks = cursor.fetchall()
-
-    voided = 0
-    for pick in stale_picks:
-        void_pick(pick['id'], "DNP")
-        voided += 1
-
-    return voided
+    """Compatibility no-op: age alone cannot establish a DNP or void."""
+    _logger.warning("Automatic age-based voiding disabled; review unresolved picks explicitly")
+    return 0
 
 
 def get_stale_pending_picks(days_threshold: int = 2) -> List[Dict]:
@@ -1692,8 +1652,8 @@ def auto_grade_picks(scraper=None) -> Dict:
         from nba_evaluator import NBADataScraper
         scraper = NBADataScraper()
 
-    # Safety net: auto-void picks that are 3+ days old
-    stale_voided = auto_void_stale_picks(days_threshold=3)
+    # Missing data is not evidence of DNP. Preserve unresolved picks for retry.
+    stale_voided = 0
 
     pending = get_pending_picks()
     if not pending:
@@ -1726,6 +1686,13 @@ def auto_grade_picks(scraper=None) -> Dict:
                 except ValueError:
                     pass
 
+            if not game_date:
+                continue
+            pick_date = datetime.strptime(str(game_date)[:10], '%Y-%m-%d').date()
+            if pick_date > today:
+                continue
+            pick_season = get_current_season(pick_date)
+
             # Get player ID if not stored
             if not player_id:
                 player_info = scraper.get_player_info(player_name)
@@ -1735,17 +1702,17 @@ def auto_grade_picks(scraper=None) -> Dict:
                 player_id = player_info['player_id']
 
             # Get game log (use cached if we already fetched for this player)
-            # ONLY fetch current season to avoid matching old games for DNP players
-            if player_id not in players_processed:
-                game_log = scraper.get_player_game_log(player_id, seasons=[get_current_season()])
-                players_processed[player_id] = game_log
+            # Use the pick's season, including unresolved picks across rollover.
+            cache_key = (str(player_id), pick_season)
+            if cache_key not in players_processed:
+                game_log = scraper.get_player_game_log(player_id, seasons=[pick_season])
+                players_processed[cache_key] = game_log
             else:
-                game_log = players_processed[player_id]
+                game_log = players_processed[cache_key]
 
             # Find the game for this pick
             opponent = pick.get('opponent', '')
             game_match = None
-            player_dnp = False
 
             if game_date:
                 try:
@@ -1755,10 +1722,8 @@ def auto_grade_picks(scraper=None) -> Dict:
 
                     # Check if player has any games this season
                     if game_log is None or game_log.empty:
-                        # Player has no games at all this season
-                        # Check if the game date is in the past - if so, it's a DNP
-                        if dt.date() <= today:
-                            player_dnp = True
+                        # An empty log can be a provider outage, not a DNP.
+                        continue
                     else:
                         # Normalize game log dates to YYYY-MM-DD for reliable comparison
                         game_log['GAME_DATE_NORM'] = pd.to_datetime(game_log['GAME_DATE']).dt.strftime('%Y-%m-%d')
@@ -1767,61 +1732,16 @@ def auto_grade_picks(scraper=None) -> Dict:
                         # First try exact date match
                         game_match = game_log[game_log['GAME_DATE_NORM'] == pick_date_str]
 
-                        # Filter by opponent if we have one and multiple games
-                        if not game_match.empty and opponent and len(game_match) > 1:
-                            opponent_match = game_match[game_match['MATCHUP'].str.contains(opponent)]
-                            if not opponent_match.empty:
-                                game_match = opponent_match
-
-                        # If no exact date match, try +/- 1 day (games sometimes shift dates due to timezone)
-                        # But REQUIRE opponent match to avoid grading wrong games
-                        if game_match.empty and opponent:
-                            dt_minus1 = (dt - timedelta(days=1)).strftime('%Y-%m-%d')
-                            dt_plus1 = (dt + timedelta(days=1)).strftime('%Y-%m-%d')
-                            nearby_games = game_log[game_log['GAME_DATE_NORM'].isin([dt_minus1, dt_plus1])]
-
-                            # Only use nearby date if opponent also matches
-                            if not nearby_games.empty:
-                                opponent_match = nearby_games[nearby_games['MATCHUP'].str.contains(opponent)]
-                                if not opponent_match.empty:
-                                    game_match = opponent_match
-
-                        # If no game found but date is in the past, check if team played
-                        if (game_match is None or game_match.empty) and dt.date() <= today:
-                            days_since_game = (today - dt.date()).days
-                            if days_since_game >= 1:
-                                # Check if the team actually played that day
-                                team_played = _check_team_played(
-                                    pick.get('team_abbrev'), dt.date(), scraper
-                                )
-                                if team_played:
-                                    # Team played but player has no stats → confirmed DNP
-                                    player_dnp = True
-                                elif days_since_game >= 2:
-                                    # Fallback: 2-day rule for cases where team check fails
-                                    player_dnp = True
-                            # else: game was today, leave as pending
+                        # Dates are canonical ET dates. A nearby game, even
+                        # against the same opponent, is a different wager.
+                        if not game_match.empty and opponent:
+                            game_match = game_match[
+                                game_match['MATCHUP'].str.split().str[-1] == opponent
+                            ]
 
                 except ValueError:
                     # Date parsing failed - skip this pick
                     continue
-
-            # Handle DNP - void the pick automatically
-            if player_dnp:
-                void_pick(pick['id'], "DNP")
-                results.append({
-                    'player': player_name,
-                    'stat': stat,
-                    'line': pick['line'],
-                    'prediction': pick['prediction'],
-                    'actual': None,
-                    'direction': pick['direction'],
-                    'won': None,
-                    'voided': True,
-                    'void_reason': 'DNP',
-                    'model_type': pick.get('model_type', 'unknown')
-                })
-                continue
 
             # NO FALLBACK - if we can't find a date match, the game hasn't happened yet
             # Do NOT match by opponent only as this would grade using old games
@@ -1835,13 +1755,17 @@ def auto_grade_picks(scraper=None) -> Dict:
             # DNP detection: if player has a game log entry but 0 minutes,
             # they dressed but didn't play (or BDL returned a stub row).
             # Void instead of grading as actual=0.
-            game_min = float(game.get('MIN_NUMERIC', game.get('MIN', 0)) or 0)
+            raw_min = game.get('MIN_NUMERIC', game.get('MIN'))
+            if raw_min is None or pd.isna(raw_min):
+                continue
+            parts = str(raw_min).split(':')
+            game_min = float(parts[0]) + (float(parts[1]) / 60 if len(parts) == 2 else 0)
             if game_min == 0:
                 all_zeros = all(
                     float(game.get(s, 0) or 0) == 0
                     for s in ('PTS', 'REB', 'AST')
                 )
-                if all_zeros:
+                if all_zeros and _check_team_played(pick.get('team_abbrev'), pick_date, scraper):
                     void_pick(pick['id'], "DNP")
                     results.append({
                         'player': player_name,
@@ -1856,6 +1780,8 @@ def auto_grade_picks(scraper=None) -> Dict:
                         'model_type': pick.get('model_type', 'unknown')
                     })
                     continue
+                # Do not settle a stub row until a final result is available.
+                continue
 
             if stat == 'PRA':
                 actual = game['PTS'] + game['REB'] + game['AST']
@@ -1868,13 +1794,6 @@ def auto_grade_picks(scraper=None) -> Dict:
             # Update the pick
             update_pick_result(pick['id'], float(actual), pick['line'], pick['direction'])
 
-            # Mark as graded
-            with borrow_conn() as conn:
-                cursor = conn.cursor()
-                cursor.execute("UPDATE picks SET graded_at = %s WHERE id = %s",
-                              (datetime.now().isoformat(), pick['id']))
-                conn.commit()
-
             # Determine result
             line = pick['line']
             direction = pick['direction']
@@ -1882,6 +1801,8 @@ def auto_grade_picks(scraper=None) -> Dict:
                 won = actual > line
             else:
                 won = actual < line
+            if actual == line:
+                won = None
 
             results.append({
                 'player': player_name,
@@ -2345,8 +2266,8 @@ def grade_pending_parlays(user_id: str = None) -> dict:
     Grading rules:
     - All legs won=1 → 'won'
     - Any leg won=0 → 'lost'
-    - Any leg won IS NULL (and no losses) → stay 'pending'
-    - Voided legs (voided=1) are excluded from result calculation but kept in legs list.
+    - Any unresolved leg (no actual_result and no outcome) → stay 'pending'
+    - Pushes and voided legs are excluded; all legs returned → 'voided'.
     """
     with borrow_conn() as conn:
         with conn.cursor() as cur:
@@ -2362,7 +2283,7 @@ def grade_pending_parlays(user_id: str = None) -> dict:
             for parlay_id in pending_ids:
                 cur.execute(
                     """
-                    SELECT pk.won, pk.voided
+                    SELECT pk.won, pk.voided, pk.actual_result
                     FROM parlay_legs pl
                     JOIN picks pk ON pk.id = pl.pick_id
                     WHERE pl.parlay_id = %s
@@ -2371,13 +2292,15 @@ def grade_pending_parlays(user_id: str = None) -> dict:
                 )
                 legs = cur.fetchall()
 
-                # Active legs only (exclude voided picks)
-                active = [l for l in legs if not l['voided']]
+                # A NULL outcome plus a result is a push, not a pending leg.
+                active = [l for l in legs if not l['voided'] and not (
+                    l['won'] is None and l.get('actual_result') is not None)]
 
+                if not legs:
+                    continue  # Incomplete parlay; do not invent a settlement.
                 if not active:
-                    continue  # All legs voided — skip
-
-                if any(l['won'] == False for l in active):
+                    new_status = 'voided'
+                elif any(l['won'] == False for l in active):
                     new_status = 'lost'
                 elif all(l['won'] == True for l in active):
                     new_status = 'won'

@@ -11,7 +11,7 @@ export async function getPicks(pendingOnly = false, limit = 100): Promise<Pick[]
     .order('timestamp', { ascending: false })
 
   if (pendingOnly) {
-    query = query.is('won', null).eq('voided', 0)
+    query = query.is('won', null).is('actual_result', null).eq('voided', 0)
   } else {
     query = query.limit(limit)
   }
@@ -90,23 +90,8 @@ export async function getCalibrationStats(): Promise<CalibrationStats> {
 }
 
 export async function getCumulativeProfit(): Promise<CumulativeProfitPoint[]> {
-  const { data, error } = await supabase
-    .from('picks')
-    .select('game_date, won, voided')
-    .not('won', 'is', null)
-    .not('game_date', 'is', null)
-    .order('game_date', { ascending: true })
-
-  if (error) throw new Error(error.message)
-
-  let cumulative = 0
-  return (data ?? []).map(p => {
-    const profit = p.won === 1 ? 1 : (p.voided !== 1 ? -1 : 0)
-    cumulative += profit
-    return {
-      date: p.game_date as string,
-      profit,
-      cumulative_profit: cumulative,
-    }
-  })
+  // Use the same -110 simulation and exclusions as the performance summary.
+  const response = await apiFetch(`${API_BASE}/picks/stats/profit`)
+  if (!response.ok) throw new Error('Failed to load cumulative profit')
+  return response.json()
 }

@@ -1,6 +1,24 @@
 # NBA Prop Evaluator
 
-Full-stack ML platform for evaluating NBA player prop bets and game outcomes. Predicts PTS/REB/AST/PRA player lines with a stacking ensemble and surfaces the highest-edge picks each day.
+Full-stack NBA research platform with player-prop forecasts, exact-price offer
+evaluation, game research, and pick tracking.
+
+## Personal local app — free ESPN data
+
+For single-user use, double-click **Start NBA Eval.cmd** and open
+**http://127.0.0.1:8765**. This standalone mode needs no paid API key, Supabase,
+or login. The original Bettin' Jrys interface is already built locally. It provides verified ESPN game logs, the rebuilt
+player-prop forecasts, manual price evaluation and local saved history.
+See [personal setup, stat reconciliation and limitations](docs/PERSONAL_LOCAL.md).
+The existing hosted stack below remains separate from this personal mode.
+
+## Predictor rebuild
+
+The new **Forecasts** page uses a league-wide player-prop engine with chronological
+validation, empirical outcome distributions, and exact-price offer evaluation.
+See [rebuild results and run instructions](docs/PREDICTOR_REBUILD_2026-09-27.md).
+The held-out forecast improvements are modest; profitable betting has not been
+validated. Model artifacts must be provisioned separately from this source tree.
 
 - **Live app:** https://nba-eval-final.vercel.app
 - **API:** https://nbaevalfinal-production.up.railway.app
@@ -10,7 +28,7 @@ Full-stack ML platform for evaluating NBA player prop bets and game outcomes. Pr
 
 | Layer | Tech |
 |-------|------|
-| Frontend | React 18, TypeScript, Vite 5, Tailwind CSS 3, React Query, Zustand, Recharts |
+| Frontend | React 18, TypeScript, Vite 6, Tailwind CSS 3, React Query, Zustand, Recharts |
 | Backend | FastAPI, Python 3.11, psycopg2 |
 | ML | scikit-learn, XGBoost, LightGBM, Optuna (stacking ensemble with isotonic calibration) |
 | Data | Supabase (Postgres + Auth + Storage + Realtime + Edge Functions), BallDontLie API |
@@ -19,17 +37,25 @@ Full-stack ML platform for evaluating NBA player prop bets and game outcomes. Pr
 
 ## What it does
 
-- **Per-player props** — predicts PTS/REB/AST/PRA for every active NBA player, compares to sportsbook lines, and returns OVER/UNDER recommendations with calibrated probabilities and a prediction range.
+- **Forecasts** — pooled PTS/REB/AST/PRA forecasts for players with at least ten prior appearances, outcome ranges, and exact-price over/under/push evaluation. Betting recommendations remain disabled pending priced validation.
+- **Legacy props** — the older per-player prediction and daily-pick paths remain available behind their existing release flags; they do not use the new forecasting engine.
 - **Game predictions** — team-level win probabilities from an ELO + Four Factors stacking ensemble.
 - **Best bets feed** — nightly pipeline ranks the day's top 20 picks by model edge, filtered on minutes, confidence, and historical edge-performance caps.
 - **Research** — game logs, rolling averages, home/away and matchup splits, defensive context, teammate/opponent absence scenarios.
 - **Picks tracker** — authenticated users can save picks, auto-grade against live scores, and track ROI over time.
 
-## ML pipeline
+## New forecast pipeline
 
-- **100 engineered features** per player-game: multi-window rolling averages (5/10/20 + EMA), opponent defensive context (def_rating, pace, eFG%, TS%, OREB/DREB%), home/away splits, matchup history, rest/travel, 3PT and FT rate rolling features, usage/minutes stability, recent-form trends.
-- **Stacking ensemble** — Random Forest + Gradient Boosting + XGBoost + LightGBM + HistGradientBoosting with meta-learner, per-player per-stat.
-- **Validation** — TimeSeriesSplit CV (no lookahead), Optuna Bayesian hyperparameter search, isotonic probability calibration, quantile regression for prediction ranges.
+- **50 causal features** built identically for historical replay and serving, including minutes, production rates, recent levels, rest and team changes.
+- **League-wide regularized regression** selected against rolling/exponential baselines, pooled ridge, boosting and minutes/rate models on an earlier validation season.
+- **Later-period residual calibration** produces integer outcome distributions and explicit push probabilities. Fitting never runs inside a forecast request.
+- **Versioned artifacts** with source hashes and separate frozen-evaluation/current-use fits. See the rebuild report for measured performance and limitations.
+
+## Legacy ML pipeline
+
+- **81 canonical features** per player-game, including rolling statistics, opponent context, schedule and role features.
+- **Per-player gradient boosting** is the default; optional ensemble/neural paths and the earlier pooled model also exist.
+- **Validation** — purged walk-forward CV, optional hyperparameter search, probability calibration and quantile ranges. See the audit for unresolved defects and limits of the historical evidence.
 - **Confidence caps** enforced per stat based on historical hit-rate: PTS 88%, REB 82%, AST 78%, PRA 80%.
 - **Model storage** — pickles stored in Supabase Storage, cached in-process with LRU.
 
